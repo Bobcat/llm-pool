@@ -1,0 +1,17 @@
+{
+  "service": {
+    "host": "127.0.0.1",
+    "log_level": "info"
+  },
+  "engine": {
+    "backend": "ct2",
+    "default_model": "eurollm-9b-ct2-int8",
+    "models": {
+      "eurollm-9b-ct2-int8": {
+        "model_path": "/home/gunnar/models/EuroLLM-9B-Instruct-ct2-int8",
+        "device": "cuda",
+        "compute_type": "int8"
+      }
+    }
+  }
+}

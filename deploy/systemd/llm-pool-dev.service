@@ -1,0 +1,16 @@
+[Unit]
+Description=llm-pool-dev
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/home/gunnar/projects/llm-pool-dev
+Environment=LLM_POOL_SETTINGS_PATH=/home/gunnar/projects/llm-pool-dev/config/settings.json
+Environment=DEFAULT_PORT=8011
+ExecStart=/home/gunnar/projects/llm-pool-dev/deploy/systemd/start-llm-pool-dev.sh
+Restart=always
+RestartSec=2
+
+[Install]
+WantedBy=default.target
