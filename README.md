@@ -41,7 +41,7 @@ The default config in `config/settings.json` points at the local EuroLLM CT2 mod
 python3 -m venv .venv
 . .venv/bin/activate
 pip install -e .
-uvicorn app.main:app --reload --port 8010
+uvicorn app.main:app --reload --port 8011
 ```
 
 ## Test

@@ -2,10 +2,15 @@
 set -euo pipefail
 
 ROOT_DIR="/home/gunnar/projects/llm-pool-dev"
-PYTHON_BIN="/home/gunnar/whisperx/.venv/bin/python"
+PYTHON_BIN="$ROOT_DIR/.venv/bin/python"
 SETTINGS_PATH="${LLM_POOL_SETTINGS_PATH:-${LLM_RESPONSES_API_SETTINGS_PATH:-$ROOT_DIR/config/settings.json}}"
 HOST="${HOST:-127.0.0.1}"
 DEFAULT_PORT="${DEFAULT_PORT:-8011}"
+
+if [[ ! -x "$PYTHON_BIN" ]]; then
+  echo "missing Python venv: $PYTHON_BIN" >&2
+  exit 127
+fi
 
 PORT="$DEFAULT_PORT"
 if [[ -f "$SETTINGS_PATH" ]]; then
