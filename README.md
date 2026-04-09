@@ -44,6 +44,15 @@ pip install -e .
 uvicorn app.main:app --reload --port 8011
 ```
 
+## Local Overrides
+
+You can keep shared defaults in `config/settings.json` and put machine-local overrides in `config/local.json`.
+When present, `local.json` is merged over `settings.json` (override wins per key).
+
+Optional env vars:
+- `LLM_POOL_SETTINGS_PATH`: explicit base settings file path.
+- `LLM_POOL_LOCAL_SETTINGS_PATH`: explicit local override file path.
+
 ## Test
 
 ```bash

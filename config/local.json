@@ -1,0 +1,17 @@
+{
+  "engine": {
+    "default_model": "qwen3-32b-ct2-awq",
+    "models": {
+      "eurollm-9b-ct2-int8": {
+        "model_path": "/home/gunnar/models/EuroLLM-9B-Instruct-ct2-int8",
+        "device": "cuda",
+        "compute_type": "int8"
+      },
+      "qwen3-32b-ct2-awq": {
+        "model_path": "/home/gunnar/models/Qwen3-32B-ct2-AWQ",
+        "device": "cuda",
+        "compute_type": "int8_float16"
+      }
+    }
+  }
+}
