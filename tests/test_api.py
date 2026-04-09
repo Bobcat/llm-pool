@@ -23,7 +23,14 @@ class ApiTests(unittest.TestCase):
             settings_path.write_text(
                 (
                     "{\n"
-                    '  "engine": {"backend": "stub", "default_model": "test-model"}\n'
+                    '  "engine": {\n'
+                    '    "backend": "stub",\n'
+                    '    "default_model": "test-model",\n'
+                    '    "models": {\n'
+                    '      "test-model": {"model_path": "/tmp/test-model", "enabled": true},\n'
+                    '      "disabled-model": {"model_path": "/tmp/disabled-model", "enabled": false}\n'
+                    "    }\n"
+                    "  }\n"
                     "}\n"
                 ),
                 encoding="utf-8",
@@ -60,6 +67,8 @@ class ApiTests(unittest.TestCase):
         self.assertEqual(payload["model"], "test-model")
         self.assertEqual(payload["output"][0]["type"], "output_text")
         self.assertIn("Hello world", payload["output_text"])
+        self.assertIn("metrics", payload)
+        self.assertIn("gpu_generate_total_ms", payload["metrics"])
 
     def test_streaming_mode_returns_sse_events(self) -> None:
         client = self._create_client()
@@ -86,12 +95,26 @@ class ApiTests(unittest.TestCase):
         self.assertEqual(response.headers["content-type"], "text/event-stream; charset=utf-8")
         self.assertIn("event: response.created", response.text)
         self.assertIn("event: response.output_text.delta", response.text)
+        self.assertIn("event: response.metrics", response.text)
         self.assertIn("event: response.completed", response.text)
 
         events = [item for item in response.text.strip().split("\n\n") if item.strip()]
+        metrics = events[-2].split("data: ", 1)[1]
+        metrics_payload = json.loads(metrics)
+        self.assertIn("metrics", metrics_payload)
         completed = events[-1].split("data: ", 1)[1]
         completed_payload = json.loads(completed)
         self.assertEqual(completed_payload["output_text"], "Hello world")
+
+    def test_models_endpoint_returns_enabled_models(self) -> None:
+        client = self._create_client()
+
+        response = client.get("/v1/models")
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertEqual(payload["default_model"], "test-model")
+        self.assertEqual(payload["models"], ["test-model"])
 
 
 if __name__ == "__main__":

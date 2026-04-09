@@ -6,11 +6,24 @@
   "engine": {
     "backend": "ct2",
     "default_model": "eurollm-9b-ct2-int8",
+    "decoding": {
+      "beam_size": 1,
+      "top_k": 1,
+      "top_p": 1.0,
+      "temperature": 0.1,
+      "repetition_penalty": 1.0,
+      "max_tokens": 256,
+      "stop": [
+        "<|im_end|>"
+      ]
+    },
     "models": {
       "eurollm-9b-ct2-int8": {
         "model_path": "/home/gunnar/models/EuroLLM-9B-Instruct-ct2-int8",
         "device": "cuda",
-        "compute_type": "int8"
+        "compute_type": "int8",
+        "prompt_format": "generic",
+        "enabled": true
       }
     }
   }

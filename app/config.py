@@ -23,6 +23,19 @@ class ModelSettings:
     model_path: str
     device: str = "cuda"
     compute_type: str = "int8"
+    prompt_format: str = "generic"
+    enabled: bool = True
+
+
+@dataclass(frozen=True)
+class DecodingDefaults:
+    beam_size: int = 1
+    top_k: int = 1
+    top_p: float = 1.0
+    temperature: float = 0.1
+    repetition_penalty: float = 1.0
+    max_tokens: int = 256
+    stop: list[str] = field(default_factory=lambda: ["<|im_end|>"])
 
 
 @dataclass(frozen=True)
@@ -30,6 +43,7 @@ class EngineSettings:
     backend: str = "stub"
     default_model: str = "eurollm-9b-ct2-int8"
     models: dict[str, ModelSettings] = field(default_factory=dict)
+    decoding: DecodingDefaults = field(default_factory=DecodingDefaults)
 
 
 @dataclass(frozen=True)
@@ -55,12 +69,15 @@ def load_settings(path: str | Path | None = None) -> AppSettings:
     service_payload = payload.get("service", {}) if isinstance(payload, dict) else {}
     engine_payload = payload.get("engine", {}) if isinstance(payload, dict) else {}
     models_payload = engine_payload.get("models", {}) if isinstance(engine_payload, dict) else {}
+    decoding_payload = engine_payload.get("decoding", {}) if isinstance(engine_payload, dict) else {}
     if not isinstance(service_payload, dict):
         service_payload = {}
     if not isinstance(engine_payload, dict):
         engine_payload = {}
     if not isinstance(models_payload, dict):
         models_payload = {}
+    if not isinstance(decoding_payload, dict):
+        decoding_payload = {}
 
     models: dict[str, ModelSettings] = {}
     for model_name, model_payload in models_payload.items():
@@ -73,6 +90,8 @@ def load_settings(path: str | Path | None = None) -> AppSettings:
             model_path=model_path,
             device=str(model_payload.get("device", "cuda")),
             compute_type=str(model_payload.get("compute_type", "int8")),
+            prompt_format=str(model_payload.get("prompt_format", "generic")),
+            enabled=bool(model_payload.get("enabled", True)),
         )
 
     return AppSettings(
@@ -85,6 +104,15 @@ def load_settings(path: str | Path | None = None) -> AppSettings:
             backend=str(engine_payload.get("backend", "stub")),
             default_model=str(engine_payload.get("default_model", "eurollm-9b-ct2-int8")),
             models=models,
+            decoding=DecodingDefaults(
+                beam_size=int(decoding_payload.get("beam_size", 1)),
+                top_k=int(decoding_payload.get("top_k", 1)),
+                top_p=float(decoding_payload.get("top_p", 1.0)),
+                temperature=float(decoding_payload.get("temperature", 0.1)),
+                repetition_penalty=float(decoding_payload.get("repetition_penalty", 1.0)),
+                max_tokens=int(decoding_payload.get("max_tokens", 256)),
+                stop=_coerce_stop_tokens(decoding_payload.get("stop"), default=["<|im_end|>"]),
+            ),
         ),
     )
 
@@ -119,3 +147,11 @@ def _merge_dicts(base: dict[str, object], override: dict[str, object]) -> dict[s
         else:
             merged[key] = value
     return merged
+
+
+def _coerce_stop_tokens(value: object, *, default: list[str]) -> list[str]:
+    if isinstance(value, list):
+        tokens = [str(item) for item in value if str(item) != ""]
+        if tokens:
+            return tokens
+    return list(default)

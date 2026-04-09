@@ -19,11 +19,22 @@ class ConfigTests(unittest.TestCase):
                     '  "engine": {\n'
                     '    "backend": "ct2",\n'
                     '    "default_model": "test-model",\n'
+                    '    "decoding": {\n'
+                    '      "beam_size": 2,\n'
+                    '      "top_k": 3,\n'
+                    '      "top_p": 0.7,\n'
+                    '      "temperature": 0.2,\n'
+                    '      "repetition_penalty": 1.1,\n'
+                    '      "max_tokens": 300,\n'
+                    '      "stop": ["</stop>"]\n'
+                    "    },\n"
                     '    "models": {\n'
                     '      "test-model": {\n'
                     '        "model_path": "/models/test",\n'
                     '        "device": "cpu",\n'
-                    '        "compute_type": "float32"\n'
+                    '        "compute_type": "float32",\n'
+                    '        "prompt_format": "qwen3_chat",\n'
+                    '        "enabled": false\n'
                     "      }\n"
                     "    }\n"
                     "  }\n"
@@ -41,6 +52,15 @@ class ConfigTests(unittest.TestCase):
         self.assertEqual(settings.engine.models["test-model"].model_path, "/models/test")
         self.assertEqual(settings.engine.models["test-model"].device, "cpu")
         self.assertEqual(settings.engine.models["test-model"].compute_type, "float32")
+        self.assertEqual(settings.engine.models["test-model"].prompt_format, "qwen3_chat")
+        self.assertFalse(settings.engine.models["test-model"].enabled)
+        self.assertEqual(settings.engine.decoding.beam_size, 2)
+        self.assertEqual(settings.engine.decoding.top_k, 3)
+        self.assertEqual(settings.engine.decoding.top_p, 0.7)
+        self.assertEqual(settings.engine.decoding.temperature, 0.2)
+        self.assertEqual(settings.engine.decoding.repetition_penalty, 1.1)
+        self.assertEqual(settings.engine.decoding.max_tokens, 300)
+        self.assertEqual(settings.engine.decoding.stop, ["</stop>"])
 
     def test_load_settings_applies_local_json_override(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -53,11 +73,22 @@ class ConfigTests(unittest.TestCase):
                     '  "engine": {\n'
                     '    "backend": "ct2",\n'
                     '    "default_model": "eurollm-9b-ct2-int8",\n'
+                    '    "decoding": {\n'
+                    '      "beam_size": 1,\n'
+                    '      "top_k": 1,\n'
+                    '      "top_p": 1.0,\n'
+                    '      "temperature": 0.1,\n'
+                    '      "repetition_penalty": 1.0,\n'
+                    '      "max_tokens": 256,\n'
+                    '      "stop": ["<|im_end|>"]\n'
+                    "    },\n"
                     '    "models": {\n'
                     '      "eurollm-9b-ct2-int8": {\n'
                     '        "model_path": "/models/eurollm",\n'
                     '        "device": "cuda",\n'
-                    '        "compute_type": "int8"\n'
+                    '        "compute_type": "int8",\n'
+                    '        "prompt_format": "generic",\n'
+                    '        "enabled": true\n'
                     "      }\n"
                     "    }\n"
                     "  }\n"
@@ -71,11 +102,18 @@ class ConfigTests(unittest.TestCase):
                     '  "service": {"port": 18011},\n'
                     '  "engine": {\n'
                     '    "default_model": "new-model",\n'
+                    '    "decoding": {\n'
+                    '      "top_k": 7,\n'
+                    '      "temperature": 0.4,\n'
+                    '      "stop": ["</custom>"]\n'
+                    "    },\n"
                     '    "models": {\n'
                     '      "new-model": {\n'
                     '        "model_path": "/models/new",\n'
                     '        "device": "cuda",\n'
-                    '        "compute_type": "float16"\n'
+                    '        "compute_type": "float16",\n'
+                    '        "prompt_format": "qwen3_chat",\n'
+                    '        "enabled": false\n'
                     "      }\n"
                     "    }\n"
                     "  }\n"
@@ -99,3 +137,11 @@ class ConfigTests(unittest.TestCase):
         self.assertEqual(settings.engine.default_model, "new-model")
         self.assertIn("eurollm-9b-ct2-int8", settings.engine.models)
         self.assertIn("new-model", settings.engine.models)
+        self.assertEqual(settings.engine.models["new-model"].prompt_format, "qwen3_chat")
+        self.assertTrue(settings.engine.models["eurollm-9b-ct2-int8"].enabled)
+        self.assertFalse(settings.engine.models["new-model"].enabled)
+        self.assertEqual(settings.engine.decoding.beam_size, 1)
+        self.assertEqual(settings.engine.decoding.top_k, 7)
+        self.assertEqual(settings.engine.decoding.top_p, 1.0)
+        self.assertEqual(settings.engine.decoding.temperature, 0.4)
+        self.assertEqual(settings.engine.decoding.stop, ["</custom>"])

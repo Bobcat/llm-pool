@@ -3,11 +3,18 @@ from __future__ import annotations
 from dataclasses import dataclass
 from dataclasses import field
 from pathlib import Path
+import logging
+import time
 
 from app.config import AppSettings
+from app.config import DecodingDefaults
 from app.config import ModelSettings
+from app.schemas import DecodingParams
 from app.schemas import EngineResult
 from app.schemas import ResponseRequest
+from app.schemas import ResponseMetrics
+
+LOGGER = logging.getLogger("llm_pool.engine")
 
 
 class StubEngine:
@@ -28,14 +35,44 @@ class Ct2ModelRuntime:
     prompt_token_cache: dict[str, list[str]] = field(default_factory=dict)
 
 
+@dataclass(frozen=True)
+class ResolvedDecoding:
+    beam_size: int
+    top_k: int
+    top_p: float
+    temperature: float
+    repetition_penalty: float
+    max_tokens: int
+    stop: list[str]
+
+
 class Ct2Engine:
     def __init__(self, settings: AppSettings) -> None:
         self.default_model = settings.engine.default_model
+        self.decoding_defaults = settings.engine.decoding
         self._models: dict[str, Ct2ModelRuntime] = {}
         for model_name, model_settings in settings.engine.models.items():
-            self._models[model_name] = self._build_runtime(model_settings)
+            if not model_settings.enabled:
+                continue
+            try:
+                self._models[model_name] = self._build_runtime(model_settings)
+            except Exception:
+                LOGGER.exception(
+                    "Failed to load model '%s' from %s; skipping model.",
+                    model_name,
+                    model_settings.model_path,
+                )
         if self.default_model not in self._models:
-            raise ValueError(f"default model {self.default_model!r} is not configured")
+            loaded_models = list(self._models.keys())
+            if not loaded_models:
+                raise ValueError("no enabled models could be loaded")
+            fallback_default = loaded_models[0]
+            LOGGER.warning(
+                "Default model '%s' could not be loaded; falling back to '%s'.",
+                self.default_model,
+                fallback_default,
+            )
+            self.default_model = fallback_default
 
     def complete(self, request: ResponseRequest) -> EngineResult:
         runtime = self._models.get(request.model)
@@ -43,28 +80,125 @@ class Ct2Engine:
             raise ValueError(f"unknown model: {request.model!r}")
 
         system_prompt = request.instructions or "You are a helpful assistant. Return only the response."
-        user_text = f"{request.input}<|im_end|>\n<|im_start|>assistant\n"
-        request_tokens = self._tokenize(runtime.tokenizer, user_text, add_special_tokens=False)
-        result = runtime.generator.generate_batch(  # type: ignore[call-arg]
-            [request_tokens],
-            static_prompt=self._get_static_prompt_tokens(runtime, system_prompt),
-            cache_static_prompt=True,
-            include_prompt_in_result=False,
-            beam_size=request.decoding.beam_size,
-            max_length=request.decoding.max_tokens,
-            sampling_topk=request.decoding.top_k,
-            sampling_topp=request.decoding.top_p,
-            sampling_temperature=request.decoding.temperature,
-            repetition_penalty=request.decoding.repetition_penalty,
-            end_token=request.decoding.stop[0] if request.decoding.stop else "<|im_end|>",
-        )
+        decoding = self._resolve_decoding(request.decoding)
+        tokenize_started = time.perf_counter()
+        prompt_token_count = 0
+        if runtime.config.prompt_format == "qwen3_chat":
+            think_open_tokens = self._tokenize(runtime.tokenizer, "<think>", add_special_tokens=False)
+            think_close_tokens = self._tokenize(runtime.tokenizer, "</think>", add_special_tokens=False)
+            suppress_sequences = [tokens for tokens in (think_open_tokens, think_close_tokens) if tokens]
+            prompt_tokens = self._render_qwen3_prompt_tokens(
+                runtime.tokenizer,
+                system_prompt=system_prompt,
+                user_text=request.input,
+            )
+            prompt_token_count = len(prompt_tokens)
+            tokenize_ms = (time.perf_counter() - tokenize_started) * 1000.0
+            generate_started = time.perf_counter()
+            callback, first_token_ms_ref = self._build_first_token_callback(generate_started)
+            end_token = self._resolve_end_token(runtime.tokenizer, decoding.stop)
+            generate_kwargs = {
+                "include_prompt_in_result": False,
+                "beam_size": decoding.beam_size,
+                "max_length": decoding.max_tokens,
+                "sampling_topk": decoding.top_k,
+                "sampling_topp": decoding.top_p,
+                "sampling_temperature": decoding.temperature,
+                "repetition_penalty": decoding.repetition_penalty,
+                "suppress_sequences": suppress_sequences or None,
+                "callback": callback if decoding.beam_size == 1 else None,
+            }
+            if end_token is not None:
+                generate_kwargs["end_token"] = end_token
+            result = runtime.generator.generate_batch(  # type: ignore[call-arg]
+                [prompt_tokens],
+                **generate_kwargs,
+            )
+        elif runtime.config.prompt_format == "mistral_inst":
+            prompt_tokens = self._render_mistral_prompt_tokens(
+                runtime.tokenizer,
+                system_prompt=system_prompt,
+                user_text=request.input,
+            )
+            prompt_token_count = len(prompt_tokens)
+            tokenize_ms = (time.perf_counter() - tokenize_started) * 1000.0
+            generate_started = time.perf_counter()
+            callback, first_token_ms_ref = self._build_first_token_callback(generate_started)
+            end_token = self._resolve_end_token(runtime.tokenizer, decoding.stop)
+            generate_kwargs = {
+                "include_prompt_in_result": False,
+                "beam_size": decoding.beam_size,
+                "max_length": decoding.max_tokens,
+                "sampling_topk": decoding.top_k,
+                "sampling_topp": decoding.top_p,
+                "sampling_temperature": decoding.temperature,
+                "repetition_penalty": decoding.repetition_penalty,
+                "callback": callback if decoding.beam_size == 1 else None,
+            }
+            if end_token is not None:
+                generate_kwargs["end_token"] = end_token
+            result = runtime.generator.generate_batch(  # type: ignore[call-arg]
+                [prompt_tokens],
+                **generate_kwargs,
+            )
+        else:
+            user_text = f"{request.input}<|im_end|>\n<|im_start|>assistant\n"
+            request_tokens = self._tokenize(runtime.tokenizer, user_text, add_special_tokens=False)
+            static_prompt_tokens = self._get_static_prompt_tokens(runtime, system_prompt)
+            prompt_token_count = len(static_prompt_tokens) + len(request_tokens)
+            tokenize_ms = (time.perf_counter() - tokenize_started) * 1000.0
+            generate_started = time.perf_counter()
+            callback, first_token_ms_ref = self._build_first_token_callback(generate_started)
+            end_token = self._resolve_end_token(runtime.tokenizer, decoding.stop)
+            generate_kwargs = {
+                "static_prompt": static_prompt_tokens,
+                "cache_static_prompt": True,
+                "include_prompt_in_result": False,
+                "beam_size": decoding.beam_size,
+                "max_length": decoding.max_tokens,
+                "sampling_topk": decoding.top_k,
+                "sampling_topp": decoding.top_p,
+                "sampling_temperature": decoding.temperature,
+                "repetition_penalty": decoding.repetition_penalty,
+                "callback": callback if decoding.beam_size == 1 else None,
+            }
+            if end_token is not None:
+                generate_kwargs["end_token"] = end_token
+            result = runtime.generator.generate_batch(  # type: ignore[call-arg]
+                [request_tokens],
+                **generate_kwargs,
+            )
+        generate_total_ms = (time.perf_counter() - generate_started) * 1000.0
+        first_token_ms = first_token_ms_ref["value"]
+        output_tokens = 0
         if not result or not result[0].sequences:
-            return EngineResult(text="")
-        return EngineResult(text=self._decode(runtime.tokenizer, result[0].sequences[0]).strip())
+            text = ""
+        else:
+            output_tokens = len(result[0].sequences[0])
+            text = self._decode(runtime.tokenizer, result[0].sequences[0]).strip()
+        gpu_decode_after_first_token_ms = None
+        if first_token_ms is not None:
+            gpu_decode_after_first_token_ms = max(0.0, generate_total_ms - first_token_ms)
+        engine_tokens_per_second = None
+        if generate_total_ms > 0.0:
+            engine_tokens_per_second = output_tokens / (generate_total_ms / 1000.0)
+        return EngineResult(
+            text=text,
+            metrics=ResponseMetrics(
+                engine_tokenize_ms=tokenize_ms,
+                gpu_time_to_first_token_ms=first_token_ms,
+                gpu_generate_total_ms=generate_total_ms,
+                gpu_decode_after_first_token_ms=gpu_decode_after_first_token_ms,
+                engine_prompt_tokens=prompt_token_count,
+                engine_output_tokens=output_tokens,
+                engine_tokens_per_second=engine_tokens_per_second,
+            ),
+        )
 
     def _build_runtime(self, settings: ModelSettings) -> Ct2ModelRuntime:
         try:
             import ctranslate2
+            from transformers import AutoTokenizer
             from transformers import PreTrainedTokenizerFast
         except ImportError as exc:  # pragma: no cover - depends on local environment
             raise RuntimeError("ctranslate2 and transformers are required for the CT2 engine") from exc
@@ -75,12 +209,15 @@ class Ct2Engine:
             device=settings.device,
             compute_type=settings.compute_type,
         )
-        tokenizer = PreTrainedTokenizerFast(
-            tokenizer_file=str(model_path / "tokenizer.json"),
-            bos_token="<s>",
-            eos_token="<|im_end|>",
-            unk_token="<unk>",
-        )
+        if settings.prompt_format in {"qwen3_chat", "mistral_inst"}:
+            tokenizer = AutoTokenizer.from_pretrained(str(model_path), trust_remote_code=False)
+        else:
+            tokenizer = PreTrainedTokenizerFast(
+                tokenizer_file=str(model_path / "tokenizer.json"),
+                bos_token="<s>",
+                eos_token="<|im_end|>",
+                unk_token="<unk>",
+            )
         return Ct2ModelRuntime(config=settings, generator=generator, tokenizer=tokenizer)
 
     def _get_static_prompt_tokens(self, runtime: Ct2ModelRuntime, system_prompt: str) -> list[str]:
@@ -100,11 +237,86 @@ class Ct2Engine:
         encoded = tokenizer(text, add_special_tokens=add_special_tokens)
         return tokenizer.convert_ids_to_tokens(encoded["input_ids"])
 
+    def _render_qwen3_prompt_tokens(self, tokenizer: object, *, system_prompt: str, user_text: str) -> list[str]:
+        qwen_user_text = user_text
+        if not qwen_user_text.lstrip().startswith("/no_think"):
+            qwen_user_text = f"/no_think\n{qwen_user_text}"
+        prompt_text = (
+            "<|im_start|>system\n"
+            f"{system_prompt}<|im_end|>\n"
+            "<|im_start|>user\n"
+            f"{qwen_user_text}<|im_end|>\n"
+            "<|im_start|>assistant\n"
+            "<think>\n\n</think>\n\n"
+        )
+        return self._tokenize(tokenizer, prompt_text, add_special_tokens=False)
+
+    def _render_mistral_prompt_tokens(self, tokenizer: object, *, system_prompt: str, user_text: str) -> list[str]:
+        # Mistral-7B-Instruct-v0.3 tokenizer template accepts user/assistant turns.
+        merged_user_content = f"{system_prompt}\n\n{user_text}"
+        prompt_text = tokenizer.apply_chat_template(
+            [{"role": "user", "content": merged_user_content}],
+            tokenize=False,
+            add_generation_prompt=True,
+            return_tensors=None,
+        )
+        return self._tokenize(tokenizer, str(prompt_text), add_special_tokens=False)
+
     def _decode(self, tokenizer: object, tokens: list[str]) -> str:
         token_ids = tokenizer.convert_tokens_to_ids(tokens)
         if isinstance(token_ids, int):
             token_ids = [token_ids]
         return tokenizer.decode(token_ids, skip_special_tokens=True)
+
+    def _resolve_end_token(self, tokenizer: object, stop_tokens: list[str]) -> str | None:
+        for token in stop_tokens:
+            if self._token_in_vocabulary(tokenizer, token):
+                return token
+        eos_token = getattr(tokenizer, "eos_token", None)
+        if isinstance(eos_token, str) and self._token_in_vocabulary(tokenizer, eos_token):
+            return eos_token
+        return None
+
+    def _token_in_vocabulary(self, tokenizer: object, token: str) -> bool:
+        get_vocab = getattr(tokenizer, "get_vocab", None)
+        if callable(get_vocab):
+            try:
+                vocab = get_vocab()
+            except Exception:
+                vocab = None
+            if isinstance(vocab, dict):
+                return token in vocab
+        token_id = tokenizer.convert_tokens_to_ids(token)
+        if not isinstance(token_id, int):
+            return False
+        unk_token_id = getattr(tokenizer, "unk_token_id", None)
+        if isinstance(unk_token_id, int):
+            return token_id != unk_token_id
+        return token_id >= 0
+
+    def _build_first_token_callback(self, started: float):
+        first_token_ms_ref: dict[str, float | None] = {"value": None}
+
+        def callback(_step_result) -> bool:
+            if first_token_ms_ref["value"] is None:
+                first_token_ms_ref["value"] = (time.perf_counter() - started) * 1000.0
+            return False
+
+        return callback, first_token_ms_ref
+
+    def _resolve_decoding(self, request_decoding: DecodingParams) -> ResolvedDecoding:
+        defaults = self.decoding_defaults
+        return ResolvedDecoding(
+            beam_size=request_decoding.beam_size if request_decoding.beam_size is not None else defaults.beam_size,
+            top_k=request_decoding.top_k if request_decoding.top_k is not None else defaults.top_k,
+            top_p=request_decoding.top_p if request_decoding.top_p is not None else defaults.top_p,
+            temperature=request_decoding.temperature if request_decoding.temperature is not None else defaults.temperature,
+            repetition_penalty=request_decoding.repetition_penalty
+            if request_decoding.repetition_penalty is not None
+            else defaults.repetition_penalty,
+            max_tokens=request_decoding.max_tokens if request_decoding.max_tokens is not None else defaults.max_tokens,
+            stop=list(request_decoding.stop) if request_decoding.stop else list(defaults.stop),
+        )
 
 
 def build_engine(settings: AppSettings):

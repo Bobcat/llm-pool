@@ -1,16 +1,83 @@
 {
   "engine": {
-    "default_model": "qwen3-32b-ct2-awq",
+    "default_model": "eurollm-9b-ct2-int8",
     "models": {
       "eurollm-9b-ct2-int8": {
         "model_path": "/home/gunnar/models/EuroLLM-9B-Instruct-ct2-int8",
         "device": "cuda",
-        "compute_type": "int8"
+        "compute_type": "default",
+        "prompt_format": "generic",
+        "enabled": true
+      },
+      "eurollm-22b-instruct-2512-ct2-fp16": {
+        "model_path": "/home/gunnar/models/EuroLLM-22B-Instruct-2512-ct2-fp16",
+        "device": "cuda",
+        "compute_type": "default",
+        "prompt_format": "generic",
+        "enabled": false
+      },
+      "eurollm-22b-instruct-2512-ct2-int8f16": {
+        "model_path": "/home/gunnar/models/EuroLLM-22B-Instruct-2512-ct2-int8f16",
+        "device": "cuda",
+        "compute_type": "default",
+        "prompt_format": "generic",
+        "enabled": true
+      },
+      "mistral-small-instruct-2409-ct2-awq": {
+        "model_path": "/home/gunnar/models/Mistral-Small-Instruct-2409-ct2-AWQ",
+        "device": "cuda",
+        "compute_type": "default",
+        "prompt_format": "generic",
+        "enabled": false
+      },
+      "mistral-7b-instruct-v0.3-ct2-int8": {
+        "model_path": "/home/gunnar/models/Mistral-7B-Instruct-v0.3-ct2-int8",
+        "device": "cuda",
+        "compute_type": "default",
+        "prompt_format": "mistral_inst",
+        "enabled": false
+      },
+      "phi-4-ct2-awq": {
+        "model_path": "/home/gunnar/models/Phi-4-ct2-AWQ",
+        "device": "cuda",
+        "compute_type": "default",
+        "prompt_format": "generic",
+        "enabled": false
+      },
+      "phi-4-ct2-int8": {
+        "model_path": "/home/gunnar/models/Phi-4-ct2-int8",
+        "device": "cuda",
+        "compute_type": "default",
+        "prompt_format": "generic",
+        "enabled": true
+      },
+      "qwen2.5-14b-instruct-ct2-int8": {
+        "model_path": "/home/gunnar/models/Qwen2.5-14B-Instruct-ct2-int8",
+        "device": "cuda",
+        "compute_type": "default",
+        "prompt_format": "generic",
+        "enabled": false
+      },
+      "qwen3-8b-ct2-awq": {
+        "model_path": "/home/gunnar/models/Qwen3-8B-ct2-AWQ",
+        "device": "cuda",
+        "compute_type": "default",
+        "prompt_format": "qwen3_chat",
+        "enabled": false
+      },
+      "qwen3-14b-ct2-awq": {
+        "model_path": "/home/gunnar/models/Qwen3-14B-ct2-AWQ",
+        "device": "cuda",
+        "compute_type": "default",
+        "prompt_format": "qwen3_chat",
+        "enabled": false
       },
       "qwen3-32b-ct2-awq": {
         "model_path": "/home/gunnar/models/Qwen3-32B-ct2-AWQ",
         "device": "cuda",
-        "compute_type": "int8_float16"
+        "compute_type": "default",
+        "prompt_format": "qwen3_chat",
+        "enabled": false
       }
     }
   }
