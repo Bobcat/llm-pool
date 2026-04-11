@@ -145,3 +145,47 @@ class ConfigTests(unittest.TestCase):
         self.assertEqual(settings.engine.decoding.top_p, 1.0)
         self.assertEqual(settings.engine.decoding.temperature, 0.4)
         self.assertEqual(settings.engine.decoding.stop, ["</custom>"])
+
+    def test_load_settings_reads_model_backend_specific_fields(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = Path(tmpdir) / "settings.json"
+            path.write_text(
+                (
+                    "{\n"
+                    '  "engine": {\n'
+                    '    "backend": "ct2",\n'
+                    '    "default_model": "mixtral-exl3",\n'
+                    '    "models": {\n'
+                    '      "mixtral-exl3": {\n'
+                    '        "model_path": "/models/mixtral-exl3",\n'
+                    '        "backend": "exllamav3",\n'
+                    '        "exllama_cache_size": 16384,\n'
+                    '        "exllama_cache_quant": "8,4",\n'
+                    '        "exllama_gpu_split": "24,24",\n'
+                    '        "exllama_tensor_parallel": true,\n'
+                    '        "exllama_tp_backend": "native",\n'
+                    '        "exllama_max_batch_size": 32,\n'
+                    '        "exllama_max_chunk_size": 1024,\n'
+                    '        "exllama_max_q_size": 6,\n'
+                    '        "exllama_max_rq_tokens": 2048\n'
+                    "      }\n"
+                    "    }\n"
+                    "  }\n"
+                    "}\n"
+                ),
+                encoding="utf-8",
+            )
+
+            settings = load_settings(path)
+
+        model = settings.engine.models["mixtral-exl3"]
+        self.assertEqual(model.backend, "exllamav3")
+        self.assertEqual(model.exllama_cache_size, 16384)
+        self.assertEqual(model.exllama_cache_quant, "8,4")
+        self.assertEqual(model.exllama_gpu_split, "24,24")
+        self.assertTrue(model.exllama_tensor_parallel)
+        self.assertEqual(model.exllama_tp_backend, "native")
+        self.assertEqual(model.exllama_max_batch_size, 32)
+        self.assertEqual(model.exllama_max_chunk_size, 1024)
+        self.assertEqual(model.exllama_max_q_size, 6)
+        self.assertEqual(model.exllama_max_rq_tokens, 2048)

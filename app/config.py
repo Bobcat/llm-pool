@@ -21,10 +21,20 @@ class ServiceSettings:
 @dataclass(frozen=True)
 class ModelSettings:
     model_path: str
+    backend: str | None = None
     device: str = "cuda"
     compute_type: str = "int8"
     prompt_format: str = "generic"
     enabled: bool = True
+    exllama_cache_size: int = 8192
+    exllama_cache_quant: str | None = None
+    exllama_gpu_split: str | None = None
+    exllama_tensor_parallel: bool = False
+    exllama_tp_backend: str = "native"
+    exllama_max_batch_size: int = 64
+    exllama_max_chunk_size: int = 2048
+    exllama_max_q_size: int = 8
+    exllama_max_rq_tokens: int | None = None
 
 
 @dataclass(frozen=True)
@@ -86,12 +96,44 @@ def load_settings(path: str | Path | None = None) -> AppSettings:
         model_path = str(model_payload.get("model_path", "")).strip()
         if not model_path:
             continue
+        backend_value = model_payload.get("backend")
+        backend = None
+        if backend_value is not None:
+            parsed_backend = str(backend_value).strip().lower()
+            if parsed_backend:
+                backend = parsed_backend
+        cache_quant_value = model_payload.get("exllama_cache_quant")
+        cache_quant = None
+        if cache_quant_value is not None:
+            parsed_cache_quant = str(cache_quant_value).strip()
+            if parsed_cache_quant:
+                cache_quant = parsed_cache_quant
+        gpu_split_value = model_payload.get("exllama_gpu_split")
+        gpu_split = None
+        if gpu_split_value is not None:
+            parsed_gpu_split = str(gpu_split_value).strip()
+            if parsed_gpu_split:
+                gpu_split = parsed_gpu_split
+        max_rq_tokens_value = model_payload.get("exllama_max_rq_tokens")
+        max_rq_tokens = None
+        if max_rq_tokens_value not in (None, ""):
+            max_rq_tokens = int(max_rq_tokens_value)
         models[str(model_name)] = ModelSettings(
             model_path=model_path,
+            backend=backend,
             device=str(model_payload.get("device", "cuda")),
             compute_type=str(model_payload.get("compute_type", "int8")),
             prompt_format=str(model_payload.get("prompt_format", "generic")),
             enabled=bool(model_payload.get("enabled", True)),
+            exllama_cache_size=int(model_payload.get("exllama_cache_size", 8192)),
+            exllama_cache_quant=cache_quant,
+            exllama_gpu_split=gpu_split,
+            exllama_tensor_parallel=bool(model_payload.get("exllama_tensor_parallel", False)),
+            exllama_tp_backend=str(model_payload.get("exllama_tp_backend", "native")),
+            exllama_max_batch_size=int(model_payload.get("exllama_max_batch_size", 64)),
+            exllama_max_chunk_size=int(model_payload.get("exllama_max_chunk_size", 2048)),
+            exllama_max_q_size=int(model_payload.get("exllama_max_q_size", 8)),
+            exllama_max_rq_tokens=max_rq_tokens,
         )
 
     return AppSettings(
