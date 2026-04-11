@@ -1,12 +1,26 @@
 {
   "engine": {
-    "default_model": "eurollm-9b-ct2-int8",
+    "default_model": "eurollm-22b-instruct-2512-ct2-int8f16",
     "models": {
       "eurollm-9b-ct2-int8": {
         "model_path": "/home/gunnar/models/EuroLLM-9B-Instruct-ct2-int8",
         "device": "cuda",
         "compute_type": "default",
         "prompt_format": "generic",
+        "enabled": false
+      },
+      "gemma-4-26B-A4B-it-exl3-5.10bpw": {
+        "model_path": "/home/gunnar/models/gemma-4-26B-A4B-it-exl3-5.10bpw",
+        "backend": "exllamav3",
+        "device": "cuda",
+        "prompt_format": "mistral_inst",
+        "enabled": false
+      },
+      "gemma-4-31b-it-exl3-5.00bpw": {
+        "model_path": "/home/gunnar/models/gemma-4-31b-it-exl3-5.00bpw",
+        "backend": "exllamav3",
+        "device": "cuda",
+        "prompt_format": "mistral_inst",
         "enabled": true
       },
       "eurollm-22b-instruct-2512-ct2-fp16": {
