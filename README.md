@@ -37,8 +37,7 @@ Example request:
     "top_p": 1.0,
     "temperature": 0.1,
     "repetition_penalty": 1.0,
-    "max_tokens": 256,
-    "stop": ["<|im_end|>"]
+    "max_tokens": 256
   }
 }
 ```
@@ -69,6 +68,30 @@ Example response:
 }
 ```
 
+## Request Fields
+
+Currently supported API request fields:
+
+| Field | Type | Required | Default if omitted | Notes |
+| --- | --- | --- | --- | --- |
+| `model` | `string` | yes | none | Must match a loaded enabled model. |
+| `input` | `string` | yes | none | Main user input text. |
+| `instructions` | `string \| null` | no | `null` | If omitted, the pool falls back to an internal default instruction prompt. |
+| `stream` | `boolean` | no | `false` | `false` returns one JSON response; `true` returns SSE events. |
+| `decoding` | `object` | no | `{}` | Omitted subfields fall back to `engine.decoding` server defaults. |
+
+Currently supported decoding fields:
+
+| Field | Type | Required | Default if omitted | CT2 | ExLlamaV3 | Notes |
+| --- | --- | --- | --- | --- | --- | --- |
+| `beam_size` | `int` | no | server default, usually `1` | used | accepted, ignored | ExLlamaV3 logs it and continues. |
+| `top_k` | `int` | no | server default, usually `1` | used | used | Sampling control. |
+| `top_p` | `float` | no | server default, usually `1.0` | used | used | Sampling control. |
+| `temperature` | `float` | no | server default, usually `0.1` | used | used | Sampling control. |
+| `repetition_penalty` | `float` | no | server default, usually `1.0` | used | used | Repetition penalty. |
+| `max_tokens` | `int` | no | server default, usually `256` | used | used | Maximum generated output tokens. |
+| `stop` | `list[string]` | no | server default extra stop list, often empty | used | used | Optional extra stop strings. Model-internal stop/eos tokens are handled by the pool/backend. |
+
 ## Local Overrides
 
 You can keep shared defaults in `config/settings.json` and put machine-local overrides in `config/local.json`.
@@ -76,7 +99,7 @@ When present, `local.json` is merged over `settings.json` (override wins per key
 
 Settings files can also define `service.host`, `service.port`, `service.log_level`, `engine.default_model`, and global `engine.decoding` defaults.
 
-Per model, you can set `model_path`, `device`, `compute_type`, `prompt_format`, `enabled`, and optionally override the backend:
+Per model, you can set `model_path`, `device`, `compute_type`, `prompt_format`, `enable_thinking`, `enabled`, and optionally override the backend:
 
 ```json
 {
@@ -91,6 +114,8 @@ Per model, you can set `model_path`, `device`, `compute_type`, `prompt_format`, 
       "gemma-4-26B-A4B-it-exl3-5.10bpw": {
         "model_path": "/home/gunnar/models/gemma-4-26B-A4B-it-exl3-5.10bpw",
         "backend": "exllamav3",
+        "prompt_format": "gemma4_template",
+        "enable_thinking": false,
         "enabled": true,
         "exllama_cache_size": 16384,
         "exllama_cache_quant": "8,8",
@@ -105,6 +130,7 @@ Per model, you can set `model_path`, `device`, `compute_type`, `prompt_format`, 
 Notes:
 - Models without a `backend` field use the global `engine.backend`.
 - `enabled` controls whether a model is loaded by the pool at startup.
+- `enable_thinking` is an optional per-model template setting for formats that expose a thinking toggle.
 - Request-level decoding values override `engine.decoding` defaults when provided.
 - ExLlamaV3 models also support `exllama_tp_backend`, `exllama_max_batch_size`, `exllama_max_chunk_size`, `exllama_max_q_size`, and `exllama_max_rq_tokens`.
 - ExLlamaV3 dependencies are loaded lazily and required only when an ExLlamaV3 model is configured.

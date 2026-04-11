@@ -33,7 +33,8 @@ class ConfigTests(unittest.TestCase):
                     '        "model_path": "/models/test",\n'
                     '        "device": "cpu",\n'
                     '        "compute_type": "float32",\n'
-                    '        "prompt_format": "qwen3_chat",\n'
+                    '        "prompt_format": "qwen3_template",\n'
+                    '        "enable_thinking": false,\n'
                     '        "enabled": false\n'
                     "      }\n"
                     "    }\n"
@@ -52,7 +53,8 @@ class ConfigTests(unittest.TestCase):
         self.assertEqual(settings.engine.models["test-model"].model_path, "/models/test")
         self.assertEqual(settings.engine.models["test-model"].device, "cpu")
         self.assertEqual(settings.engine.models["test-model"].compute_type, "float32")
-        self.assertEqual(settings.engine.models["test-model"].prompt_format, "qwen3_chat")
+        self.assertEqual(settings.engine.models["test-model"].prompt_format, "qwen3_template")
+        self.assertFalse(settings.engine.models["test-model"].enable_thinking)
         self.assertFalse(settings.engine.models["test-model"].enabled)
         self.assertEqual(settings.engine.decoding.beam_size, 2)
         self.assertEqual(settings.engine.decoding.top_k, 3)
@@ -112,7 +114,8 @@ class ConfigTests(unittest.TestCase):
                     '        "model_path": "/models/new",\n'
                     '        "device": "cuda",\n'
                     '        "compute_type": "float16",\n'
-                    '        "prompt_format": "qwen3_chat",\n'
+                    '        "prompt_format": "qwen3_template",\n'
+                    '        "enable_thinking": false,\n'
                     '        "enabled": false\n'
                     "      }\n"
                     "    }\n"
@@ -137,7 +140,8 @@ class ConfigTests(unittest.TestCase):
         self.assertEqual(settings.engine.default_model, "new-model")
         self.assertIn("eurollm-9b-ct2-int8", settings.engine.models)
         self.assertIn("new-model", settings.engine.models)
-        self.assertEqual(settings.engine.models["new-model"].prompt_format, "qwen3_chat")
+        self.assertEqual(settings.engine.models["new-model"].prompt_format, "qwen3_template")
+        self.assertFalse(settings.engine.models["new-model"].enable_thinking)
         self.assertTrue(settings.engine.models["eurollm-9b-ct2-int8"].enabled)
         self.assertFalse(settings.engine.models["new-model"].enabled)
         self.assertEqual(settings.engine.decoding.beam_size, 1)
@@ -145,6 +149,30 @@ class ConfigTests(unittest.TestCase):
         self.assertEqual(settings.engine.decoding.top_p, 1.0)
         self.assertEqual(settings.engine.decoding.temperature, 0.4)
         self.assertEqual(settings.engine.decoding.stop, ["</custom>"])
+
+    def test_load_settings_defaults_stop_list_to_empty(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = Path(tmpdir) / "settings.json"
+            path.write_text(
+                (
+                    "{\n"
+                    '  "engine": {\n'
+                    '    "backend": "ct2",\n'
+                    '    "default_model": "test-model",\n'
+                    '    "models": {\n'
+                    '      "test-model": {\n'
+                    '        "model_path": "/models/test"\n'
+                    "      }\n"
+                    "    }\n"
+                    "  }\n"
+                    "}\n"
+                ),
+                encoding="utf-8",
+            )
+
+            settings = load_settings(path)
+
+        self.assertEqual(settings.engine.decoding.stop, [])
 
     def test_load_settings_reads_model_backend_specific_fields(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:

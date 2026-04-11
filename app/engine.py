@@ -19,6 +19,25 @@ from app.schemas import ResponseMetrics
 LOGGER = logging.getLogger("llm_pool.engine")
 
 
+def _native_stop_strings(prompt_format: str) -> list[str]:
+    if prompt_format in {"generic", "qwen3_template"}:
+        return ["<|im_end|>"]
+    if prompt_format == "gemma4_template":
+        return ["<turn|>"]
+    return []
+
+
+def _merge_stop_strings(prompt_format: str, extra_stop_tokens: list[str]) -> list[str]:
+    merged: list[str] = []
+    seen: set[str] = set()
+    for token in [*_native_stop_strings(prompt_format), *extra_stop_tokens]:
+        if token == "" or token in seen:
+            continue
+        seen.add(token)
+        merged.append(token)
+    return merged
+
+
 class StubEngine:
     """Temporary engine used to validate the API contract before model integration."""
 
@@ -95,22 +114,26 @@ class Ct2Engine:
 
         system_prompt = request.instructions or "You are a helpful assistant. Return only the response."
         decoding = self._resolve_decoding(request.decoding)
+        stop_tokens = _merge_stop_strings(runtime.config.prompt_format, decoding.stop)
         tokenize_started = time.perf_counter()
         prompt_token_count = 0
-        if runtime.config.prompt_format == "qwen3_chat":
-            think_open_tokens = self._tokenize(runtime.tokenizer, "<think>", add_special_tokens=False)
-            think_close_tokens = self._tokenize(runtime.tokenizer, "</think>", add_special_tokens=False)
-            suppress_sequences = [tokens for tokens in (think_open_tokens, think_close_tokens) if tokens]
+        if runtime.config.prompt_format == "qwen3_template":
+            suppress_sequences = None
+            if runtime.config.enable_thinking is not True:
+                think_open_tokens = self._tokenize(runtime.tokenizer, "<think>", add_special_tokens=False)
+                think_close_tokens = self._tokenize(runtime.tokenizer, "</think>", add_special_tokens=False)
+                suppress_sequences = [tokens for tokens in (think_open_tokens, think_close_tokens) if tokens]
             prompt_tokens = self._render_qwen3_prompt_tokens(
                 runtime.tokenizer,
                 system_prompt=system_prompt,
                 user_text=request.input,
+                enable_thinking=runtime.config.enable_thinking,
             )
             prompt_token_count = len(prompt_tokens)
             tokenize_ms = (time.perf_counter() - tokenize_started) * 1000.0
             generate_started = time.perf_counter()
             callback, first_token_ms_ref = self._build_first_token_callback(generate_started)
-            end_token = self._resolve_end_token(runtime.tokenizer, decoding.stop)
+            end_token = self._resolve_end_token(runtime.tokenizer, stop_tokens)
             generate_kwargs = {
                 "include_prompt_in_result": False,
                 "beam_size": decoding.beam_size,
@@ -119,7 +142,7 @@ class Ct2Engine:
                 "sampling_topp": decoding.top_p,
                 "sampling_temperature": decoding.temperature,
                 "repetition_penalty": decoding.repetition_penalty,
-                "suppress_sequences": suppress_sequences or None,
+                "suppress_sequences": suppress_sequences,
                 "callback": callback if decoding.beam_size == 1 else None,
             }
             if end_token is not None:
@@ -128,7 +151,7 @@ class Ct2Engine:
                 [prompt_tokens],
                 **generate_kwargs,
             )
-        elif runtime.config.prompt_format == "mistral_inst":
+        elif runtime.config.prompt_format == "mistral_template":
             prompt_tokens = self._render_mistral_prompt_tokens(
                 runtime.tokenizer,
                 system_prompt=system_prompt,
@@ -138,7 +161,7 @@ class Ct2Engine:
             tokenize_ms = (time.perf_counter() - tokenize_started) * 1000.0
             generate_started = time.perf_counter()
             callback, first_token_ms_ref = self._build_first_token_callback(generate_started)
-            end_token = self._resolve_end_token(runtime.tokenizer, decoding.stop)
+            end_token = self._resolve_end_token(runtime.tokenizer, stop_tokens)
             generate_kwargs = {
                 "include_prompt_in_result": False,
                 "beam_size": decoding.beam_size,
@@ -163,7 +186,7 @@ class Ct2Engine:
             tokenize_ms = (time.perf_counter() - tokenize_started) * 1000.0
             generate_started = time.perf_counter()
             callback, first_token_ms_ref = self._build_first_token_callback(generate_started)
-            end_token = self._resolve_end_token(runtime.tokenizer, decoding.stop)
+            end_token = self._resolve_end_token(runtime.tokenizer, stop_tokens)
             generate_kwargs = {
                 "static_prompt": static_prompt_tokens,
                 "cache_static_prompt": True,
@@ -223,7 +246,7 @@ class Ct2Engine:
             device=settings.device,
             compute_type=settings.compute_type,
         )
-        if settings.prompt_format in {"qwen3_chat", "mistral_inst"}:
+        if settings.prompt_format in {"qwen3_template", "mistral_template"}:
             tokenizer = AutoTokenizer.from_pretrained(str(model_path), trust_remote_code=False)
         else:
             tokenizer = PreTrainedTokenizerFast(
@@ -251,17 +274,26 @@ class Ct2Engine:
         encoded = tokenizer(text, add_special_tokens=add_special_tokens)
         return tokenizer.convert_ids_to_tokens(encoded["input_ids"])
 
-    def _render_qwen3_prompt_tokens(self, tokenizer: object, *, system_prompt: str, user_text: str) -> list[str]:
+    def _render_qwen3_prompt_tokens(
+        self,
+        tokenizer: object,
+        *,
+        system_prompt: str,
+        user_text: str,
+        enable_thinking: bool | None,
+    ) -> list[str]:
         qwen_user_text = user_text
-        if not qwen_user_text.lstrip().startswith("/no_think"):
-            qwen_user_text = f"/no_think\n{qwen_user_text}"
+        assistant_prefix = "<|im_start|>assistant\n"
+        if enable_thinking is not True:
+            if not qwen_user_text.lstrip().startswith("/no_think"):
+                qwen_user_text = f"/no_think\n{qwen_user_text}"
+            assistant_prefix += "<think>\n\n</think>\n\n"
         prompt_text = (
             "<|im_start|>system\n"
             f"{system_prompt}<|im_end|>\n"
             "<|im_start|>user\n"
             f"{qwen_user_text}<|im_end|>\n"
-            "<|im_start|>assistant\n"
-            "<think>\n\n</think>\n\n"
+            f"{assistant_prefix}"
         )
         return self._tokenize(tokenizer, prompt_text, add_special_tokens=False)
 
@@ -368,6 +400,8 @@ class ExLlamaV3Engine:
 
         system_prompt = request.instructions or "You are a helpful assistant. Return only the response."
         decoding = self._resolve_decoding(request.decoding)
+        prompt_format = runtime.config.prompt_format
+        stop_tokens = _merge_stop_strings(prompt_format, decoding.stop)
         if request.decoding.beam_size is not None:
             LOGGER.info(
                 "Ignoring beam_size=%s for ExLlamaV3 model '%s'.",
@@ -378,9 +412,10 @@ class ExLlamaV3Engine:
         tokenize_started = time.perf_counter()
         prompt_ids = self._render_prompt_ids(
             runtime.tokenizer,
-            prompt_format=runtime.config.prompt_format,
+            prompt_format=prompt_format,
             system_prompt=system_prompt,
             user_text=request.input,
+            enable_thinking=runtime.config.enable_thinking,
         )
         prompt_ids = prompt_ids.to(device="cpu")
         prompt_token_count = int(prompt_ids.shape[-1])
@@ -393,7 +428,7 @@ class ExLlamaV3Engine:
             temperature=decoding.temperature,
             min_p=0.0,
         )
-        stop_conditions = self._resolve_stop_conditions(runtime.tokenizer, decoding.stop)
+        stop_conditions = self._resolve_stop_conditions(runtime.tokenizer, stop_tokens)
         job_kwargs: dict[str, object] = {
             "input_ids": prompt_ids,
             "max_new_tokens": decoding.max_tokens,
@@ -542,17 +577,27 @@ class ExLlamaV3Engine:
         prompt_format: str,
         system_prompt: str,
         user_text: str,
+        enable_thinking: bool | None,
     ):
-        if prompt_format == "qwen3_chat":
+        if prompt_format == "qwen3_template":
             return tokenizer.hf_chat_template(
                 [
                     {"role": "system", "content": system_prompt},
                     {"role": "user", "content": user_text},
                 ],
                 add_generation_prompt=True,
-                enable_thinking=False,
+                enable_thinking=False if enable_thinking is None else enable_thinking,
             )
-        if prompt_format == "mistral_inst":
+        if prompt_format == "gemma4_template":
+            return tokenizer.hf_chat_template(
+                [
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": user_text},
+                ],
+                add_generation_prompt=True,
+                enable_thinking=False if enable_thinking is None else enable_thinking,
+            )
+        if prompt_format == "mistral_template":
             merged_user_content = f"{system_prompt}\n\n{user_text}"
             return tokenizer.hf_chat_template(
                 [{"role": "user", "content": merged_user_content}],

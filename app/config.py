@@ -25,6 +25,7 @@ class ModelSettings:
     device: str = "cuda"
     compute_type: str = "int8"
     prompt_format: str = "generic"
+    enable_thinking: bool | None = None
     enabled: bool = True
     exllama_cache_size: int = 8192
     exllama_cache_quant: str | None = None
@@ -45,7 +46,7 @@ class DecodingDefaults:
     temperature: float = 0.1
     repetition_penalty: float = 1.0
     max_tokens: int = 256
-    stop: list[str] = field(default_factory=lambda: ["<|im_end|>"])
+    stop: list[str] = field(default_factory=list)
 
 
 @dataclass(frozen=True)
@@ -124,6 +125,11 @@ def load_settings(path: str | Path | None = None) -> AppSettings:
             device=str(model_payload.get("device", "cuda")),
             compute_type=str(model_payload.get("compute_type", "int8")),
             prompt_format=str(model_payload.get("prompt_format", "generic")),
+            enable_thinking=(
+                bool(model_payload["enable_thinking"])
+                if model_payload.get("enable_thinking") is not None
+                else None
+            ),
             enabled=bool(model_payload.get("enabled", True)),
             exllama_cache_size=int(model_payload.get("exllama_cache_size", 8192)),
             exllama_cache_quant=cache_quant,
@@ -153,7 +159,7 @@ def load_settings(path: str | Path | None = None) -> AppSettings:
                 temperature=float(decoding_payload.get("temperature", 0.1)),
                 repetition_penalty=float(decoding_payload.get("repetition_penalty", 1.0)),
                 max_tokens=int(decoding_payload.get("max_tokens", 256)),
-                stop=_coerce_stop_tokens(decoding_payload.get("stop"), default=["<|im_end|>"]),
+                stop=_coerce_stop_tokens(decoding_payload.get("stop"), default=[]),
             ),
         ),
     )
