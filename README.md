@@ -6,7 +6,8 @@ Current scope:
 - generic request schema with per-request decoding params
 - JSON response mode
 - SSE streaming mode
-- CT2 engine behind the same API contract
+- CT2 and ExLlamaV3 engines behind the same API contract
+- per-model backend routing inside one llm-pool instance
 - `config/settings.json` and `deploy/systemd/` repo scaffolding
 
 ## Endpoint
@@ -48,6 +49,34 @@ uvicorn app.main:app --reload --port 8011
 
 You can keep shared defaults in `config/settings.json` and put machine-local overrides in `config/local.json`.
 When present, `local.json` is merged over `settings.json` (override wins per key).
+
+Per model, you can optionally override the backend:
+
+```json
+{
+  "engine": {
+    "backend": "ct2",
+    "models": {
+      "eurollm-9b-ct2-int8": {
+        "model_path": "/models/eurollm-ct2",
+        "backend": "ct2"
+      },
+      "gemma-4-26B-A4B-it-exl3-5.10bpw": {
+        "model_path": "/home/gunnar/models/gemma-4-26B-A4B-it-exl3-5.10bpw",
+        "backend": "exllamav3",
+        "exllama_cache_size": 16384,
+        "exllama_cache_quant": "8,8",
+        "exllama_tensor_parallel": true,
+        "exllama_gpu_split": "24,24"
+      }
+    }
+  }
+}
+```
+
+Notes:
+- Models without a `backend` field use the global `engine.backend`.
+- ExLlamaV3 dependencies are loaded lazily and required only when an ExLlamaV3 model is configured.
 
 Optional env vars:
 - `LLM_POOL_SETTINGS_PATH`: explicit base settings file path.
