@@ -1,6 +1,6 @@
-# llm-pool-dev
+# llm-pool
 
-Small FastAPI service that exposes a generic `POST /v1/responses` contract for local LLM inference.
+FastAPI service for local LLM inference behind one generic `POST /v1/responses` contract.
 
 Current scope:
 - generic request schema with per-request instructions and decoding params
@@ -8,7 +8,7 @@ Current scope:
 - SSE streaming mode
 - `GET /v1/models` endpoint for enabled model discovery
 - per-request runtime metrics in the response
-- CT2 and ExLlamaV3 engines behind the same API contract
+- CT2, ExLlamaV3, and GGUF/`llama.cpp` engines behind the same API contract
 - per-model backend routing inside one llm-pool instance
 - includes model serving and routing, but no queue/scheduler layer yet (unlike asr-pool)
 
@@ -82,15 +82,15 @@ Currently supported API request fields:
 
 Currently supported decoding fields:
 
-| Field | Type | Required | Default if omitted | CT2 | ExLlamaV3 | Notes |
-| --- | --- | --- | --- | --- | --- | --- |
-| `beam_size` | `int` | no | server default, usually `1` | used | accepted, ignored | ExLlamaV3 logs it and continues. |
-| `top_k` | `int` | no | server default, usually `1` | used | used | Sampling control. |
-| `top_p` | `float` | no | server default, usually `1.0` | used | used | Sampling control. |
-| `temperature` | `float` | no | server default, usually `0.1` | used | used | Sampling control. |
-| `repetition_penalty` | `float` | no | server default, usually `1.0` | used | used | Repetition penalty. |
-| `max_tokens` | `int` | no | server default, usually `256` | used | used | Maximum generated output tokens. |
-| `stop` | `list[string]` | no | server default extra stop list, often empty | used | used | Optional extra stop strings. Model-internal stop/eos tokens are handled by the pool/backend. |
+| Field | Type | Required | Default if omitted | CT2 | ExLlamaV3 | GGUF | Notes |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| `beam_size` | `int` | no | server default, usually `1` | used | accepted, ignored | accepted, ignored | ExLlamaV3 and GGUF log it and continue. |
+| `top_k` | `int` | no | server default, usually `1` | used | used | used | Sampling control. |
+| `top_p` | `float` | no | server default, usually `1.0` | used | used | used | Sampling control. |
+| `temperature` | `float` | no | server default, usually `0.1` | used | used | used | Sampling control. |
+| `repetition_penalty` | `float` | no | server default, usually `1.0` | used | used | used | Repetition penalty. |
+| `max_tokens` | `int` | no | server default, usually `256` | used | used | used | Maximum generated output tokens. |
+| `stop` | `list[string]` | no | server default extra stop list, often empty | used | used | used | Optional extra stop strings. Model-internal stop/eos tokens are handled by the pool/backend. |
 
 ## Local Overrides
 
@@ -121,6 +121,17 @@ Per model, you can set `model_path`, `device`, `compute_type`, `prompt_format`, 
         "exllama_cache_quant": "8,8",
         "exllama_tensor_parallel": true,
         "exllama_gpu_split": "24,24"
+      },
+      "google_gemma-4-E2B-it-Q8_0-gguf": {
+        "model_path": "/home/gunnar/models/google_gemma-4-E2B-it-Q8_0/google_gemma-4-E2B-it-Q8_0.gguf",
+        "backend": "gguf",
+        "device": "cuda",
+        "prompt_format": "gemma4_template",
+        "enable_thinking": false,
+        "enabled": true,
+        "gguf_n_gpu_layers": -1,
+        "gguf_n_ctx": 4096,
+        "gguf_flash_attn": false
       }
     }
   }
@@ -133,7 +144,9 @@ Notes:
 - `enable_thinking` is an optional per-model template setting for formats that expose a thinking toggle.
 - Request-level decoding values override `engine.decoding` defaults when provided.
 - ExLlamaV3 models also support `exllama_tp_backend`, `exllama_max_batch_size`, `exllama_max_chunk_size`, `exllama_max_q_size`, and `exllama_max_rq_tokens`.
+- GGUF models also support `gguf_n_gpu_layers`, `gguf_n_ctx`, and `gguf_flash_attn`.
 - ExLlamaV3 dependencies are loaded lazily and required only when an ExLlamaV3 model is configured.
+- GGUF dependencies are loaded lazily and required only when a GGUF model is configured.
 
 Optional env vars:
 - `LLM_POOL_SETTINGS_PATH`: explicit base settings file path.
