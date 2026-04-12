@@ -327,12 +327,37 @@ Then stop increasing concurrency once one of these happens:
 
 That gives a practical operating point instead of a theoretical maximum.
 
+## Interaction With Runtime Unload
+
+If we later add a separate runtime admin API with `load` and `unload`, that should stay aligned with the scheduler boundary described above.
+
+The clean split is:
+
+- scheduler owns external pending queues
+- runtime owns backend execution state
+
+That means unload should behave like this:
+
+- new requests for the model are rejected once unload starts
+- requests still waiting in a scheduler-owned queue should be cancelled
+- requests already submitted to the runtime should be allowed to drain in v1
+- only after that drain completes should the runtime be released
+
+So "unload" should not mean "immediately kill whatever the backend is doing".
+
+For a future scheduler-aware implementation, the intended rule is:
+
+- queued work: cancel
+- runtime-submitted work: drain
+
+That keeps cancellation policy in the scheduler layer and avoids pretending that all backends can safely hard-cancel active GPU work.
+
 ## Out Of Scope For Now
 
 This note does not define:
 
 - exact thread model
-- exact cancellation semantics
+- exact active-job cancellation semantics inside each backend
 - streaming token delivery contract
 - persistence or disk-backed queues
 - retry policy

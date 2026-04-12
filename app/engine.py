@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import gc
+from dataclasses import asdict
 from dataclasses import dataclass
 from dataclasses import field
 from dataclasses import replace
@@ -38,14 +40,96 @@ def _merge_stop_strings(prompt_format: str, extra_stop_tokens: list[str]) -> lis
     return merged
 
 
+def _exception_message(exc: Exception) -> str:
+    message = str(exc).strip()
+    if message != "":
+        return message
+    return exc.__class__.__name__
+
+
+class UnknownModelError(LookupError):
+    def __init__(self, model_name: str) -> None:
+        super().__init__(model_name)
+        self.model_name = model_name
+
+
+class ModelStateError(RuntimeError):
+    def __init__(self, model_name: str, code: str) -> None:
+        super().__init__(model_name)
+        self.model_name = model_name
+        self.code = code
+
+
 class StubEngine:
     """Temporary engine used to validate the API contract before model integration."""
 
+    def __init__(self, settings: AppSettings | None = None) -> None:
+        self._configured_models = dict(settings.engine.models) if settings is not None else {}
+        self._models = {
+            model_name: object()
+            for model_name, model_settings in self._configured_models.items()
+            if model_settings.enabled
+        }
+
     def complete(self, request: ResponseRequest) -> EngineResult:
+        if request.model not in self._configured_models:
+            raise UnknownModelError(request.model)
+        if request.model not in self._models:
+            raise ModelStateError(request.model, "model_not_loaded")
         text = request.input
         if request.instructions:
             text = f"[instructions={request.instructions}] {text}"
         return EngineResult(text=text)
+
+    def admin_models_payload(self, settings: AppSettings) -> dict[str, object]:
+        models: list[dict[str, object]] = []
+        for model_name, model_settings in self._configured_models.items():
+            is_loaded = model_name in self._models
+            models.append(
+                {
+                    "name": model_name,
+                    "resolved_backend": settings.engine.backend,
+                    "configured_enabled": model_settings.enabled,
+                    "runtime_state": "loaded" if is_loaded else "unloaded",
+                    "is_loaded": is_loaded,
+                    "inflight_requests": 0,
+                    "last_error": None,
+                    "definition": asdict(model_settings),
+                }
+            )
+        return {"models": models}
+
+    def load_model(self, model_name: str, settings: AppSettings) -> dict[str, object]:
+        model_settings = self._configured_models.get(model_name)
+        if model_settings is None:
+            raise UnknownModelError(model_name)
+        self._models.setdefault(model_name, object())
+        return {
+            "name": model_name,
+            "resolved_backend": settings.engine.backend,
+            "configured_enabled": model_settings.enabled,
+            "runtime_state": "loaded",
+            "is_loaded": True,
+            "inflight_requests": 0,
+            "last_error": None,
+            "definition": asdict(model_settings),
+        }
+
+    def unload_model(self, model_name: str, settings: AppSettings) -> dict[str, object]:
+        model_settings = self._configured_models.get(model_name)
+        if model_settings is None:
+            raise UnknownModelError(model_name)
+        self._models.pop(model_name, None)
+        return {
+            "name": model_name,
+            "resolved_backend": settings.engine.backend,
+            "configured_enabled": model_settings.enabled,
+            "runtime_state": "unloaded",
+            "is_loaded": False,
+            "inflight_requests": 0,
+            "last_error": None,
+            "definition": asdict(model_settings),
+        }
 
 
 @dataclass
@@ -75,6 +159,15 @@ class LlamaCppModelRuntime:
     generation_lock: threading.Lock = field(default_factory=threading.Lock)
 
 
+@dataclass
+class ModelRuntimeState:
+    resolved_backend: str
+    configured_enabled: bool
+    lifecycle: str = "unloaded"
+    inflight_requests: int = 0
+    last_error: str | None = None
+
+
 @dataclass(frozen=True)
 class ResolvedDecoding:
     beam_size: int
@@ -88,31 +181,23 @@ class ResolvedDecoding:
 
 class Ct2Engine:
     def __init__(self, settings: AppSettings) -> None:
-        self.default_model = settings.engine.default_model
         self.decoding_defaults = settings.engine.decoding
         self._models: dict[str, Ct2ModelRuntime] = {}
+        self._load_errors: dict[str, str] = {}
         for model_name, model_settings in settings.engine.models.items():
             if not model_settings.enabled:
                 continue
             try:
                 self._models[model_name] = self._build_runtime(model_settings)
-            except Exception:
+            except Exception as exc:
+                self._load_errors[model_name] = _exception_message(exc)
                 LOGGER.exception(
                     "Failed to load model '%s' from %s; skipping model.",
                     model_name,
                     model_settings.model_path,
                 )
-        if self.default_model not in self._models:
-            loaded_models = list(self._models.keys())
-            if not loaded_models:
-                raise ValueError("no enabled models could be loaded")
-            fallback_default = loaded_models[0]
-            LOGGER.warning(
-                "Default model '%s' could not be loaded; falling back to '%s'.",
-                self.default_model,
-                fallback_default,
-            )
-            self.default_model = fallback_default
+        if not self._models:
+            raise ValueError("no enabled models could be loaded")
 
     def complete(self, request: ResponseRequest) -> EngineResult:
         runtime = self._models.get(request.model)
@@ -374,31 +459,23 @@ class Ct2Engine:
 
 class ExLlamaV3Engine:
     def __init__(self, settings: AppSettings) -> None:
-        self.default_model = settings.engine.default_model
         self.decoding_defaults = settings.engine.decoding
         self._models: dict[str, ExLlamaV3ModelRuntime] = {}
+        self._load_errors: dict[str, str] = {}
         for model_name, model_settings in settings.engine.models.items():
             if not model_settings.enabled:
                 continue
             try:
                 self._models[model_name] = self._build_runtime(model_settings)
-            except Exception:
+            except Exception as exc:
+                self._load_errors[model_name] = _exception_message(exc)
                 LOGGER.exception(
                     "Failed to load model '%s' from %s; skipping model.",
                     model_name,
                     model_settings.model_path,
                 )
-        if self.default_model not in self._models:
-            loaded_models = list(self._models.keys())
-            if not loaded_models:
-                raise ValueError("no enabled models could be loaded")
-            fallback_default = loaded_models[0]
-            LOGGER.warning(
-                "Default model '%s' could not be loaded; falling back to '%s'.",
-                self.default_model,
-                fallback_default,
-            )
-            self.default_model = fallback_default
+        if not self._models:
+            raise ValueError("no enabled models could be loaded")
 
     def complete(self, request: ResponseRequest) -> EngineResult:
         runtime = self._models.get(request.model)
@@ -674,31 +751,23 @@ class ExLlamaV3Engine:
 
 class LlamaCppEngine:
     def __init__(self, settings: AppSettings) -> None:
-        self.default_model = settings.engine.default_model
         self.decoding_defaults = settings.engine.decoding
         self._models: dict[str, LlamaCppModelRuntime] = {}
+        self._load_errors: dict[str, str] = {}
         for model_name, model_settings in settings.engine.models.items():
             if not model_settings.enabled:
                 continue
             try:
                 self._models[model_name] = self._build_runtime(model_settings)
-            except Exception:
+            except Exception as exc:
+                self._load_errors[model_name] = _exception_message(exc)
                 LOGGER.exception(
                     "Failed to load model '%s' from %s; skipping model.",
                     model_name,
                     model_settings.model_path,
                 )
-        if self.default_model not in self._models:
-            loaded_models = list(self._models.keys())
-            if not loaded_models:
-                raise ValueError("no enabled models could be loaded")
-            fallback_default = loaded_models[0]
-            LOGGER.warning(
-                "Default model '%s' could not be loaded; falling back to '%s'.",
-                self.default_model,
-                fallback_default,
-            )
-            self.default_model = fallback_default
+        if not self._models:
+            raise ValueError("no enabled models could be loaded")
 
     def complete(self, request: ResponseRequest) -> EngineResult:
         runtime = self._models.get(request.model)
@@ -924,37 +993,42 @@ class LlamaCppEngine:
 
 class ModelRouterEngine:
     def __init__(self, settings: AppSettings) -> None:
-        self.default_model = settings.engine.default_model
+        self._configured_models = dict(settings.engine.models)
         self._models: dict[str, object] = {}
         self._model_engines: dict[str, object] = {}
+        self._model_states: dict[str, ModelRuntimeState] = {}
+        self._state_lock = threading.RLock()
+        self._state_changed = threading.Condition(self._state_lock)
+        if not self._configured_models:
+            raise ValueError("no configured models")
         grouped_models: dict[str, dict[str, ModelSettings]] = {}
         for model_name, model_settings in settings.engine.models.items():
+            backend = self._resolve_model_backend(settings.engine.backend, model_settings)
+            self._model_states[model_name] = ModelRuntimeState(
+                resolved_backend=backend,
+                configured_enabled=model_settings.enabled,
+            )
             if not model_settings.enabled:
                 continue
-            backend = self._resolve_model_backend(settings.engine.backend, model_settings)
             grouped_models.setdefault(backend, {})[model_name] = model_settings
 
-        if not grouped_models:
-            raise ValueError("no enabled models could be loaded")
-
         for backend, models in grouped_models.items():
-            scoped_default_model = (
-                settings.engine.default_model
-                if settings.engine.default_model in models
-                else next(iter(models.keys()))
-            )
             scoped_settings = replace(
                 settings,
                 engine=replace(
                     settings.engine,
                     backend=backend,
-                    default_model=scoped_default_model,
                     models=models,
                 ),
             )
             try:
                 backend_engine = self._build_backend_engine(backend, scoped_settings)
-            except Exception:
+            except Exception as exc:
+                message = _exception_message(exc)
+                for model_name in models:
+                    state = self._model_states[model_name]
+                    state.lifecycle = "failed"
+                    state.last_error = message
                 LOGGER.exception(
                     "Failed to initialize backend '%s'; skipping %d model(s).",
                     backend,
@@ -962,6 +1036,15 @@ class ModelRouterEngine:
                 )
                 continue
             loaded_models = getattr(backend_engine, "_models", {})
+            load_errors = getattr(backend_engine, "_load_errors", {})
+            for model_name in models:
+                state = self._model_states[model_name]
+                if model_name in loaded_models:
+                    state.lifecycle = "loaded"
+                    state.last_error = None
+                else:
+                    state.lifecycle = "failed"
+                    state.last_error = str(load_errors.get(model_name, "model failed to load"))
             if not loaded_models:
                 LOGGER.warning(
                     "Backend '%s' initialized without loaded models; skipping backend.",
@@ -972,23 +1055,183 @@ class ModelRouterEngine:
                 self._models[model_name] = runtime
                 self._model_engines[model_name] = backend_engine
 
-        if not self._model_engines:
-            raise ValueError("no enabled models could be loaded")
-
-        if self.default_model not in self._model_engines:
-            fallback_default = sorted(self._model_engines.keys())[0]
-            LOGGER.warning(
-                "Default model '%s' could not be loaded; falling back to '%s'.",
-                self.default_model,
-                fallback_default,
-            )
-            self.default_model = fallback_default
-
     def complete(self, request: ResponseRequest) -> EngineResult:
-        engine = self._model_engines.get(request.model)
-        if engine is None:
-            raise ValueError(f"unknown model: {request.model!r}")
-        return engine.complete(request)
+        with self._state_lock:
+            if request.model not in self._configured_models:
+                raise UnknownModelError(request.model)
+            state = self._model_states[request.model]
+            if state.lifecycle != "loaded":
+                raise ModelStateError(request.model, self._lifecycle_error_code(state.lifecycle))
+            engine = self._model_engines.get(request.model)
+            if engine is None:
+                raise ModelStateError(request.model, "model_not_loaded")
+            state.inflight_requests += 1
+        try:
+            return engine.complete(request)
+        finally:
+            with self._state_lock:
+                state = self._model_states.get(request.model)
+                if state is not None and state.inflight_requests > 0:
+                    state.inflight_requests -= 1
+                    self._state_changed.notify_all()
+
+    def admin_models_payload(self, settings: AppSettings | None = None) -> dict[str, object]:
+        del settings
+        with self._state_lock:
+            models: list[dict[str, object]] = []
+            for model_name, model_settings in self._configured_models.items():
+                models.append(self._admin_model_entry_locked(model_name, model_settings))
+            return {"models": models}
+
+    def load_model(self, model_name: str, settings: AppSettings | None = None) -> dict[str, object]:
+        if settings is None:
+            raise RuntimeError("settings are required to load a model")
+
+        with self._state_lock:
+            model_settings = self._configured_models.get(model_name)
+            if model_settings is None:
+                raise UnknownModelError(model_name)
+            state = self._model_states[model_name]
+            if state.lifecycle == "unloading":
+                raise ModelStateError(model_name, "model_unloading")
+            if state.lifecycle in {"loaded", "loading"}:
+                return self._admin_model_entry_locked(model_name, model_settings)
+            state.lifecycle = "loading"
+            state.last_error = None
+            resolved_backend = state.resolved_backend
+
+        scoped_settings = replace(
+            settings,
+            engine=replace(
+                settings.engine,
+                backend=resolved_backend,
+                models={model_name: model_settings},
+            ),
+        )
+
+        try:
+            backend_engine = self._build_backend_engine(resolved_backend, scoped_settings)
+        except Exception as exc:
+            message = _exception_message(exc)
+            with self._state_lock:
+                state = self._model_states[model_name]
+                state.lifecycle = "failed"
+                state.last_error = message
+            LOGGER.exception(
+                "Failed to load model '%s' from %s.",
+                model_name,
+                model_settings.model_path,
+            )
+            raise RuntimeError(message) from exc
+
+        loaded_models = getattr(backend_engine, "_models", {})
+        load_errors = getattr(backend_engine, "_load_errors", {})
+        runtime = loaded_models.get(model_name)
+        if runtime is None:
+            message = str(load_errors.get(model_name, "model failed to load"))
+            with self._state_lock:
+                state = self._model_states[model_name]
+                state.lifecycle = "failed"
+                state.last_error = message
+            raise RuntimeError(message)
+
+        with self._state_lock:
+            existing_engine = self._find_backend_engine_locked(resolved_backend)
+            target_engine = existing_engine or backend_engine
+            if existing_engine is not None:
+                existing_engine._models[model_name] = runtime
+                if hasattr(existing_engine, "_load_errors"):
+                    existing_engine._load_errors.pop(model_name, None)
+            self._models[model_name] = runtime
+            self._model_engines[model_name] = target_engine
+            state = self._model_states[model_name]
+            state.lifecycle = "loaded"
+            state.last_error = None
+            return self._admin_model_entry_locked(model_name, model_settings)
+
+    def unload_model(self, model_name: str, settings: AppSettings | None = None) -> dict[str, object]:
+        del settings
+        with self._state_lock:
+            model_settings = self._configured_models.get(model_name)
+            if model_settings is None:
+                raise UnknownModelError(model_name)
+            state = self._model_states[model_name]
+            if state.lifecycle == "loading":
+                raise ModelStateError(model_name, "model_loading")
+            if state.lifecycle in {"unloaded", "failed", "unloading"}:
+                return self._admin_model_entry_locked(model_name, model_settings)
+
+            state.lifecycle = "unloading"
+            while state.inflight_requests > 0:
+                self._state_changed.wait()
+
+            runtime = self._models.pop(model_name, None)
+            backend_engine = self._model_engines.pop(model_name, None)
+            if backend_engine is not None:
+                backend_engine._models.pop(model_name, None)
+                if hasattr(backend_engine, "_load_errors"):
+                    backend_engine._load_errors.pop(model_name, None)
+
+        self._cleanup_runtime(runtime)
+
+        with self._state_lock:
+            state = self._model_states[model_name]
+            state.lifecycle = "unloaded"
+            state.last_error = None
+            self._state_changed.notify_all()
+            return self._admin_model_entry_locked(model_name, model_settings)
+
+    def _admin_model_entry_locked(self, model_name: str, model_settings: ModelSettings) -> dict[str, object]:
+        state = self._model_states[model_name]
+        return {
+            "name": model_name,
+            "resolved_backend": state.resolved_backend,
+            "configured_enabled": state.configured_enabled,
+            "runtime_state": state.lifecycle,
+            "is_loaded": state.lifecycle == "loaded",
+            "inflight_requests": state.inflight_requests,
+            "last_error": state.last_error,
+            "definition": asdict(model_settings),
+        }
+
+    def _find_backend_engine_locked(self, backend: str):
+        for loaded_model_name, engine in self._model_engines.items():
+            state = self._model_states.get(loaded_model_name)
+            if state is not None and state.resolved_backend == backend:
+                return engine
+        return None
+
+    def _cleanup_runtime(self, runtime: object | None) -> None:
+        if runtime is None:
+            gc.collect()
+            return
+
+        generator = getattr(runtime, "generator", None)
+        clear_queue = getattr(generator, "clear_queue", None)
+        if callable(clear_queue):
+            try:
+                clear_queue()
+            except Exception:
+                LOGGER.warning("Failed to clear backend queue during runtime cleanup.", exc_info=True)
+
+        llm = getattr(runtime, "llm", None)
+        close = getattr(llm, "close", None)
+        if callable(close):
+            try:
+                close()
+            except Exception:
+                LOGGER.warning("Failed to close GGUF runtime during cleanup.", exc_info=True)
+
+        gc.collect()
+
+    def _lifecycle_error_code(self, lifecycle: str) -> str:
+        if lifecycle == "loading":
+            return "model_loading"
+        if lifecycle == "unloading":
+            return "model_unloading"
+        if lifecycle == "failed":
+            return "model_failed"
+        return "model_not_loaded"
 
     def _resolve_model_backend(self, default_backend: str, model_settings: ModelSettings) -> str:
         backend = model_settings.backend or default_backend
@@ -1009,18 +1252,5 @@ class ModelRouterEngine:
 
 def build_engine(settings: AppSettings):
     if settings.engine.backend == "stub":
-        return StubEngine()
-
-    has_model_backend_overrides = any(
-        model_settings.backend is not None
-        for model_settings in settings.engine.models.values()
-    )
-    if has_model_backend_overrides:
-        return ModelRouterEngine(settings)
-    if settings.engine.backend == "ct2":
-        return Ct2Engine(settings)
-    if settings.engine.backend == "exllamav3":
-        return ExLlamaV3Engine(settings)
-    if settings.engine.backend == "gguf":
-        return LlamaCppEngine(settings)
-    raise ValueError(f"unsupported engine backend: {settings.engine.backend!r}")
+        return StubEngine(settings)
+    return ModelRouterEngine(settings)

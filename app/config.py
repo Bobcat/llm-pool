@@ -55,7 +55,6 @@ class DecodingDefaults:
 @dataclass(frozen=True)
 class EngineSettings:
     backend: str = "stub"
-    default_model: str = "eurollm-9b-ct2-int8"
     models: dict[str, ModelSettings] = field(default_factory=dict)
     decoding: DecodingDefaults = field(default_factory=DecodingDefaults)
 
@@ -156,7 +155,6 @@ def load_settings(path: str | Path | None = None) -> AppSettings:
         ),
         engine=EngineSettings(
             backend=str(engine_payload.get("backend", "stub")),
-            default_model=str(engine_payload.get("default_model", "eurollm-9b-ct2-int8")),
             models=models,
             decoding=DecodingDefaults(
                 beam_size=int(decoding_payload.get("beam_size", 1)),

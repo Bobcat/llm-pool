@@ -7,10 +7,15 @@ from collections.abc import Iterator
 from pathlib import Path
 
 from fastapi import FastAPI
+from fastapi import HTTPException
 from fastapi.responses import StreamingResponse
 
 from app.config import load_settings
 from app.engine import build_engine
+from app.engine import ModelStateError
+from app.engine import UnknownModelError
+from app.schemas import AdminModelEntry
+from app.schemas import AdminModelsEnvelope
 from app.schemas import OutputText
 from app.schemas import ResponseEnvelope
 from app.schemas import ResponseMetrics
@@ -80,22 +85,93 @@ def create_app(settings_path: str | Path | None = None) -> FastAPI:
     @app.get("/v1/models")
     def list_models() -> dict[str, object]:
         loaded_models = sorted(getattr(engine, "_models", {}).keys())
-        if not loaded_models:
-            loaded_models = [
-                model_name
-                for model_name, model_settings in settings.engine.models.items()
-                if model_settings.enabled
-            ]
-        default_model = getattr(engine, "default_model", settings.engine.default_model)
-        return {
-            "default_model": default_model,
-            "models": loaded_models,
-        }
+        return {"models": loaded_models}
+
+    @app.get(
+        "/v1/admin/models",
+        response_model=AdminModelsEnvelope,
+        tags=["admin"],
+        summary="List configured models and runtime state",
+        description=(
+            "Returns all models from the merged settings plus their current in-process "
+            "runtime state. This is the primary read-only admin endpoint for a future UI."
+        ),
+    )
+    def list_admin_models() -> dict[str, object]:
+        return engine.admin_models_payload(settings)
+
+    @app.post(
+        "/v1/admin/models/{model_name}/load",
+        response_model=AdminModelEntry,
+        tags=["admin"],
+        summary="Load one configured model",
+        description=(
+            "Loads one model that already exists in the merged settings. "
+            "This operation is live-only and does not modify settings files."
+        ),
+    )
+    def load_model(model_name: str) -> dict[str, object]:
+        try:
+            return engine.load_model(model_name, settings)
+        except UnknownModelError as exc:
+            raise HTTPException(
+                status_code=404,
+                detail={"code": "unknown_model", "model": model_name},
+            ) from exc
+        except ModelStateError as exc:
+            raise HTTPException(
+                status_code=409,
+                detail={"code": exc.code, "model": model_name},
+            ) from exc
+        except RuntimeError as exc:
+            raise HTTPException(
+                status_code=500,
+                detail={
+                    "code": "model_load_failed",
+                    "model": model_name,
+                    "message": str(exc),
+                },
+            ) from exc
+
+    @app.post(
+        "/v1/admin/models/{model_name}/unload",
+        response_model=AdminModelEntry,
+        tags=["admin"],
+        summary="Unload one loaded model",
+        description=(
+            "Gracefully unloads one model at runtime. New requests are rejected once unloading "
+            "starts, and in-flight requests are allowed to finish before resources are released."
+        ),
+    )
+    def unload_model(model_name: str) -> dict[str, object]:
+        try:
+            return engine.unload_model(model_name, settings)
+        except UnknownModelError as exc:
+            raise HTTPException(
+                status_code=404,
+                detail={"code": "unknown_model", "model": model_name},
+            ) from exc
+        except ModelStateError as exc:
+            raise HTTPException(
+                status_code=409,
+                detail={"code": exc.code, "model": model_name},
+            ) from exc
 
     @app.post("/v1/responses")
     def create_response(request: ResponseRequest):
         response_id = f"resp_{uuid.uuid4().hex}"
-        result = engine.complete(request)
+        try:
+            result = engine.complete(request)
+        except UnknownModelError as exc:
+            raise HTTPException(
+                status_code=404,
+                detail={"code": "unknown_model", "model": request.model},
+            ) from exc
+        except ModelStateError as exc:
+            raise HTTPException(
+                status_code=409,
+                detail={"code": exc.code, "model": request.model},
+            ) from exc
         _log_inference(response_id, request, result.metrics)
         if request.stream:
             return StreamingResponse(

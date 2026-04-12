@@ -18,7 +18,6 @@ class ConfigTests(unittest.TestCase):
                     '  "service": {"host": "0.0.0.0", "port": 9999, "log_level": "debug"},\n'
                     '  "engine": {\n'
                     '    "backend": "ct2",\n'
-                    '    "default_model": "test-model",\n'
                     '    "decoding": {\n'
                     '      "beam_size": 2,\n'
                     '      "top_k": 3,\n'
@@ -49,7 +48,6 @@ class ConfigTests(unittest.TestCase):
         self.assertEqual(settings.service.host, "0.0.0.0")
         self.assertEqual(settings.service.port, 9999)
         self.assertEqual(settings.engine.backend, "ct2")
-        self.assertEqual(settings.engine.default_model, "test-model")
         self.assertEqual(settings.engine.models["test-model"].model_path, "/models/test")
         self.assertEqual(settings.engine.models["test-model"].device, "cpu")
         self.assertEqual(settings.engine.models["test-model"].compute_type, "float32")
@@ -74,7 +72,6 @@ class ConfigTests(unittest.TestCase):
                     '  "service": {"host": "127.0.0.1", "port": 8011, "log_level": "info"},\n'
                     '  "engine": {\n'
                     '    "backend": "ct2",\n'
-                    '    "default_model": "eurollm-9b-ct2-int8",\n'
                     '    "decoding": {\n'
                     '      "beam_size": 1,\n'
                     '      "top_k": 1,\n'
@@ -103,7 +100,6 @@ class ConfigTests(unittest.TestCase):
                     "{\n"
                     '  "service": {"port": 18011},\n'
                     '  "engine": {\n'
-                    '    "default_model": "new-model",\n'
                     '    "decoding": {\n'
                     '      "top_k": 7,\n'
                     '      "temperature": 0.4,\n'
@@ -137,7 +133,6 @@ class ConfigTests(unittest.TestCase):
 
         self.assertEqual(settings.service.host, "127.0.0.1")
         self.assertEqual(settings.service.port, 18011)
-        self.assertEqual(settings.engine.default_model, "new-model")
         self.assertIn("eurollm-9b-ct2-int8", settings.engine.models)
         self.assertIn("new-model", settings.engine.models)
         self.assertEqual(settings.engine.models["new-model"].prompt_format, "qwen3_template")
@@ -158,7 +153,6 @@ class ConfigTests(unittest.TestCase):
                     "{\n"
                     '  "engine": {\n'
                     '    "backend": "ct2",\n'
-                    '    "default_model": "test-model",\n'
                     '    "models": {\n'
                     '      "test-model": {\n'
                     '        "model_path": "/models/test"\n'
@@ -182,7 +176,6 @@ class ConfigTests(unittest.TestCase):
                     "{\n"
                     '  "engine": {\n'
                     '    "backend": "ct2",\n'
-                    '    "default_model": "mixtral-exl3",\n'
                     '    "models": {\n'
                     '      "mixtral-exl3": {\n'
                     '        "model_path": "/models/mixtral-exl3",\n'
@@ -226,7 +219,6 @@ class ConfigTests(unittest.TestCase):
                     "{\n"
                     '  "engine": {\n'
                     '    "backend": "gguf",\n'
-                    '    "default_model": "test-gguf",\n'
                     '    "models": {\n'
                     '      "test-gguf": {\n'
                     '        "model_path": "/models/test.gguf",\n'

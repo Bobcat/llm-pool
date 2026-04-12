@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from dataclasses import field
+from typing import Any
 from typing import Literal
 
 from pydantic import BaseModel
@@ -48,6 +49,21 @@ class ResponseEnvelope(BaseModel):
     output: list[OutputText]
     output_text: str
     metrics: ResponseMetrics = Field(default_factory=ResponseMetrics)
+
+
+class AdminModelEntry(BaseModel):
+    name: str
+    resolved_backend: str
+    configured_enabled: bool
+    runtime_state: Literal["unloaded", "loading", "loaded", "unloading", "failed"]
+    is_loaded: bool
+    inflight_requests: int = Field(default=0, ge=0)
+    last_error: str | None = None
+    definition: dict[str, Any] = Field(default_factory=dict)
+
+
+class AdminModelsEnvelope(BaseModel):
+    models: list[AdminModelEntry] = Field(default_factory=list)
 
 
 @dataclass(frozen=True)

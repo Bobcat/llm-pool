@@ -21,7 +21,7 @@ Current scope:
 
 `GET /v1/models`
 
-- returns the current `default_model` and the enabled loaded models.
+- returns the currently loaded models.
 
 Example request:
 
@@ -97,7 +97,7 @@ Currently supported decoding fields:
 You can keep shared defaults in `config/settings.json` and put machine-local overrides in `config/local.json`.
 When present, `local.json` is merged over `settings.json` (override wins per key).
 
-Settings files can also define `service.host`, `service.port`, `service.log_level`, `engine.default_model`, and global `engine.decoding` defaults.
+Settings files can also define `service.host`, `service.port`, `service.log_level`, and global `engine.decoding` defaults.
 
 Per model, you can set `model_path`, `device`, `compute_type`, `prompt_format`, `enable_thinking`, `enabled`, and optionally override the backend:
 

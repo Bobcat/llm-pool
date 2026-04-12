@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import importlib.util
 import threading
+import time
 import unittest
 from unittest import mock
 
@@ -17,6 +18,7 @@ if HAS_PYDANTIC:
     from app.engine import Ct2ModelRuntime
     from app.engine import Ct2Engine
     from app.engine import ModelRouterEngine
+    from app.engine import build_engine
     from app.schemas import DecodingParams
     from app.schemas import EngineResult
     from app.schemas import ResponseRequest
@@ -180,7 +182,6 @@ class EngineTests(unittest.TestCase):
             tokenizer=FakeQwenCompleteTokenizer(),
         )
         engine = Ct2Engine.__new__(Ct2Engine)
-        engine.default_model = "qwen3"
         engine.decoding_defaults = DecodingDefaults(
             beam_size=1,
             top_k=1,
@@ -234,7 +235,6 @@ class EngineTests(unittest.TestCase):
             service=ServiceSettings(),
             engine=EngineSettings(
                 backend="ct2",
-                default_model="enabled-model",
                 models={
                     "enabled-model": ModelSettings(model_path="/models/enabled", enabled=True),
                     "disabled-model": ModelSettings(model_path="/models/disabled", enabled=False),
@@ -242,7 +242,6 @@ class EngineTests(unittest.TestCase):
             ),
         )
         engine = Ct2Engine.__new__(Ct2Engine)
-        engine.default_model = settings.engine.default_model
         engine.decoding_defaults = settings.engine.decoding
         engine._models = {}
         seen: list[str] = []
@@ -329,7 +328,6 @@ class EngineTests(unittest.TestCase):
             tokenizer=FakeTokenizer(),
         )
         engine = Ct2Engine.__new__(Ct2Engine)
-        engine.default_model = "generic"
         engine.decoding_defaults = DecodingDefaults(
             beam_size=1,
             top_k=1,
@@ -351,7 +349,6 @@ class EngineTests(unittest.TestCase):
             service=ServiceSettings(),
             engine=EngineSettings(
                 backend="ct2",
-                default_model="ct2-model",
                 models={
                     "ct2-model": ModelSettings(model_path="/models/ct2"),
                     "exl-model": ModelSettings(model_path="/models/exl3", backend="exllamav3"),
@@ -384,7 +381,6 @@ class EngineTests(unittest.TestCase):
         self.assertEqual(ct2_result.text, "ct2:ct2-model")
         self.assertEqual(exl_result.text, "exl3:exl-model")
         self.assertEqual(sorted(engine._models.keys()), ["ct2-model", "exl-model"])
-        self.assertEqual(engine.default_model, "ct2-model")
 
     def test_exllamav3_render_prompt_ids_mistral_template_uses_user_turn(self) -> None:
         class FakeTokenizer:
@@ -594,7 +590,6 @@ class EngineTests(unittest.TestCase):
             llm=FakeLlama(),
         )
         engine = engine_module.LlamaCppEngine.__new__(engine_module.LlamaCppEngine)
-        engine.default_model = "test-gguf"
         engine.decoding_defaults = DecodingDefaults(
             beam_size=1,
             top_k=40,
@@ -637,7 +632,6 @@ class EngineTests(unittest.TestCase):
             llm=FakeLlama(),
         )
         engine = engine_module.LlamaCppEngine.__new__(engine_module.LlamaCppEngine)
-        engine.default_model = "m"
         engine.decoding_defaults = DecodingDefaults(max_tokens=100)
         engine._models = {"m": runtime}
 
@@ -665,7 +659,6 @@ class EngineTests(unittest.TestCase):
             llm=FakeLlama(),
         )
         engine = engine_module.LlamaCppEngine.__new__(engine_module.LlamaCppEngine)
-        engine.default_model = "m"
         engine.decoding_defaults = DecodingDefaults(max_tokens=5)
         engine._models = {"m": runtime}
 
@@ -698,7 +691,6 @@ class EngineTests(unittest.TestCase):
             llm=FakeLlama(),
         )
         engine = engine_module.LlamaCppEngine.__new__(engine_module.LlamaCppEngine)
-        engine.default_model = "m"
         engine.decoding_defaults = DecodingDefaults(stop=["</stop>"])
         engine._models = {"m": runtime}
 
@@ -726,7 +718,6 @@ class EngineTests(unittest.TestCase):
             llm=FakeLlama(),
         )
         engine = engine_module.LlamaCppEngine.__new__(engine_module.LlamaCppEngine)
-        engine.default_model = "gguf-model"
         engine.decoding_defaults = DecodingDefaults()
         engine._models = {"gguf-model": runtime}
         request = ResponseRequest(
@@ -761,7 +752,6 @@ class EngineTests(unittest.TestCase):
             llm=FakeLlama(),
         )
         engine = engine_module.LlamaCppEngine.__new__(engine_module.LlamaCppEngine)
-        engine.default_model = "gemma4-gguf"
         engine.decoding_defaults = DecodingDefaults(
             top_k=12,
             top_p=0.8,
@@ -800,7 +790,6 @@ class EngineTests(unittest.TestCase):
             service=ServiceSettings(),
             engine=EngineSettings(
                 backend="ct2",
-                default_model="ct2-model",
                 models={
                     "ct2-model": ModelSettings(model_path="/models/ct2"),
                     "gguf-model": ModelSettings(
@@ -833,6 +822,333 @@ class EngineTests(unittest.TestCase):
             gguf_result = engine.complete(ResponseRequest(model="gguf-model", input="hello"))
 
         self.assertEqual(gguf_result.text, "gguf:gguf-model")
+
+    def test_build_engine_uses_model_router_for_non_stub_backends(self) -> None:
+        settings = AppSettings(
+            service=ServiceSettings(),
+            engine=EngineSettings(
+                backend="ct2",
+                models={
+                    "ct2-model": ModelSettings(model_path="/models/ct2"),
+                },
+            ),
+        )
+
+        with mock.patch.object(engine_module.ModelRouterEngine, "__init__", return_value=None) as router_init:
+            engine = build_engine(settings)
+
+        self.assertIsInstance(engine, ModelRouterEngine)
+        router_init.assert_called_once_with(settings)
+
+    def test_model_router_admin_models_payload_reports_loaded_failed_and_unloaded(self) -> None:
+        settings = AppSettings(
+            service=ServiceSettings(),
+            engine=EngineSettings(
+                backend="ct2",
+                models={
+                    "ct2-model": ModelSettings(model_path="/models/ct2"),
+                    "broken-model": ModelSettings(model_path="/models/broken"),
+                    "disabled-model": ModelSettings(model_path="/models/disabled", enabled=False),
+                },
+            ),
+        )
+
+        class FakeCt2Engine:
+            def __init__(self, scoped_settings):
+                self._models = {"ct2-model": object()}
+                self._load_errors = {"broken-model": "boom"}
+
+            def complete(self, request: ResponseRequest) -> EngineResult:
+                return EngineResult(text=f"ct2:{request.model}")
+
+        with mock.patch.object(engine_module, "Ct2Engine", FakeCt2Engine):
+            engine = ModelRouterEngine(settings)
+
+        payload = engine.admin_models_payload()
+
+        self.assertEqual(len(payload["models"]), 3)
+
+        loaded_model = payload["models"][0]
+        self.assertEqual(loaded_model["name"], "ct2-model")
+        self.assertEqual(loaded_model["runtime_state"], "loaded")
+        self.assertTrue(loaded_model["is_loaded"])
+        self.assertIsNone(loaded_model["last_error"])
+
+        failed_model = payload["models"][1]
+        self.assertEqual(failed_model["name"], "broken-model")
+        self.assertEqual(failed_model["runtime_state"], "failed")
+        self.assertFalse(failed_model["is_loaded"])
+        self.assertEqual(failed_model["last_error"], "boom")
+
+        unloaded_model = payload["models"][2]
+        self.assertEqual(unloaded_model["name"], "disabled-model")
+        self.assertEqual(unloaded_model["runtime_state"], "unloaded")
+        self.assertFalse(unloaded_model["is_loaded"])
+        self.assertIsNone(unloaded_model["last_error"])
+
+    def test_model_router_tracks_inflight_requests_around_complete(self) -> None:
+        settings = AppSettings(
+            service=ServiceSettings(),
+            engine=EngineSettings(
+                backend="ct2",
+                models={
+                    "ct2-model": ModelSettings(model_path="/models/ct2"),
+                },
+            ),
+        )
+        gate = threading.Event()
+        entered = threading.Event()
+
+        class FakeCt2Engine:
+            def __init__(self, scoped_settings):
+                self._models = {"ct2-model": object()}
+                self._load_errors = {}
+
+            def complete(self, request: ResponseRequest) -> EngineResult:
+                entered.set()
+                gate.wait(timeout=1.0)
+                return EngineResult(text=f"ct2:{request.model}")
+
+        with mock.patch.object(engine_module, "Ct2Engine", FakeCt2Engine):
+            engine = ModelRouterEngine(settings)
+
+        result_holder: dict[str, EngineResult] = {}
+
+        def run_complete() -> None:
+            result_holder["result"] = engine.complete(ResponseRequest(model="ct2-model", input="hello"))
+
+        thread = threading.Thread(target=run_complete)
+        thread.start()
+        entered.wait(timeout=1.0)
+
+        payload = engine.admin_models_payload()
+        self.assertEqual(payload["models"][0]["inflight_requests"], 1)
+
+        gate.set()
+        thread.join(timeout=1.0)
+
+        self.assertEqual(result_holder["result"].text, "ct2:ct2-model")
+        payload = engine.admin_models_payload()
+        self.assertEqual(payload["models"][0]["inflight_requests"], 0)
+
+    def test_model_router_load_model_can_load_disabled_model(self) -> None:
+        settings = AppSettings(
+            service=ServiceSettings(),
+            engine=EngineSettings(
+                backend="ct2",
+                models={
+                    "enabled-model": ModelSettings(model_path="/models/enabled"),
+                    "disabled-model": ModelSettings(model_path="/models/disabled", enabled=False),
+                },
+            ),
+        )
+
+        class FakeCt2Engine:
+            def __init__(self, scoped_settings):
+                self._models = {name: object() for name in scoped_settings.engine.models}
+                self._load_errors = {}
+
+            def complete(self, request: ResponseRequest) -> EngineResult:
+                return EngineResult(text=f"ct2:{request.model}")
+
+        with mock.patch.object(engine_module, "Ct2Engine", FakeCt2Engine):
+            engine = ModelRouterEngine(settings)
+            entry = engine.load_model("disabled-model", settings)
+
+        self.assertEqual(entry["name"], "disabled-model")
+        self.assertEqual(entry["runtime_state"], "loaded")
+        self.assertTrue(entry["is_loaded"])
+        self.assertIn("disabled-model", engine._models)
+        self.assertEqual(engine.admin_models_payload()["models"][1]["runtime_state"], "loaded")
+
+    def test_model_router_load_model_is_idempotent_for_loaded_model(self) -> None:
+        settings = AppSettings(
+            service=ServiceSettings(),
+            engine=EngineSettings(
+                backend="ct2",
+                models={
+                    "enabled-model": ModelSettings(model_path="/models/enabled"),
+                },
+            ),
+        )
+
+        class FakeCt2Engine:
+            def __init__(self, scoped_settings):
+                self._models = {name: object() for name in scoped_settings.engine.models}
+                self._load_errors = {}
+
+            def complete(self, request: ResponseRequest) -> EngineResult:
+                return EngineResult(text=f"ct2:{request.model}")
+
+        with mock.patch.object(engine_module, "Ct2Engine", FakeCt2Engine):
+            engine = ModelRouterEngine(settings)
+            with mock.patch.object(engine, "_build_backend_engine") as build_backend_engine:
+                entry = engine.load_model("enabled-model", settings)
+
+        self.assertEqual(entry["runtime_state"], "loaded")
+        build_backend_engine.assert_not_called()
+
+    def test_model_router_load_model_rejects_model_that_is_unloading(self) -> None:
+        settings = AppSettings(
+            service=ServiceSettings(),
+            engine=EngineSettings(
+                backend="ct2",
+                models={
+                    "enabled-model": ModelSettings(model_path="/models/enabled"),
+                    "other-model": ModelSettings(model_path="/models/other", enabled=False),
+                },
+            ),
+        )
+
+        class FakeCt2Engine:
+            def __init__(self, scoped_settings):
+                self._models = {name: object() for name in scoped_settings.engine.models}
+                self._load_errors = {}
+
+            def complete(self, request: ResponseRequest) -> EngineResult:
+                return EngineResult(text=f"ct2:{request.model}")
+
+        with mock.patch.object(engine_module, "Ct2Engine", FakeCt2Engine):
+            engine = ModelRouterEngine(settings)
+
+        engine._model_states["other-model"].lifecycle = "unloading"
+
+        with self.assertRaises(engine_module.ModelStateError) as exc_info:
+            engine.load_model("other-model", settings)
+
+        self.assertEqual(exc_info.exception.code, "model_unloading")
+
+    def test_model_router_load_model_marks_failure_and_retains_error(self) -> None:
+        settings = AppSettings(
+            service=ServiceSettings(),
+            engine=EngineSettings(
+                backend="ct2",
+                models={
+                    "enabled-model": ModelSettings(model_path="/models/enabled"),
+                    "broken-model": ModelSettings(model_path="/models/broken", enabled=False),
+                },
+            ),
+        )
+
+        class FakeCt2Engine:
+            def __init__(self, scoped_settings):
+                if "broken-model" in scoped_settings.engine.models:
+                    self._models = {}
+                    self._load_errors = {"broken-model": "boom"}
+                else:
+                    self._models = {name: object() for name in scoped_settings.engine.models}
+                    self._load_errors = {}
+
+            def complete(self, request: ResponseRequest) -> EngineResult:
+                return EngineResult(text=f"ct2:{request.model}")
+
+        with mock.patch.object(engine_module, "Ct2Engine", FakeCt2Engine):
+            engine = ModelRouterEngine(settings)
+            with self.assertRaises(RuntimeError) as exc_info:
+                engine.load_model("broken-model", settings)
+
+        self.assertEqual(str(exc_info.exception), "boom")
+        payload = engine.admin_models_payload()
+        broken_model = payload["models"][1]
+        self.assertEqual(broken_model["name"], "broken-model")
+        self.assertEqual(broken_model["runtime_state"], "failed")
+        self.assertEqual(broken_model["last_error"], "boom")
+
+    def test_model_router_unload_model_removes_loaded_model_and_cleans_up(self) -> None:
+        settings = AppSettings(
+            service=ServiceSettings(),
+            engine=EngineSettings(
+                backend="ct2",
+                models={
+                    "loaded-model": ModelSettings(model_path="/models/loaded"),
+                    "other-model": ModelSettings(model_path="/models/other"),
+                },
+            ),
+        )
+
+        class FakeCt2Engine:
+            def __init__(self, scoped_settings):
+                self._models = {name: object() for name in scoped_settings.engine.models}
+                self._load_errors = {}
+
+            def complete(self, request: ResponseRequest) -> EngineResult:
+                return EngineResult(text=f"ct2:{request.model}")
+
+        with mock.patch.object(engine_module, "Ct2Engine", FakeCt2Engine):
+            engine = ModelRouterEngine(settings)
+            with mock.patch.object(engine, "_cleanup_runtime") as cleanup_runtime:
+                entry = engine.unload_model("other-model", settings)
+
+        self.assertEqual(entry["name"], "other-model")
+        self.assertEqual(entry["runtime_state"], "unloaded")
+        self.assertFalse(entry["is_loaded"])
+        self.assertNotIn("other-model", engine._models)
+        cleanup_runtime.assert_called_once()
+
+    def test_model_router_unload_model_waits_for_inflight_and_blocks_new_requests(self) -> None:
+        settings = AppSettings(
+            service=ServiceSettings(),
+            engine=EngineSettings(
+                backend="ct2",
+                models={
+                    "loaded-model": ModelSettings(model_path="/models/loaded"),
+                    "other-model": ModelSettings(model_path="/models/other"),
+                },
+            ),
+        )
+        gate = threading.Event()
+        entered = threading.Event()
+
+        class FakeCt2Engine:
+            def __init__(self, scoped_settings):
+                self._models = {name: object() for name in scoped_settings.engine.models}
+                self._load_errors = {}
+
+            def complete(self, request: ResponseRequest) -> EngineResult:
+                if request.model == "other-model":
+                    entered.set()
+                    gate.wait(timeout=1.0)
+                return EngineResult(text=f"ct2:{request.model}")
+
+        with mock.patch.object(engine_module, "Ct2Engine", FakeCt2Engine):
+            engine = ModelRouterEngine(settings)
+
+        result_holder: dict[str, EngineResult] = {}
+        unload_holder: dict[str, dict[str, object]] = {}
+
+        def run_complete() -> None:
+            result_holder["result"] = engine.complete(ResponseRequest(model="other-model", input="hello"))
+
+        def run_unload() -> None:
+            unload_holder["entry"] = engine.unload_model("other-model", settings)
+
+        request_thread = threading.Thread(target=run_complete)
+        request_thread.start()
+        entered.wait(timeout=1.0)
+
+        unload_thread = threading.Thread(target=run_unload)
+        unload_thread.start()
+
+        for _ in range(50):
+            payload = engine.admin_models_payload()
+            other_model = payload["models"][1]
+            if other_model["runtime_state"] == "unloading":
+                break
+            time.sleep(0.01)
+        else:
+            self.fail("model never entered unloading state")
+
+        with self.assertRaises(engine_module.ModelStateError) as exc_info:
+            engine.complete(ResponseRequest(model="other-model", input="hello again"))
+        self.assertEqual(exc_info.exception.code, "model_unloading")
+
+        gate.set()
+        request_thread.join(timeout=1.0)
+        unload_thread.join(timeout=1.0)
+
+        self.assertEqual(result_holder["result"].text, "ct2:other-model")
+        self.assertEqual(unload_holder["entry"]["runtime_state"], "unloaded")
+        self.assertNotIn("other-model", engine._models)
 
 if __name__ == "__main__":
     unittest.main()

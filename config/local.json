@@ -1,6 +1,5 @@
 {
     "engine": {
-        "default_model": "eurollm-22b-instruct-2512-ct2-int8f16",
         "models": {
             "eurollm-9b-ct2-int8": {
                 "model_path": "/home/gunnar/models/EuroLLM-9B-Instruct-ct2-int8",
@@ -43,6 +42,39 @@
                 "gguf_flash_attn": false,
                 "enabled": true
             },
+            "google_gemma-4-31B-it-gguf": {
+                "model_path": "/home/gunnar/models/gemma-4-31B-it-Q6_K_L/google_gemma-4-31B-it-Q6_K_L.gguf",
+                "backend": "gguf",
+                "device": "cuda",
+                "prompt_format": "gemma4_template",
+                "enable_thinking": false,
+                "gguf_flash_attn": false,
+                "enabled": true
+            },
+            "eurollm-22b-instruct-2512-gguf": {
+                "model_path": "/home/gunnar/models/EuroLLM-22B-Instruct-2512-Q6_K/utter-project_EuroLLM-22B-Instruct-2512-Q6_K.gguf",
+                "backend": "gguf",
+                "device": "cuda",
+                "prompt_format": "generic",
+                "enable_thinking": false,
+                "enabled": false
+            },
+            "ministral-3-3b-instruct-2512-gguf": {
+                "model_path": "/home/gunnar/models/Ministral-3-3B-Instruct-2512-Q8_0/Ministral-3-3B-Instruct-2512-Q8_0.gguf",
+                "backend": "gguf",
+                "device": "cuda",
+                "prompt_format": "mistral_template",
+                "enable_thinking": false,
+                "enabled": false
+            },
+            "mistral-small-3.2-24b-instruct-2506-gguf": {
+                "model_path": "/home/gunnar/models/Mistral-Small-3.2-24B-Instruct-2506-Q6_K_L/mistralai_Mistral-Small-3.2-24B-Instruct-2506-Q6_K_L.gguf",
+                "backend": "gguf",
+                "device": "cuda",
+                "prompt_format": "mistral_template",
+                "enable_thinking": false,
+                "enabled": false
+            },
             "eurollm-22b-instruct-2512-ct2-fp16": {
                 "model_path": "/home/gunnar/models/EuroLLM-22B-Instruct-2512-ct2-fp16",
                 "device": "cuda",
@@ -55,13 +87,6 @@
                 "device": "cuda",
                 "compute_type": "default",
                 "prompt_format": "generic",
-                "enabled": true
-            },
-            "mistral-small-instruct-2409-ct2-awq": {
-                "model_path": "/home/gunnar/models/Mistral-Small-Instruct-2409-ct2-AWQ",
-                "device": "cuda",
-                "compute_type": "default",
-                "prompt_format": "generic",
                 "enabled": false
             },
             "mistral-7b-instruct-v0.3-ct2-int8": {
@@ -71,49 +96,18 @@
                 "prompt_format": "mistral_template",
                 "enabled": false
             },
-            "phi-4-ct2-awq": {
-                "model_path": "/home/gunnar/models/Phi-4-ct2-AWQ",
-                "device": "cuda",
-                "compute_type": "default",
-                "prompt_format": "generic",
-                "enabled": false
-            },
             "phi-4-ct2-int8": {
                 "model_path": "/home/gunnar/models/Phi-4-ct2-int8",
                 "device": "cuda",
                 "compute_type": "default",
                 "prompt_format": "generic",
-                "enabled": true
+                "enabled": false
             },
             "qwen2.5-14b-instruct-ct2-int8": {
                 "model_path": "/home/gunnar/models/Qwen2.5-14B-Instruct-ct2-int8",
                 "device": "cuda",
                 "compute_type": "default",
                 "prompt_format": "generic",
-                "enabled": false
-            },
-            "qwen3-8b-ct2-awq": {
-                "model_path": "/home/gunnar/models/Qwen3-8B-ct2-AWQ",
-                "device": "cuda",
-                "compute_type": "default",
-                "prompt_format": "qwen3_template",
-                "enable_thinking": false,
-                "enabled": false
-            },
-            "qwen3-14b-ct2-awq": {
-                "model_path": "/home/gunnar/models/Qwen3-14B-ct2-AWQ",
-                "device": "cuda",
-                "compute_type": "default",
-                "prompt_format": "qwen3_template",
-                "enable_thinking": false,
-                "enabled": false
-            },
-            "qwen3-32b-ct2-awq": {
-                "model_path": "/home/gunnar/models/Qwen3-32B-ct2-AWQ",
-                "device": "cuda",
-                "compute_type": "default",
-                "prompt_format": "qwen3_template",
-                "enable_thinking": false,
                 "enabled": false
             }
         }
