@@ -36,6 +36,9 @@ class ModelSettings:
     exllama_max_chunk_size: int = 2048
     exllama_max_q_size: int = 8
     exllama_max_rq_tokens: int | None = None
+    gguf_n_gpu_layers: int = -1
+    gguf_n_ctx: int = 4096
+    gguf_flash_attn: bool = True
 
 
 @dataclass(frozen=True)
@@ -140,6 +143,9 @@ def load_settings(path: str | Path | None = None) -> AppSettings:
             exllama_max_chunk_size=int(model_payload.get("exllama_max_chunk_size", 2048)),
             exllama_max_q_size=int(model_payload.get("exllama_max_q_size", 8)),
             exllama_max_rq_tokens=max_rq_tokens,
+            gguf_n_gpu_layers=int(model_payload.get("gguf_n_gpu_layers", -1)),
+            gguf_n_ctx=int(model_payload.get("gguf_n_ctx", 4096)),
+            gguf_flash_attn=bool(model_payload.get("gguf_flash_attn", True)),
         )
 
     return AppSettings(

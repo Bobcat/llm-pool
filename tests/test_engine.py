@@ -543,5 +543,296 @@ class EngineTests(unittest.TestCase):
         self.assertEqual(info_log.call_args[0][2], "exl-model")
         self.assertIn("<turn|>", runtime.generator._job.kwargs["stop_conditions"])
 
+    def test_llamacpp_render_prompt_qwen3_without_thinking(self) -> None:
+        engine = engine_module.LlamaCppEngine.__new__(engine_module.LlamaCppEngine)
+
+        result = engine._render_prompt(
+            prompt_format="qwen3_template",
+            system_prompt="System prompt",
+            user_text="Hello",
+            enable_thinking=False,
+        )
+
+        self.assertEqual(
+            result,
+            "<|im_start|>system\n"
+            "System prompt<|im_end|>\n"
+            "<|im_start|>user\n"
+            "/no_think\n"
+            "Hello<|im_end|>\n"
+            "<|im_start|>assistant\n"
+            "<think>\n\n</think>\n\n",
+        )
+
+    def test_llamacpp_complete_basic_flow(self) -> None:
+        class FakeLlama:
+            def tokenize(self, text, *, add_bos, special):
+                self.tokenize_text = text
+                self.tokenize_kwargs = {"add_bos": add_bos, "special": special}
+                return [1, 2, 3, 4, 5]
+
+            def generate(self, tokens, **kwargs):
+                self.generate_tokens = tokens
+                self.generate_kwargs = kwargs
+                yield 100
+                yield 200
+
+            def detokenize(self, tokens):
+                if tokens == [100]:
+                    return b"hello"
+                return b"hello world"
+
+            def token_eos(self):
+                return 999
+
+        runtime = engine_module.LlamaCppModelRuntime(
+            config=ModelSettings(
+                model_path="/models/test.gguf",
+                backend="gguf",
+                prompt_format="generic",
+            ),
+            llm=FakeLlama(),
+        )
+        engine = engine_module.LlamaCppEngine.__new__(engine_module.LlamaCppEngine)
+        engine.default_model = "test-gguf"
+        engine.decoding_defaults = DecodingDefaults(
+            beam_size=1,
+            top_k=40,
+            top_p=0.9,
+            temperature=0.7,
+            repetition_penalty=1.1,
+            max_tokens=32,
+            stop=[],
+        )
+        engine._models = {"test-gguf": runtime}
+
+        result = engine.complete(ResponseRequest(model="test-gguf", input="Hi"))
+
+        self.assertEqual(result.text, "hello world")
+        self.assertEqual(result.metrics.engine_prompt_tokens, 5)
+        self.assertEqual(result.metrics.engine_output_tokens, 2)
+        self.assertGreaterEqual(result.metrics.gpu_generate_total_ms, 0.0)
+        self.assertIsNotNone(result.metrics.engine_tokens_per_second)
+        self.assertEqual(runtime.llm.generate_tokens, [1, 2, 3, 4, 5])
+        self.assertEqual(runtime.llm.tokenize_kwargs, {"add_bos": False, "special": True})
+
+    def test_llamacpp_complete_stops_on_eos(self) -> None:
+        class FakeLlama:
+            def tokenize(self, text, *, add_bos, special):
+                return [1, 2]
+
+            def generate(self, tokens, **kwargs):
+                yield 10
+                yield 999
+                yield 20
+
+            def detokenize(self, tokens):
+                return b"stopped"
+
+            def token_eos(self):
+                return 999
+
+        runtime = engine_module.LlamaCppModelRuntime(
+            config=ModelSettings(model_path="/models/t.gguf", backend="gguf"),
+            llm=FakeLlama(),
+        )
+        engine = engine_module.LlamaCppEngine.__new__(engine_module.LlamaCppEngine)
+        engine.default_model = "m"
+        engine.decoding_defaults = DecodingDefaults(max_tokens=100)
+        engine._models = {"m": runtime}
+
+        result = engine.complete(ResponseRequest(model="m", input="x"))
+
+        self.assertEqual(result.metrics.engine_output_tokens, 2)
+
+    def test_llamacpp_complete_stops_on_max_tokens(self) -> None:
+        class FakeLlama:
+            def tokenize(self, text, *, add_bos, special):
+                return [1]
+
+            def generate(self, tokens, **kwargs):
+                for i in range(100):
+                    yield i
+
+            def detokenize(self, tokens):
+                return b"output"
+
+            def token_eos(self):
+                return 999
+
+        runtime = engine_module.LlamaCppModelRuntime(
+            config=ModelSettings(model_path="/models/t.gguf", backend="gguf"),
+            llm=FakeLlama(),
+        )
+        engine = engine_module.LlamaCppEngine.__new__(engine_module.LlamaCppEngine)
+        engine.default_model = "m"
+        engine.decoding_defaults = DecodingDefaults(max_tokens=5)
+        engine._models = {"m": runtime}
+
+        result = engine.complete(ResponseRequest(model="m", input="x"))
+
+        self.assertEqual(result.metrics.engine_output_tokens, 5)
+
+    def test_llamacpp_complete_stops_on_stop_string(self) -> None:
+        class FakeLlama:
+            def tokenize(self, text, *, add_bos, special):
+                return [1, 2]
+
+            def generate(self, tokens, **kwargs):
+                yield 10
+                yield 20
+                yield 30
+
+            def detokenize(self, tokens):
+                if tokens == [10]:
+                    return b"hello"
+                if tokens == [10, 20]:
+                    return b"hello</stop>"
+                return b"hello</stop>ignored"
+
+            def token_eos(self):
+                return 999
+
+        runtime = engine_module.LlamaCppModelRuntime(
+            config=ModelSettings(model_path="/models/t.gguf", backend="gguf"),
+            llm=FakeLlama(),
+        )
+        engine = engine_module.LlamaCppEngine.__new__(engine_module.LlamaCppEngine)
+        engine.default_model = "m"
+        engine.decoding_defaults = DecodingDefaults(stop=["</stop>"])
+        engine._models = {"m": runtime}
+
+        result = engine.complete(ResponseRequest(model="m", input="x"))
+
+        self.assertEqual(result.text, "hello")
+        self.assertEqual(result.metrics.engine_output_tokens, 2)
+
+    def test_llamacpp_complete_ignores_beam_size_and_logs(self) -> None:
+        class FakeLlama:
+            def tokenize(self, text, *, add_bos, special):
+                return [1]
+
+            def generate(self, tokens, **kwargs):
+                yield 10
+
+            def detokenize(self, tokens):
+                return b"done"
+
+            def token_eos(self):
+                return 999
+
+        runtime = engine_module.LlamaCppModelRuntime(
+            config=ModelSettings(model_path="/models/t.gguf", backend="gguf"),
+            llm=FakeLlama(),
+        )
+        engine = engine_module.LlamaCppEngine.__new__(engine_module.LlamaCppEngine)
+        engine.default_model = "gguf-model"
+        engine.decoding_defaults = DecodingDefaults()
+        engine._models = {"gguf-model": runtime}
+        request = ResponseRequest(
+            model="gguf-model",
+            input="hello",
+            decoding=DecodingParams(beam_size=7),
+        )
+
+        with mock.patch.object(engine_module.LOGGER, "info") as info_log:
+            result = engine.complete(request)
+
+        self.assertEqual(result.text, "done")
+        info_log.assert_called_once()
+        self.assertEqual(info_log.call_args[0][1], 7)
+        self.assertEqual(info_log.call_args[0][2], "gguf-model")
+
+    def test_llamacpp_complete_gemma4_uses_native_chat_completion(self) -> None:
+        class FakeLlama:
+            def create_chat_completion(self, **kwargs):
+                self.chat_kwargs = kwargs
+                return {
+                    "choices": [{"message": {"content": "OK"}}],
+                    "usage": {"prompt_tokens": 12, "completion_tokens": 1},
+                }
+
+        runtime = engine_module.LlamaCppModelRuntime(
+            config=ModelSettings(
+                model_path="/models/gemma4.gguf",
+                backend="gguf",
+                prompt_format="gemma4_template",
+            ),
+            llm=FakeLlama(),
+        )
+        engine = engine_module.LlamaCppEngine.__new__(engine_module.LlamaCppEngine)
+        engine.default_model = "gemma4-gguf"
+        engine.decoding_defaults = DecodingDefaults(
+            top_k=12,
+            top_p=0.8,
+            temperature=0.3,
+            repetition_penalty=1.05,
+            max_tokens=9,
+            stop=["</stop>"],
+        )
+        engine._models = {"gemma4-gguf": runtime}
+
+        result = engine.complete(ResponseRequest(model="gemma4-gguf", input="Reply with OK"))
+
+        self.assertEqual(result.text, "OK")
+        self.assertEqual(result.metrics.engine_prompt_tokens, 12)
+        self.assertEqual(result.metrics.engine_output_tokens, 1)
+        self.assertEqual(
+            runtime.llm.chat_kwargs["messages"],
+            [
+                {
+                    "role": "system",
+                    "content": "You are a helpful assistant. Return only the response.",
+                },
+                {"role": "user", "content": "Reply with OK"},
+            ],
+        )
+        self.assertEqual(runtime.llm.chat_kwargs["top_k"], 12)
+        self.assertEqual(runtime.llm.chat_kwargs["top_p"], 0.8)
+        self.assertEqual(runtime.llm.chat_kwargs["temperature"], 0.3)
+        self.assertEqual(runtime.llm.chat_kwargs["repeat_penalty"], 1.05)
+        self.assertEqual(runtime.llm.chat_kwargs["max_tokens"], 9)
+        self.assertIn("<end_of_turn>", runtime.llm.chat_kwargs["stop"])
+        self.assertIn("</stop>", runtime.llm.chat_kwargs["stop"])
+
+    def test_model_router_dispatches_gguf_backend(self) -> None:
+        settings = AppSettings(
+            service=ServiceSettings(),
+            engine=EngineSettings(
+                backend="ct2",
+                default_model="ct2-model",
+                models={
+                    "ct2-model": ModelSettings(model_path="/models/ct2"),
+                    "gguf-model": ModelSettings(
+                        model_path="/models/test.gguf",
+                        backend="gguf",
+                    ),
+                },
+            ),
+        )
+
+        class FakeCt2Engine:
+            def __init__(self, scoped_settings):
+                self._models = {name: object() for name in scoped_settings.engine.models}
+
+            def complete(self, request: ResponseRequest) -> EngineResult:
+                return EngineResult(text=f"ct2:{request.model}")
+
+        class FakeLlamaCppEngine:
+            def __init__(self, scoped_settings):
+                self._models = {name: object() for name in scoped_settings.engine.models}
+
+            def complete(self, request: ResponseRequest) -> EngineResult:
+                return EngineResult(text=f"gguf:{request.model}")
+
+        with (
+            mock.patch.object(engine_module, "Ct2Engine", FakeCt2Engine),
+            mock.patch.object(engine_module, "LlamaCppEngine", FakeLlamaCppEngine),
+        ):
+            engine = ModelRouterEngine(settings)
+            gguf_result = engine.complete(ResponseRequest(model="gguf-model", input="hello"))
+
+        self.assertEqual(gguf_result.text, "gguf:gguf-model")
+
 if __name__ == "__main__":
     unittest.main()

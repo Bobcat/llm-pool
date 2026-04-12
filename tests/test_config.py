@@ -217,3 +217,35 @@ class ConfigTests(unittest.TestCase):
         self.assertEqual(model.exllama_max_chunk_size, 1024)
         self.assertEqual(model.exllama_max_q_size, 6)
         self.assertEqual(model.exllama_max_rq_tokens, 2048)
+
+    def test_load_settings_reads_gguf_backend_specific_fields(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = Path(tmpdir) / "settings.json"
+            path.write_text(
+                (
+                    "{\n"
+                    '  "engine": {\n'
+                    '    "backend": "gguf",\n'
+                    '    "default_model": "test-gguf",\n'
+                    '    "models": {\n'
+                    '      "test-gguf": {\n'
+                    '        "model_path": "/models/test.gguf",\n'
+                    '        "backend": "gguf",\n'
+                    '        "gguf_n_gpu_layers": 42,\n'
+                    '        "gguf_n_ctx": 8192,\n'
+                    '        "gguf_flash_attn": false\n'
+                    "      }\n"
+                    "    }\n"
+                    "  }\n"
+                    "}\n"
+                ),
+                encoding="utf-8",
+            )
+
+            settings = load_settings(path)
+
+        model = settings.engine.models["test-gguf"]
+        self.assertEqual(model.backend, "gguf")
+        self.assertEqual(model.gguf_n_gpu_layers, 42)
+        self.assertEqual(model.gguf_n_ctx, 8192)
+        self.assertFalse(model.gguf_flash_attn)
