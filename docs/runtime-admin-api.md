@@ -72,7 +72,6 @@ These states are runtime-only and may differ from the original `enabled` value i
 ### `loaded`
 
 - a runtime exists and may serve inference requests
-- the model may be selected as default
 - the model may be unloaded through the admin API
 
 ### `unloading`
@@ -128,6 +127,8 @@ Suggested response shape:
       "is_loaded": true,
       "inflight_requests": 0,
       "last_error": null,
+      "vram_estimate_mib": 57200,
+      "vram_estimate_source": "model_artifact_size",
       "definition": {
         "model_path": "/home/gunnar/models/google_gemma-4-E2B-it-Q8_0/google_gemma-4-E2B-it-Q8_0.gguf",
         "backend": "gguf",
@@ -147,7 +148,52 @@ Notes:
 
 - `configured_enabled` reports what the merged config says
 - `runtime_state` reports the live process state
+- `vram_estimate_mib` is an approximate per-model VRAM estimate
+- `vram_estimate_source` is either `observed_load_delta`, `model_artifact_size`, or `unavailable`
 - `definition` should mirror the merged config as closely as practical
+
+### `GET /v1/admin/gpu-memory`
+
+Returns current GPU memory usage (from `nvidia-smi`) and per-model VRAM estimates.
+
+Suggested response shape:
+
+```json
+{
+  "gpus": [
+    {
+      "index": 0,
+      "name": "NVIDIA RTX PRO 6000 Blackwell Workstation Edition",
+      "used_mib": 75603,
+      "total_mib": 97887,
+      "used_over_total": "75603MiB / 97887MiB"
+    }
+  ],
+  "models": [
+    {
+      "name": "google_gemma-4-E2B-it-Q8_0-gguf",
+      "runtime_state": "loaded",
+      "is_loaded": true,
+      "vram_estimate_mib": 12500,
+      "vram_estimate_source": "model_artifact_size"
+    },
+    {
+      "name": "mistral-small-3.2-24b-instruct-2506-gguf",
+      "runtime_state": "unloaded",
+      "is_loaded": false,
+      "vram_estimate_mib": 16800,
+      "vram_estimate_source": "model_artifact_size"
+    }
+  ],
+  "error": null
+}
+```
+
+Notes:
+
+- `used_over_total` matches the compact view you typically read from `nvidia-smi`
+- `vram_estimate_mib` for unloaded models is still an estimate, not a reservation
+- if `nvidia-smi` is unavailable, `gpus` can be empty and `error` will explain why
 
 ### `POST /v1/admin/models/{model_name}/load`
 
@@ -166,11 +212,28 @@ Suggested response shape:
 ```json
 {
   "name": "google_gemma-4-E2B-it-Q8_0-gguf",
+  "resolved_backend": "gguf",
+  "configured_enabled": false,
   "runtime_state": "loaded",
   "is_loaded": true,
-  "last_error": null
+  "inflight_requests": 0,
+  "last_error": null,
+  "vram_estimate_mib": 12340,
+  "vram_estimate_source": "observed_load_delta",
+  "definition": {
+    "model_path": "/home/gunnar/models/google_gemma-4-E2B-it-Q8_0/google_gemma-4-E2B-it-Q8_0.gguf",
+    "backend": "gguf",
+    "device": "cuda",
+    "prompt_format": "gemma4_template",
+    "enabled": false
+  }
 }
 ```
+
+Notes:
+
+- loading is allowed for configured models even when `configured_enabled` is `false`
+- after a successful load, `vram_estimate_source` may switch to `observed_load_delta` if a GPU delta could be measured during load
 
 ### `POST /v1/admin/models/{model_name}/unload`
 
@@ -190,9 +253,21 @@ Suggested response shape:
 ```json
 {
   "name": "google_gemma-4-E2B-it-Q8_0-gguf",
+  "resolved_backend": "gguf",
+  "configured_enabled": false,
   "runtime_state": "unloaded",
   "is_loaded": false,
-  "last_error": null
+  "inflight_requests": 0,
+  "last_error": null,
+  "vram_estimate_mib": 12340,
+  "vram_estimate_source": "observed_load_delta",
+  "definition": {
+    "model_path": "/home/gunnar/models/google_gemma-4-E2B-it-Q8_0/google_gemma-4-E2B-it-Q8_0.gguf",
+    "backend": "gguf",
+    "device": "cuda",
+    "prompt_format": "gemma4_template",
+    "enabled": false
+  }
 }
 ```
 

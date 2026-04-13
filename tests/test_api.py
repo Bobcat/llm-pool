@@ -133,6 +133,8 @@ class ApiTests(unittest.TestCase):
         self.assertTrue(enabled_model["is_loaded"])
         self.assertEqual(enabled_model["inflight_requests"], 0)
         self.assertIsNone(enabled_model["last_error"])
+        self.assertIn("vram_estimate_mib", enabled_model)
+        self.assertIn("vram_estimate_source", enabled_model)
         self.assertEqual(enabled_model["definition"]["model_path"], "/tmp/test-model")
         self.assertTrue(enabled_model["definition"]["enabled"])
 
@@ -144,8 +146,91 @@ class ApiTests(unittest.TestCase):
         self.assertFalse(disabled_model["is_loaded"])
         self.assertEqual(disabled_model["inflight_requests"], 0)
         self.assertIsNone(disabled_model["last_error"])
+        self.assertIn("vram_estimate_mib", disabled_model)
+        self.assertIn("vram_estimate_source", disabled_model)
         self.assertEqual(disabled_model["definition"]["model_path"], "/tmp/disabled-model")
         self.assertFalse(disabled_model["definition"]["enabled"])
+
+    def test_admin_gpu_memory_endpoint_returns_envelope(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            settings_path = Path(tmpdir) / "settings.json"
+            settings_path.write_text(
+                (
+                    "{\n"
+                    '  "engine": {\n'
+                    '    "backend": "stub",\n'
+                    '    "models": {\n'
+                    '      "test-model": {"model_path": "/tmp/test-model", "enabled": true}\n'
+                    "    }\n"
+                    "  }\n"
+                    "}\n"
+                ),
+                encoding="utf-8",
+            )
+            previous = os.environ.get("LLM_POOL_SETTINGS_PATH")
+            os.environ["LLM_POOL_SETTINGS_PATH"] = str(settings_path)
+            try:
+                sys.modules.pop("app.main", None)
+                main = importlib.import_module("app.main")
+
+                class FakeEngine:
+                    def admin_models_payload(self, settings) -> dict[str, object]:
+                        del settings
+                        return {"models": []}
+
+                    def admin_gpu_memory_payload(self, settings) -> dict[str, object]:
+                        del settings
+                        return {
+                            "gpus": [
+                                {
+                                    "index": 0,
+                                    "name": "Test GPU",
+                                    "used_mib": 1234,
+                                    "total_mib": 24000,
+                                    "used_over_total": "1234MiB / 24000MiB",
+                                }
+                            ],
+                            "models": [
+                                {
+                                    "name": "test-model",
+                                    "runtime_state": "loaded",
+                                    "is_loaded": True,
+                                    "vram_estimate_mib": 2048,
+                                    "vram_estimate_source": "model_artifact_size",
+                                }
+                            ],
+                            "error": None,
+                        }
+
+                    def load_model(self, model_name: str, settings) -> dict[str, object]:
+                        del model_name, settings
+                        raise AssertionError("load_model should not be called in this test")
+
+                    def unload_model(self, model_name: str, settings) -> dict[str, object]:
+                        del model_name, settings
+                        raise AssertionError("unload_model should not be called in this test")
+
+                    def complete(self, request):
+                        del request
+                        raise AssertionError("complete should not be called in this test")
+
+                with mock.patch.object(main, "build_engine", return_value=FakeEngine()):
+                    app = main.create_app(settings_path)
+            finally:
+                if previous is None:
+                    os.environ.pop("LLM_POOL_SETTINGS_PATH", None)
+                else:
+                    os.environ["LLM_POOL_SETTINGS_PATH"] = previous
+
+        client = TestClient(app)
+        response = client.get("/v1/admin/gpu-memory")
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertEqual(payload["gpus"][0]["used_over_total"], "1234MiB / 24000MiB")
+        self.assertEqual(payload["models"][0]["name"], "test-model")
+        self.assertEqual(payload["models"][0]["vram_estimate_source"], "model_artifact_size")
+        self.assertIsNone(payload["error"])
 
     def test_load_model_endpoint_loads_disabled_model_live(self) -> None:
         client = self._create_client()

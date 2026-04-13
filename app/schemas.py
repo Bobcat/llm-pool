@@ -59,11 +59,35 @@ class AdminModelEntry(BaseModel):
     is_loaded: bool
     inflight_requests: int = Field(default=0, ge=0)
     last_error: str | None = None
+    vram_estimate_mib: int | None = Field(default=None, ge=0)
+    vram_estimate_source: Literal["observed_load_delta", "model_artifact_size", "unavailable"] = "unavailable"
     definition: dict[str, Any] = Field(default_factory=dict)
 
 
 class AdminModelsEnvelope(BaseModel):
     models: list[AdminModelEntry] = Field(default_factory=list)
+
+
+class AdminGpuMemoryDevice(BaseModel):
+    index: int
+    name: str
+    used_mib: int = Field(ge=0)
+    total_mib: int = Field(ge=0)
+    used_over_total: str
+
+
+class AdminGpuMemoryModelEstimate(BaseModel):
+    name: str
+    runtime_state: Literal["unloaded", "loading", "loaded", "unloading", "failed"]
+    is_loaded: bool
+    vram_estimate_mib: int | None = Field(default=None, ge=0)
+    vram_estimate_source: Literal["observed_load_delta", "model_artifact_size", "unavailable"] = "unavailable"
+
+
+class AdminGpuMemoryEnvelope(BaseModel):
+    gpus: list[AdminGpuMemoryDevice] = Field(default_factory=list)
+    models: list[AdminGpuMemoryModelEstimate] = Field(default_factory=list)
+    error: str | None = None
 
 
 @dataclass(frozen=True)

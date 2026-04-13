@@ -15,6 +15,7 @@ from app.engine import build_engine
 from app.engine import ModelStateError
 from app.engine import UnknownModelError
 from app.schemas import AdminModelEntry
+from app.schemas import AdminGpuMemoryEnvelope
 from app.schemas import AdminModelsEnvelope
 from app.schemas import OutputText
 from app.schemas import ResponseEnvelope
@@ -99,6 +100,19 @@ def create_app(settings_path: str | Path | None = None) -> FastAPI:
     )
     def list_admin_models() -> dict[str, object]:
         return engine.admin_models_payload(settings)
+
+    @app.get(
+        "/v1/admin/gpu-memory",
+        response_model=AdminGpuMemoryEnvelope,
+        tags=["admin"],
+        summary="Get GPU memory usage and model VRAM estimates",
+        description=(
+            "Returns current GPU memory usage from nvidia-smi and approximate per-model VRAM usage "
+            "for both loaded and unloaded models."
+        ),
+    )
+    def get_gpu_memory() -> dict[str, object]:
+        return engine.admin_gpu_memory_payload(settings)
 
     @app.post(
         "/v1/admin/models/{model_name}/load",

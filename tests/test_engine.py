@@ -873,18 +873,24 @@ class EngineTests(unittest.TestCase):
         self.assertEqual(loaded_model["runtime_state"], "loaded")
         self.assertTrue(loaded_model["is_loaded"])
         self.assertIsNone(loaded_model["last_error"])
+        self.assertIn("vram_estimate_mib", loaded_model)
+        self.assertIn("vram_estimate_source", loaded_model)
 
         failed_model = payload["models"][1]
         self.assertEqual(failed_model["name"], "broken-model")
         self.assertEqual(failed_model["runtime_state"], "failed")
         self.assertFalse(failed_model["is_loaded"])
         self.assertEqual(failed_model["last_error"], "boom")
+        self.assertIn("vram_estimate_mib", failed_model)
+        self.assertIn("vram_estimate_source", failed_model)
 
         unloaded_model = payload["models"][2]
         self.assertEqual(unloaded_model["name"], "disabled-model")
         self.assertEqual(unloaded_model["runtime_state"], "unloaded")
         self.assertFalse(unloaded_model["is_loaded"])
         self.assertIsNone(unloaded_model["last_error"])
+        self.assertIn("vram_estimate_mib", unloaded_model)
+        self.assertIn("vram_estimate_source", unloaded_model)
 
     def test_model_router_tracks_inflight_requests_around_complete(self) -> None:
         settings = AppSettings(
@@ -960,6 +966,46 @@ class EngineTests(unittest.TestCase):
         self.assertTrue(entry["is_loaded"])
         self.assertIn("disabled-model", engine._models)
         self.assertEqual(engine.admin_models_payload()["models"][1]["runtime_state"], "loaded")
+
+    def test_model_router_load_model_forces_enabled_on_scoped_settings(self) -> None:
+        settings = AppSettings(
+            service=ServiceSettings(),
+            engine=EngineSettings(
+                backend="ct2",
+                models={
+                    "enabled-model": ModelSettings(model_path="/models/enabled"),
+                    "disabled-model": ModelSettings(model_path="/models/disabled", enabled=False),
+                },
+            ),
+        )
+
+        class FakeCt2Engine:
+            def __init__(self, scoped_settings):
+                self._models = {name: object() for name in scoped_settings.engine.models}
+                self._load_errors = {}
+
+            def complete(self, request: ResponseRequest) -> EngineResult:
+                return EngineResult(text=f"ct2:{request.model}")
+
+        with mock.patch.object(engine_module, "Ct2Engine", FakeCt2Engine):
+            engine = ModelRouterEngine(settings)
+
+        captured: dict[str, bool] = {}
+
+        class FakeBackend:
+            def __init__(self):
+                self._models = {"disabled-model": object()}
+                self._load_errors = {}
+
+        def fake_build_backend(backend: str, scoped_settings: AppSettings):
+            del backend
+            captured["enabled"] = scoped_settings.engine.models["disabled-model"].enabled
+            return FakeBackend()
+
+        with mock.patch.object(engine, "_build_backend_engine", side_effect=fake_build_backend):
+            engine.load_model("disabled-model", settings)
+
+        self.assertTrue(captured["enabled"])
 
     def test_model_router_load_model_is_idempotent_for_loaded_model(self) -> None:
         settings = AppSettings(
@@ -1149,6 +1195,62 @@ class EngineTests(unittest.TestCase):
         self.assertEqual(result_holder["result"].text, "ct2:other-model")
         self.assertEqual(unload_holder["entry"]["runtime_state"], "unloaded")
         self.assertNotIn("other-model", engine._models)
+
+    def test_model_router_admin_gpu_memory_payload_reports_gpu_and_model_estimates(self) -> None:
+        settings = AppSettings(
+            service=ServiceSettings(),
+            engine=EngineSettings(
+                backend="ct2",
+                models={
+                    "enabled-model": ModelSettings(model_path="/models/enabled"),
+                    "disabled-model": ModelSettings(model_path="/models/disabled", enabled=False),
+                },
+            ),
+        )
+
+        class FakeCt2Engine:
+            def __init__(self, scoped_settings):
+                self._models = {name: object() for name in scoped_settings.engine.models}
+                self._load_errors = {}
+
+            def complete(self, request: ResponseRequest) -> EngineResult:
+                return EngineResult(text=f"ct2:{request.model}")
+
+        with (
+            mock.patch.object(engine_module, "Ct2Engine", FakeCt2Engine),
+            mock.patch.object(
+                engine_module,
+                "_query_gpu_memory",
+                return_value=(
+                    [
+                        {
+                            "index": 0,
+                            "name": "GPU0",
+                            "used_mib": 12000,
+                            "total_mib": 24000,
+                            "used_over_total": "12000MiB / 24000MiB",
+                        }
+                    ],
+                    None,
+                ),
+            ),
+            mock.patch.object(
+                engine_module,
+                "_estimate_model_artifact_size_mib",
+                side_effect=[4096, 2048],
+            ),
+        ):
+            engine = ModelRouterEngine(settings)
+            payload = engine.admin_gpu_memory_payload()
+
+        self.assertEqual(payload["gpus"][0]["used_over_total"], "12000MiB / 24000MiB")
+        self.assertIsNone(payload["error"])
+        self.assertEqual(payload["models"][0]["name"], "enabled-model")
+        self.assertEqual(payload["models"][0]["vram_estimate_mib"], 4096)
+        self.assertEqual(payload["models"][0]["vram_estimate_source"], "model_artifact_size")
+        self.assertEqual(payload["models"][1]["name"], "disabled-model")
+        self.assertEqual(payload["models"][1]["vram_estimate_mib"], 2048)
+        self.assertEqual(payload["models"][1]["vram_estimate_source"], "model_artifact_size")
 
 if __name__ == "__main__":
     unittest.main()

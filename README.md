@@ -6,13 +6,14 @@ Current scope:
 - generic request schema with per-request instructions and decoding params
 - JSON response mode
 - SSE streaming mode
-- `GET /v1/models` endpoint for enabled model discovery
+- `GET /v1/models` endpoint for loaded model discovery
+- admin endpoints for runtime inspection and live model load/unload
 - per-request runtime metrics in the response
 - CT2, ExLlamaV3, and GGUF/`llama.cpp` engines behind the same API contract
 - per-model backend routing inside one llm-pool instance
-- includes model serving and routing, but no queue/scheduler layer yet (unlike asr-pool)
+- includes model serving and routing; queue/scheduler and runtime-isolation work is tracked in the design notes below
 
-## Endpoint
+## Endpoints
 
 `POST /v1/responses`
 
@@ -22,6 +23,28 @@ Current scope:
 `GET /v1/models`
 
 - returns the currently loaded models.
+
+`GET /v1/admin/models`
+
+- returns all configured models plus their live runtime state.
+- includes fields such as `configured_enabled`, `runtime_state`, `inflight_requests`, `last_error`, and the resolved model definition.
+
+`GET /v1/admin/gpu-memory`
+
+- returns current GPU memory usage from `nvidia-smi` plus per-model VRAM estimates.
+
+`POST /v1/admin/models/{model_name}/load`
+
+- live-loads one configured model without modifying `settings.json` or `local.json`.
+- returns `404` for an unknown model, `409` if the model is currently unloading, and `500` if the load attempt fails.
+
+`POST /v1/admin/models/{model_name}/unload`
+
+- gracefully unloads one configured model at runtime.
+- new inference requests are rejected once unloading starts, and in-flight requests are allowed to finish before cleanup.
+- returns `404` for an unknown model and `409` if the model is currently loading.
+
+The original design note for this control plane is in [runtime-admin-api.md](docs/runtime-admin-api.md).
 
 Example request:
 
@@ -74,7 +97,7 @@ Currently supported API request fields:
 
 | Field | Type | Required | Default if omitted | Notes |
 | --- | --- | --- | --- | --- |
-| `model` | `string` | yes | none | Must match a loaded enabled model. |
+| `model` | `string` | yes | none | Must match a currently loaded configured model. |
 | `input` | `string` | yes | none | Main user input text. |
 | `instructions` | `string \| null` | no | `null` | If omitted, the pool falls back to an internal default instruction prompt. |
 | `stream` | `boolean` | no | `false` | `false` returns one JSON response; `true` returns SSE events. |
@@ -141,6 +164,7 @@ Per model, you can set `model_path`, `device`, `compute_type`, `prompt_format`, 
 Notes:
 - Models without a `backend` field use the global `engine.backend`.
 - `enabled` controls whether a model is loaded by the pool at startup.
+- A configured model with `enabled: false` may still be loaded later through the admin API.
 - `enable_thinking` is an optional per-model template setting for formats that expose a thinking toggle.
 - Request-level decoding values override `engine.decoding` defaults when provided.
 - ExLlamaV3 models also support `exllama_tp_backend`, `exllama_max_batch_size`, `exllama_max_chunk_size`, `exllama_max_q_size`, and `exllama_max_rq_tokens`.
@@ -157,3 +181,25 @@ Optional env vars:
 ```bash
 python3 -m unittest discover -s tests
 ```
+
+## Design Notes
+
+The repo also includes a small set of active design notes for work that is intended but not fully implemented yet:
+
+- [runtime-scheduler-notes.md](docs/runtime-scheduler-notes.md)
+  Captures the intended queue and scheduler boundary, including the small runtime adapter interface that backends should implement.
+- [runtime-subprocess-notes.md](docs/runtime-subprocess-notes.md)
+  Captures the intended process-isolation model for loaded runtimes and how that should fit behind the same runtime adapter boundary.
+
+## Acknowledgments
+
+This pool builds on a number of excellent upstream projects:
+
+- FastAPI
+- Uvicorn
+- Pydantic
+- CTranslate2
+- Transformers
+- ExLlamaV3
+- llama-cpp-python
+- llama.cpp

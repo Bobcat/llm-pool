@@ -7,6 +7,7 @@ from dataclasses import field
 from dataclasses import replace
 from pathlib import Path
 import logging
+import subprocess
 import threading
 import time
 
@@ -47,6 +48,102 @@ def _exception_message(exc: Exception) -> str:
     return exc.__class__.__name__
 
 
+def _query_gpu_memory() -> tuple[list[dict[str, object]], str | None]:
+    try:
+        result = subprocess.run(
+            [
+                "nvidia-smi",
+                "--query-gpu=index,name,memory.used,memory.total",
+                "--format=csv,noheader,nounits",
+            ],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+    except FileNotFoundError:
+        return [], "nvidia-smi not found"
+    except subprocess.CalledProcessError as exc:
+        message = exc.stderr.strip() if isinstance(exc.stderr, str) else ""
+        if message == "":
+            message = "nvidia-smi failed"
+        return [], message
+
+    gpus: list[dict[str, object]] = []
+    for raw_line in result.stdout.splitlines():
+        line = raw_line.strip()
+        if line == "":
+            continue
+        parts = [part.strip() for part in line.split(",")]
+        if len(parts) < 4:
+            continue
+        try:
+            gpu_index = int(parts[0])
+            used_mib = int(parts[2])
+            total_mib = int(parts[3])
+        except ValueError:
+            continue
+        gpus.append(
+            {
+                "index": gpu_index,
+                "name": parts[1],
+                "used_mib": used_mib,
+                "total_mib": total_mib,
+                "used_over_total": f"{used_mib}MiB / {total_mib}MiB",
+            }
+        )
+    return gpus, None
+
+
+def _query_primary_gpu_used_mib() -> int | None:
+    gpus, _ = _query_gpu_memory()
+    if not gpus:
+        return None
+    first = gpus[0]
+    used = first.get("used_mib")
+    if isinstance(used, int):
+        return used
+    return None
+
+
+def _estimate_model_artifact_size_mib(model_path: str) -> int | None:
+    path = Path(model_path)
+    try:
+        if path.is_file():
+            total_bytes = path.stat().st_size
+        elif path.is_dir():
+            total_bytes = 0
+            for candidate in path.rglob("*"):
+                if candidate.is_file():
+                    total_bytes += candidate.stat().st_size
+        else:
+            return None
+    except OSError:
+        return None
+    if total_bytes <= 0:
+        return None
+    mib = int(total_bytes / (1024 * 1024))
+    if mib <= 0:
+        return 1
+    return mib
+
+
+def _empty_cuda_allocator_cache() -> None:
+    try:
+        import torch  # type: ignore
+    except Exception:
+        return
+    try:
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+            # ipc_collect is optional and can fail on some environments.
+            try:
+                torch.cuda.ipc_collect()
+            except Exception:
+                pass
+    except Exception:
+        LOGGER.warning("Failed to empty CUDA allocator cache during runtime cleanup.", exc_info=True)
+
+
 class UnknownModelError(LookupError):
     def __init__(self, model_name: str) -> None:
         super().__init__(model_name)
@@ -85,6 +182,7 @@ class StubEngine:
         models: list[dict[str, object]] = []
         for model_name, model_settings in self._configured_models.items():
             is_loaded = model_name in self._models
+            vram_estimate_mib = _estimate_model_artifact_size_mib(model_settings.model_path)
             models.append(
                 {
                     "name": model_name,
@@ -94,16 +192,40 @@ class StubEngine:
                     "is_loaded": is_loaded,
                     "inflight_requests": 0,
                     "last_error": None,
+                    "vram_estimate_mib": vram_estimate_mib,
+                    "vram_estimate_source": (
+                        "model_artifact_size" if vram_estimate_mib is not None else "unavailable"
+                    ),
                     "definition": asdict(model_settings),
                 }
             )
         return {"models": models}
+
+    def admin_gpu_memory_payload(self, settings: AppSettings) -> dict[str, object]:
+        gpus, error = _query_gpu_memory()
+        models: list[dict[str, object]] = []
+        for model_name, model_settings in self._configured_models.items():
+            is_loaded = model_name in self._models
+            vram_estimate_mib = _estimate_model_artifact_size_mib(model_settings.model_path)
+            models.append(
+                {
+                    "name": model_name,
+                    "runtime_state": "loaded" if is_loaded else "unloaded",
+                    "is_loaded": is_loaded,
+                    "vram_estimate_mib": vram_estimate_mib,
+                    "vram_estimate_source": (
+                        "model_artifact_size" if vram_estimate_mib is not None else "unavailable"
+                    ),
+                }
+            )
+        return {"gpus": gpus, "models": models, "error": error}
 
     def load_model(self, model_name: str, settings: AppSettings) -> dict[str, object]:
         model_settings = self._configured_models.get(model_name)
         if model_settings is None:
             raise UnknownModelError(model_name)
         self._models.setdefault(model_name, object())
+        vram_estimate_mib = _estimate_model_artifact_size_mib(model_settings.model_path)
         return {
             "name": model_name,
             "resolved_backend": settings.engine.backend,
@@ -112,6 +234,8 @@ class StubEngine:
             "is_loaded": True,
             "inflight_requests": 0,
             "last_error": None,
+            "vram_estimate_mib": vram_estimate_mib,
+            "vram_estimate_source": "model_artifact_size" if vram_estimate_mib is not None else "unavailable",
             "definition": asdict(model_settings),
         }
 
@@ -120,6 +244,7 @@ class StubEngine:
         if model_settings is None:
             raise UnknownModelError(model_name)
         self._models.pop(model_name, None)
+        vram_estimate_mib = _estimate_model_artifact_size_mib(model_settings.model_path)
         return {
             "name": model_name,
             "resolved_backend": settings.engine.backend,
@@ -128,6 +253,8 @@ class StubEngine:
             "is_loaded": False,
             "inflight_requests": 0,
             "last_error": None,
+            "vram_estimate_mib": vram_estimate_mib,
+            "vram_estimate_source": "model_artifact_size" if vram_estimate_mib is not None else "unavailable",
             "definition": asdict(model_settings),
         }
 
@@ -166,6 +293,8 @@ class ModelRuntimeState:
     lifecycle: str = "unloaded"
     inflight_requests: int = 0
     last_error: str | None = None
+    artifact_size_mib: int | None = None
+    observed_vram_mib: int | None = None
 
 
 @dataclass(frozen=True)
@@ -1083,6 +1212,15 @@ class ModelRouterEngine:
                 models.append(self._admin_model_entry_locked(model_name, model_settings))
             return {"models": models}
 
+    def admin_gpu_memory_payload(self, settings: AppSettings | None = None) -> dict[str, object]:
+        del settings
+        gpus, error = _query_gpu_memory()
+        with self._state_lock:
+            models: list[dict[str, object]] = []
+            for model_name, model_settings in self._configured_models.items():
+                models.append(self._admin_gpu_model_entry_locked(model_name, model_settings))
+        return {"gpus": gpus, "models": models, "error": error}
+
     def load_model(self, model_name: str, settings: AppSettings | None = None) -> dict[str, object]:
         if settings is None:
             raise RuntimeError("settings are required to load a model")
@@ -1099,13 +1237,15 @@ class ModelRouterEngine:
             state.lifecycle = "loading"
             state.last_error = None
             resolved_backend = state.resolved_backend
+            scoped_model_settings = replace(model_settings, enabled=True)
+        gpu_used_before_mib = _query_primary_gpu_used_mib()
 
         scoped_settings = replace(
             settings,
             engine=replace(
                 settings.engine,
                 backend=resolved_backend,
-                models={model_name: model_settings},
+                models={model_name: scoped_model_settings},
             ),
         )
 
@@ -1134,6 +1274,16 @@ class ModelRouterEngine:
                 state.lifecycle = "failed"
                 state.last_error = message
             raise RuntimeError(message)
+        gpu_used_after_mib = _query_primary_gpu_used_mib()
+        observed_vram_mib: int | None = None
+        if (
+            gpu_used_before_mib is not None
+            and gpu_used_after_mib is not None
+            and gpu_used_after_mib >= gpu_used_before_mib
+        ):
+            delta = gpu_used_after_mib - gpu_used_before_mib
+            if delta > 0:
+                observed_vram_mib = delta
 
         with self._state_lock:
             existing_engine = self._find_backend_engine_locked(resolved_backend)
@@ -1147,6 +1297,8 @@ class ModelRouterEngine:
             state = self._model_states[model_name]
             state.lifecycle = "loaded"
             state.last_error = None
+            if observed_vram_mib is not None:
+                state.observed_vram_mib = observed_vram_mib
             return self._admin_model_entry_locked(model_name, model_settings)
 
     def unload_model(self, model_name: str, settings: AppSettings | None = None) -> dict[str, object]:
@@ -1183,6 +1335,7 @@ class ModelRouterEngine:
 
     def _admin_model_entry_locked(self, model_name: str, model_settings: ModelSettings) -> dict[str, object]:
         state = self._model_states[model_name]
+        vram_estimate_mib, vram_estimate_source = self._vram_estimate_locked(model_name, model_settings)
         return {
             "name": model_name,
             "resolved_backend": state.resolved_backend,
@@ -1191,8 +1344,35 @@ class ModelRouterEngine:
             "is_loaded": state.lifecycle == "loaded",
             "inflight_requests": state.inflight_requests,
             "last_error": state.last_error,
+            "vram_estimate_mib": vram_estimate_mib,
+            "vram_estimate_source": vram_estimate_source,
             "definition": asdict(model_settings),
         }
+
+    def _admin_gpu_model_entry_locked(self, model_name: str, model_settings: ModelSettings) -> dict[str, object]:
+        state = self._model_states[model_name]
+        vram_estimate_mib, vram_estimate_source = self._vram_estimate_locked(model_name, model_settings)
+        return {
+            "name": model_name,
+            "runtime_state": state.lifecycle,
+            "is_loaded": state.lifecycle == "loaded",
+            "vram_estimate_mib": vram_estimate_mib,
+            "vram_estimate_source": vram_estimate_source,
+        }
+
+    def _vram_estimate_locked(
+        self,
+        model_name: str,
+        model_settings: ModelSettings,
+    ) -> tuple[int | None, str]:
+        state = self._model_states[model_name]
+        if state.observed_vram_mib is not None:
+            return state.observed_vram_mib, "observed_load_delta"
+        if state.artifact_size_mib is None:
+            state.artifact_size_mib = _estimate_model_artifact_size_mib(model_settings.model_path)
+        if state.artifact_size_mib is not None:
+            return state.artifact_size_mib, "model_artifact_size"
+        return None, "unavailable"
 
     def _find_backend_engine_locked(self, backend: str):
         for loaded_model_name, engine in self._model_engines.items():
@@ -1203,6 +1383,7 @@ class ModelRouterEngine:
 
     def _cleanup_runtime(self, runtime: object | None) -> None:
         if runtime is None:
+            _empty_cuda_allocator_cache()
             gc.collect()
             return
 
@@ -1222,6 +1403,58 @@ class ModelRouterEngine:
             except Exception:
                 LOGGER.warning("Failed to close GGUF runtime during cleanup.", exc_info=True)
 
+        # ExLlamaV3 cleanup path: unload model, detach cache, then drop global shared tensors.
+        model = getattr(runtime, "model", None)
+        cache = getattr(runtime, "cache", None)
+
+        unload_model = getattr(model, "unload", None)
+        if callable(unload_model):
+            try:
+                unload_model()
+            except Exception:
+                LOGGER.warning("Failed to unload ExLlamaV3 model during cleanup.", exc_info=True)
+
+        detach_cache = getattr(cache, "detach_from_model", None)
+        if callable(detach_cache):
+            try:
+                if model is not None:
+                    detach_cache(model)
+                else:
+                    detach_cache()
+            except Exception:
+                LOGGER.warning("Failed to detach ExLlamaV3 cache during cleanup.", exc_info=True)
+
+        # Best effort global cleanup for ExLlamaV3 utility caches.
+        try:
+            from exllamav3.util.tensor import g_tensor_cache  # type: ignore
+
+            g_tensor_cache.drop_all()
+        except Exception:
+            pass
+        try:
+            from exllamav3.util.memory import free_mem as exllama_free_mem  # type: ignore
+
+            exllama_free_mem()
+        except Exception:
+            pass
+
+        # Break strong references early so allocator cleanup can happen promptly.
+        for attr_name in (
+            "generator",
+            "llm",
+            "cache",
+            "model",
+            "tokenizer",
+            "job_class",
+            "sampler_class",
+        ):
+            if hasattr(runtime, attr_name):
+                try:
+                    setattr(runtime, attr_name, None)
+                except Exception:
+                    pass
+
+        _empty_cuda_allocator_cache()
         gc.collect()
 
     def _lifecycle_error_code(self, lifecycle: str) -> str:
