@@ -135,8 +135,11 @@ class ApiTests(unittest.TestCase):
         self.assertIsNone(enabled_model["last_error"])
         self.assertIn("vram_estimate_mib", enabled_model)
         self.assertIn("vram_estimate_source", enabled_model)
+        self.assertEqual(enabled_model["load_constraints"], {})
         self.assertEqual(enabled_model["definition"]["model_path"], "/tmp/test-model")
         self.assertTrue(enabled_model["definition"]["enabled"])
+        self.assertNotIn("exllama_cache_size", enabled_model["definition"])
+        self.assertNotIn("gguf_n_ctx", enabled_model["definition"])
 
         disabled_model = payload["models"][1]
         self.assertEqual(disabled_model["name"], "disabled-model")
@@ -148,8 +151,11 @@ class ApiTests(unittest.TestCase):
         self.assertIsNone(disabled_model["last_error"])
         self.assertIn("vram_estimate_mib", disabled_model)
         self.assertIn("vram_estimate_source", disabled_model)
+        self.assertEqual(disabled_model["load_constraints"], {})
         self.assertEqual(disabled_model["definition"]["model_path"], "/tmp/disabled-model")
         self.assertFalse(disabled_model["definition"]["enabled"])
+        self.assertNotIn("exllama_cache_size", disabled_model["definition"])
+        self.assertNotIn("gguf_n_ctx", disabled_model["definition"])
 
     def test_admin_gpu_memory_endpoint_returns_envelope(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -202,8 +208,8 @@ class ApiTests(unittest.TestCase):
                             "error": None,
                         }
 
-                    def load_model(self, model_name: str, settings) -> dict[str, object]:
-                        del model_name, settings
+                    def load_model(self, model_name: str, settings, load_request=None) -> dict[str, object]:
+                        del model_name, settings, load_request
                         raise AssertionError("load_model should not be called in this test")
 
                     def unload_model(self, model_name: str, settings) -> dict[str, object]:
@@ -246,6 +252,110 @@ class ApiTests(unittest.TestCase):
         models = {item["name"]: item for item in admin_response.json()["models"]}
         self.assertEqual(models["disabled-model"]["runtime_state"], "loaded")
 
+    def test_load_model_endpoint_forwards_optional_load_overrides(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            settings_path = Path(tmpdir) / "settings.json"
+            settings_path.write_text(
+                (
+                    "{\n"
+                    '  "engine": {\n'
+                    '    "backend": "gguf",\n'
+                    '    "models": {\n'
+                    '      "gguf-model": {"model_path": "/tmp/test.gguf", "enabled": false, "backend": "gguf"}\n'
+                    "    }\n"
+                    "  }\n"
+                    "}\n"
+                ),
+                encoding="utf-8",
+            )
+            previous = os.environ.get("LLM_POOL_SETTINGS_PATH")
+            os.environ["LLM_POOL_SETTINGS_PATH"] = str(settings_path)
+            try:
+                sys.modules.pop("app.main", None)
+                main = importlib.import_module("app.main")
+                captured: dict[str, object] = {}
+
+                class FakeEngine:
+                    def admin_models_payload(self, settings) -> dict[str, object]:
+                        del settings
+                        return {"models": []}
+
+                    def admin_gpu_memory_payload(self, settings) -> dict[str, object]:
+                        del settings
+                        return {"gpus": [], "models": [], "error": None}
+
+                    def load_model(self, model_name: str, settings, load_request=None) -> dict[str, object]:
+                        del settings
+                        captured["model_name"] = model_name
+                        captured["load_request"] = load_request
+                        return {
+                            "name": model_name,
+                            "resolved_backend": "gguf",
+                            "configured_enabled": False,
+                            "runtime_state": "loaded",
+                            "is_loaded": True,
+                            "inflight_requests": 0,
+                            "last_error": None,
+                            "vram_estimate_mib": None,
+                            "vram_estimate_source": "unavailable",
+                            "load_constraints": {
+                                "gguf_n_ctx": {"kind": "integer", "minimum": 1, "step": 1},
+                                "gguf_type_k": {
+                                    "kind": "string_or_null",
+                                    "format": "ggml_type_name",
+                                    "examples": ["f16", "q8_0", "q4_0"],
+                                },
+                                "gguf_type_v": {
+                                    "kind": "string_or_null",
+                                    "format": "ggml_type_name",
+                                    "examples": ["f16", "q8_0", "q4_0"],
+                                },
+                            },
+                            "load_override": {"gguf_n_ctx": 32768, "gguf_type_k": "q8_0", "gguf_type_v": "q4_0"},
+                            "definition": {
+                                "model_path": "/tmp/test.gguf",
+                                "backend": "gguf",
+                                "enabled": False,
+                                "gguf_n_ctx": 4096,
+                                "gguf_flash_attn": True,
+                                "gguf_n_gpu_layers": -1,
+                                "gguf_type_k": None,
+                                "gguf_type_v": None,
+                            },
+                        }
+
+                    def unload_model(self, model_name: str, settings) -> dict[str, object]:
+                        del model_name, settings
+                        raise AssertionError("unload_model should not be called in this test")
+
+                    def complete(self, request):
+                        del request
+                        raise AssertionError("complete should not be called in this test")
+
+                with mock.patch.object(main, "build_engine", return_value=FakeEngine()):
+                    app = main.create_app(settings_path)
+            finally:
+                if previous is None:
+                    os.environ.pop("LLM_POOL_SETTINGS_PATH", None)
+                else:
+                    os.environ["LLM_POOL_SETTINGS_PATH"] = previous
+
+        client = TestClient(app)
+        response = client.post(
+            "/v1/admin/models/gguf-model/load",
+            json={"gguf_n_ctx": 32768, "gguf_type_k": "q8_0", "gguf_type_v": "q4_0"},
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(captured["model_name"], "gguf-model")
+        self.assertEqual(captured["load_request"].gguf_n_ctx, 32768)
+        self.assertEqual(captured["load_request"].gguf_type_k, "q8_0")
+        self.assertEqual(captured["load_request"].gguf_type_v, "q4_0")
+        self.assertEqual(
+            response.json()["load_override"],
+            {"gguf_n_ctx": 32768, "gguf_type_k": "q8_0", "gguf_type_v": "q4_0"},
+        )
+
     def test_load_model_endpoint_rejects_unknown_model(self) -> None:
         client = self._create_client()
 
@@ -285,8 +395,8 @@ class ApiTests(unittest.TestCase):
                         del settings
                         return {"models": []}
 
-                    def load_model(self, model_name: str, settings) -> dict[str, object]:
-                        del settings
+                    def load_model(self, model_name: str, settings, load_request=None) -> dict[str, object]:
+                        del settings, load_request
                         raise RuntimeError(f"failed:{model_name}")
 
                     def complete(self, request):
@@ -311,6 +421,70 @@ class ApiTests(unittest.TestCase):
                 "code": "model_load_failed",
                 "model": "broken-model",
                 "message": "failed:broken-model",
+            },
+        )
+
+    def test_load_model_endpoint_reports_invalid_load_request(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            settings_path = Path(tmpdir) / "settings.json"
+            settings_path.write_text(
+                (
+                    "{\n"
+                    '  "engine": {\n'
+                    '    "backend": "gguf",\n'
+                    '    "models": {\n'
+                    '      "gguf-model": {"model_path": "/tmp/test.gguf", "enabled": false, "backend": "gguf"}\n'
+                    "    }\n"
+                    "  }\n"
+                    "}\n"
+                ),
+                encoding="utf-8",
+            )
+            previous = os.environ.get("LLM_POOL_SETTINGS_PATH")
+            os.environ["LLM_POOL_SETTINGS_PATH"] = str(settings_path)
+            try:
+                sys.modules.pop("app.main", None)
+                main = importlib.import_module("app.main")
+
+                class FakeEngine:
+                    def admin_models_payload(self, settings) -> dict[str, object]:
+                        del settings
+                        return {"models": []}
+
+                    def admin_gpu_memory_payload(self, settings) -> dict[str, object]:
+                        del settings
+                        return {"gpus": [], "models": [], "error": None}
+
+                    def load_model(self, model_name: str, settings, load_request=None) -> dict[str, object]:
+                        del model_name, settings, load_request
+                        raise ValueError("unsupported load override for gguf backend: exllama_cache_size")
+
+                    def unload_model(self, model_name: str, settings) -> dict[str, object]:
+                        del model_name, settings
+                        raise AssertionError("unload_model should not be called in this test")
+
+                    def complete(self, request):
+                        del request
+                        raise AssertionError("complete should not be called in this test")
+
+                with mock.patch.object(main, "build_engine", return_value=FakeEngine()):
+                    app = main.create_app(settings_path)
+            finally:
+                if previous is None:
+                    os.environ.pop("LLM_POOL_SETTINGS_PATH", None)
+                else:
+                    os.environ["LLM_POOL_SETTINGS_PATH"] = previous
+
+        client = TestClient(app)
+        response = client.post("/v1/admin/models/gguf-model/load", json={"exllama_cache_size": 16384})
+
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(
+            response.json()["detail"],
+            {
+                "code": "invalid_load_request",
+                "model": "gguf-model",
+                "message": "unsupported load override for gguf backend: exllama_cache_size",
             },
         )
 

@@ -16,6 +16,7 @@ from app.engine import ModelStateError
 from app.engine import UnknownModelError
 from app.schemas import AdminModelEntry
 from app.schemas import AdminGpuMemoryEnvelope
+from app.schemas import AdminLoadRequest
 from app.schemas import AdminModelsEnvelope
 from app.schemas import OutputText
 from app.schemas import ResponseEnvelope
@@ -121,12 +122,13 @@ def create_app(settings_path: str | Path | None = None) -> FastAPI:
         summary="Load one configured model",
         description=(
             "Loads one model that already exists in the merged settings. "
-            "This operation is live-only and does not modify settings files."
+            "This operation is live-only and does not modify settings files. "
+            "An optional request body may supply temporary backend-specific load overrides."
         ),
     )
-    def load_model(model_name: str) -> dict[str, object]:
+    def load_model(model_name: str, load_request: AdminLoadRequest | None = None) -> dict[str, object]:
         try:
-            return engine.load_model(model_name, settings)
+            return engine.load_model(model_name, settings, load_request)
         except UnknownModelError as exc:
             raise HTTPException(
                 status_code=404,
@@ -136,6 +138,15 @@ def create_app(settings_path: str | Path | None = None) -> FastAPI:
             raise HTTPException(
                 status_code=409,
                 detail={"code": exc.code, "model": model_name},
+            ) from exc
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=400,
+                detail={
+                    "code": "invalid_load_request",
+                    "model": model_name,
+                    "message": str(exc),
+                },
             ) from exc
         except RuntimeError as exc:
             raise HTTPException(

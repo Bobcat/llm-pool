@@ -129,15 +129,34 @@ Suggested response shape:
       "last_error": null,
       "vram_estimate_mib": 57200,
       "vram_estimate_source": "model_artifact_size",
+      "load_constraints": {
+        "gguf_n_ctx": {
+          "kind": "integer",
+          "minimum": 1,
+          "step": 1
+        },
+        "gguf_type_k": {
+          "kind": "string_or_null",
+          "format": "ggml_type_name",
+          "examples": ["f16", "q8_0", "q4_0"]
+        },
+        "gguf_type_v": {
+          "kind": "string_or_null",
+          "format": "ggml_type_name",
+          "examples": ["f16", "q8_0", "q4_0"]
+        }
+      },
+      "load_override": {},
       "definition": {
         "model_path": "/home/gunnar/models/google_gemma-4-E2B-it-Q8_0/google_gemma-4-E2B-it-Q8_0.gguf",
         "backend": "gguf",
-        "device": "cuda",
         "prompt_format": "gemma4_template",
         "enabled": true,
         "gguf_n_gpu_layers": -1,
         "gguf_n_ctx": 4096,
-        "gguf_flash_attn": false
+        "gguf_flash_attn": false,
+        "gguf_type_k": null,
+        "gguf_type_v": null
       }
     }
   ]
@@ -150,7 +169,118 @@ Notes:
 - `runtime_state` reports the live process state
 - `vram_estimate_mib` is an approximate per-model VRAM estimate
 - `vram_estimate_source` is either `observed_load_delta`, `model_artifact_size`, or `unavailable`
-- `definition` should mirror the merged config as closely as practical
+- `load_constraints` describes backend-specific live-load fields for UI controls
+- `load_override` reports the runtime-only override currently active on a loaded model
+- `definition` contains common model fields plus only the fields relevant to the resolved backend
+
+#### UI-Facing `load_constraints`
+
+For UI work, `load_constraints` is the source of truth for which live-load controls should be shown for a model.
+
+Rules:
+
+- if a field is absent from `load_constraints`, the UI should treat that field as unsupported for that model
+- for `kind: "integer"`, the UI should use `minimum` and `step` directly for numeric inputs or sliders
+- for `kind: "string_or_null"`, the UI should use a text input or a constrained select if the frontend chooses to offer known values
+- `load_constraints` is derived from the resolved backend, not from whether the model is currently loaded or unloaded
+
+#### Effective Loaded Values
+
+For UI state, `definition` and `load_override` should be interpreted together:
+
+- `definition` is the configured value from merged config
+- `load_override` is a runtime-only sparse patch
+- the effective loaded value is computed by applying `load_override` over `definition`
+- key presence in `load_override` matters, even when the value is `null`
+
+This means the UI should not use truthiness to merge values.
+
+Correct merge rule:
+
+```text
+if key exists in load_override:
+  effective_value = load_override[key]
+else:
+  effective_value = definition[key]
+```
+
+This matters in particular for `exllama_cache_quant`.
+
+Example:
+
+```json
+{
+  "load_override": {
+    "exllama_cache_quant": null
+  },
+  "definition": {
+    "exllama_cache_quant": "8,8"
+  }
+}
+```
+
+In this case, the effective loaded value is `null`.
+
+For ExLlamaV3, the UI may interpret the effective quant value as:
+
+- field absent in `load_override` and absent or `null` in `definition`: fp16
+- effective value `null`: fp16
+- effective value `"8"`: `k=8`, `v=8`
+- effective value `"8,4"`: `k=8`, `v=4`
+
+The API does not currently return separate `k_bits` and `v_bits` fields.
+The UI should parse `exllama_cache_quant` itself when it wants to display separate K/V values.
+
+Current shapes:
+
+GGUF:
+
+```json
+{
+  "gguf_n_ctx": {
+    "kind": "integer",
+    "minimum": 1,
+    "step": 1
+  },
+  "gguf_type_k": {
+    "kind": "string_or_null",
+    "format": "ggml_type_name",
+    "examples": ["f16", "q8_0", "q4_0"]
+  },
+  "gguf_type_v": {
+    "kind": "string_or_null",
+    "format": "ggml_type_name",
+    "examples": ["f16", "q8_0", "q4_0"]
+  }
+}
+```
+
+ExLlamaV3:
+
+```json
+{
+  "exllama_cache_size": {
+    "kind": "integer",
+    "minimum": 256,
+    "step": 256
+  },
+  "exllama_max_rq_tokens": {
+    "kind": "integer",
+    "minimum": 1,
+    "step": 1
+  },
+  "exllama_cache_quant": {
+    "kind": "string_or_null",
+    "format": "<bits>|<k_bits>,<v_bits>"
+  }
+}
+```
+
+CT2 and stub:
+
+```json
+{}
+```
 
 ### `GET /v1/admin/gpu-memory`
 
@@ -206,6 +336,81 @@ Rules:
 - transition `unloaded -> loading -> loaded`
 - transition `failed -> loading -> loaded`
 - if load fails, transition to `failed` and retain `last_error`
+- an optional request body may provide temporary backend-specific load overrides for this one live load
+
+Supported load override fields:
+
+- GGUF: `gguf_n_ctx`, `gguf_type_k`, `gguf_type_v`
+- ExLlamaV3: `exllama_cache_size`, `exllama_cache_quant`, `exllama_max_rq_tokens`
+
+Example load bodies:
+
+```json
+{
+  "gguf_n_ctx": 8192
+}
+```
+
+```json
+{
+  "gguf_n_ctx": 16384
+}
+```
+
+```json
+{
+  "gguf_n_ctx": 32768
+}
+```
+
+```json
+{
+  "gguf_n_ctx": 32768,
+  "gguf_type_k": "q8_0",
+  "gguf_type_v": "q4_0"
+}
+```
+
+```json
+{
+  "exllama_cache_size": 32768,
+  "exllama_cache_quant": null,
+  "exllama_max_rq_tokens": 32768
+}
+```
+
+```json
+{
+  "exllama_cache_size": 32768,
+  "exllama_cache_quant": "8,8",
+  "exllama_max_rq_tokens": 32768
+}
+```
+
+```json
+{
+  "exllama_cache_size": 32768,
+  "exllama_cache_quant": "8,4",
+  "exllama_max_rq_tokens": 32768
+}
+```
+
+`exllama_cache_quant` format:
+
+- omitted or `null`: fp16 KV cache
+- `"<bits>"`: same quantization for K and V, for example `"8"`
+- `"<k_bits>,<v_bits>"`: separate K/V quantization, for example `"8,4"`
+
+`gguf_type_k` and `gguf_type_v` format:
+
+- omitted or `null`: use the runtime default cache type
+- `"<ggml_type_name>"`: a GGML cache type name, for example `"f16"`, `"q8_0"`, or `"q4_0"`
+
+These overrides are runtime-only:
+
+- they do not modify `settings.json`
+- they do not modify `local.json`
+- they should be surfaced separately from the configured definition in admin responses
 
 Suggested response shape:
 
@@ -220,12 +425,38 @@ Suggested response shape:
   "last_error": null,
   "vram_estimate_mib": 12340,
   "vram_estimate_source": "observed_load_delta",
+  "load_constraints": {
+    "gguf_n_ctx": {
+      "kind": "integer",
+      "minimum": 1,
+      "step": 1
+    },
+    "gguf_type_k": {
+      "kind": "string_or_null",
+      "format": "ggml_type_name",
+      "examples": ["f16", "q8_0", "q4_0"]
+    },
+    "gguf_type_v": {
+      "kind": "string_or_null",
+      "format": "ggml_type_name",
+      "examples": ["f16", "q8_0", "q4_0"]
+    }
+  },
+  "load_override": {
+    "gguf_n_ctx": 32768,
+    "gguf_type_k": "q8_0",
+    "gguf_type_v": "q4_0"
+  },
   "definition": {
     "model_path": "/home/gunnar/models/google_gemma-4-E2B-it-Q8_0/google_gemma-4-E2B-it-Q8_0.gguf",
     "backend": "gguf",
-    "device": "cuda",
     "prompt_format": "gemma4_template",
-    "enabled": false
+    "enabled": false,
+    "gguf_n_gpu_layers": -1,
+    "gguf_n_ctx": 4096,
+    "gguf_flash_attn": false,
+    "gguf_type_k": null,
+    "gguf_type_v": null
   }
 }
 ```
@@ -234,6 +465,23 @@ Notes:
 
 - loading is allowed for configured models even when `configured_enabled` is `false`
 - after a successful load, `vram_estimate_source` may switch to `observed_load_delta` if a GPU delta could be measured during load
+
+Validation behavior:
+
+- `422` means the request body failed schema validation before runtime logic ran
+  Examples:
+  `gguf_n_ctx: 0`
+  `exllama_cache_size: 0`
+  `exllama_max_rq_tokens: 0`
+- `400` with `code: "invalid_load_request"` means the body was structurally valid, but the values were invalid for the resolved backend or runtime rules
+  Examples:
+  `gguf_type_k: "q8-0"`
+  `gguf_type_k: "foo"`
+  `exllama_cache_size: 8000`
+  `exllama_cache_quant: "fp16"`
+  sending ExLlamaV3-only fields to a GGUF model
+  sending load overrides while the model is already loaded and not first unloading it
+- `409` still applies for runtime state conflicts such as loading or unloading transitions
 
 ### `POST /v1/admin/models/{model_name}/unload`
 
@@ -344,6 +592,4 @@ This v1 note does not define:
 - writes back to config files
 - force unload
 - active GPU job cancellation
-- disk-backed queues
-- scheduler fairness policy
 - retry policy for failed model loads

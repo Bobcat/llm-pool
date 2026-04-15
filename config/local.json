@@ -14,6 +14,7 @@
                 "device": "cuda",
                 "prompt_format": "gemma4_template",
                 "enable_thinking": false,
+                "exllama_cache_size": 16384,
                 "enabled": false
             },
             "gemma-4-31b-it-exl3-5.00bpw": {
@@ -30,8 +31,39 @@
                 "device": "cuda",
                 "prompt_format": "gemma4_template",
                 "enable_thinking": false,
+                "gguf_n_ctx": 16384,
                 "gguf_flash_attn": false,
                 "enabled": true
+            },
+            "google_gemma-4-E2B-it-Q6_K-gguf": {
+                "model_path": "/home/gunnar/models/google_gemma-4-E2B-it-Q6_K/google_gemma-4-E2B-it-Q6_K.gguf",
+                "backend": "gguf",
+                "device": "cuda",
+                "prompt_format": "gemma4_template",
+                "enable_thinking": false,
+                "gguf_n_ctx": 16384,
+                "gguf_flash_attn": false,
+                "enabled": false
+            },
+            "google_gemma-4-E2B-it-Q5_K_M-gguf": {
+                "model_path": "/home/gunnar/models/google_gemma-4-E2B-it-Q5_K_M/google_gemma-4-E2B-it-Q5_K_M.gguf",
+                "backend": "gguf",
+                "device": "cuda",
+                "prompt_format": "gemma4_template",
+                "enable_thinking": false,
+                "gguf_n_ctx": 16384,
+                "gguf_flash_attn": false,
+                "enabled": false
+            },
+            "google_gemma-4-E2B-it-Q4_K_M-gguf": {
+                "model_path": "/home/gunnar/models/google_gemma-4-E2B-it-Q4_K_M/google_gemma-4-E2B-it-Q4_K_M.gguf",
+                "backend": "gguf",
+                "device": "cuda",
+                "prompt_format": "gemma4_template",
+                "enable_thinking": false,
+                "gguf_n_ctx": 16384,
+                "gguf_flash_attn": false,
+                "enabled": false
             },
             "google_gemma-4-E4B-it-Q8_0-gguf": {
                 "model_path": "/home/gunnar/models/google_gemma-4-E4B-it-Q8_0/google_gemma-4-E4B-it-Q8_0.gguf",
@@ -39,8 +71,49 @@
                 "device": "cuda",
                 "prompt_format": "gemma4_template",
                 "enable_thinking": false,
+                "gguf_n_ctx": 16384,
                 "gguf_flash_attn": false,
                 "enabled": true
+            },
+            "google_gemma-4-E4B-it-Q6_K-gguf": {
+                "model_path": "/home/gunnar/models/google_gemma-4-E4B-it-Q6_K/google_gemma-4-E4B-it-Q6_K.gguf",
+                "backend": "gguf",
+                "device": "cuda",
+                "prompt_format": "gemma4_template",
+                "enable_thinking": false,
+                "gguf_n_ctx": 16384,
+                "gguf_flash_attn": false,
+                "enabled": false
+            },
+            "google_gemma-4-E4B-it-Q5_K_M-gguf": {
+                "model_path": "/home/gunnar/models/google_gemma-4-E4B-it-Q5_K_M/google_gemma-4-E4B-it-Q5_K_M.gguf",
+                "backend": "gguf",
+                "device": "cuda",
+                "prompt_format": "gemma4_template",
+                "enable_thinking": false,
+                "gguf_n_ctx": 16384,
+                "gguf_flash_attn": false,
+                "enabled": false
+            },
+            "google_gemma-4-E4B-it-Q4_K_M-gguf": {
+                "model_path": "/home/gunnar/models/google_gemma-4-E4B-it-Q4_K_M/google_gemma-4-E4B-it-Q4_K_M.gguf",
+                "backend": "gguf",
+                "device": "cuda",
+                "prompt_format": "gemma4_template",
+                "enable_thinking": false,
+                "gguf_n_ctx": 16384,
+                "gguf_flash_attn": false,
+                "enabled": false
+            },
+            "google_gemma-4-26B-A4B-it-Q4_K_M-gguf": {
+                "model_path": "/home/gunnar/models/google_gemma-4-26B-A4B-it-Q4_K_M/google_gemma-4-26B-A4B-it-Q4_K_M.gguf",
+                "backend": "gguf",
+                "device": "cuda",
+                "prompt_format": "gemma4_template",
+                "enable_thinking": false,
+                "gguf_n_ctx": 16384,
+                "gguf_flash_attn": false,
+                "enabled": false
             },
             "google_gemma-4-31B-it-gguf": {
                 "model_path": "/home/gunnar/models/gemma-4-31B-it-Q6_K_L/google_gemma-4-31B-it-Q6_K_L.gguf",
@@ -49,7 +122,7 @@
                 "prompt_format": "gemma4_template",
                 "enable_thinking": false,
                 "gguf_flash_attn": false,
-                "enabled": true
+                "enabled": false
             },
             "eurollm-22b-instruct-2512-gguf": {
                 "model_path": "/home/gunnar/models/EuroLLM-22B-Instruct-2512-Q6_K/utter-project_EuroLLM-22B-Instruct-2512-Q6_K.gguf",

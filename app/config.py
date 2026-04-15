@@ -39,6 +39,8 @@ class ModelSettings:
     gguf_n_gpu_layers: int = -1
     gguf_n_ctx: int = 4096
     gguf_flash_attn: bool = True
+    gguf_type_k: str | None = None
+    gguf_type_v: str | None = None
 
 
 @dataclass(frozen=True)
@@ -121,6 +123,18 @@ def load_settings(path: str | Path | None = None) -> AppSettings:
         max_rq_tokens = None
         if max_rq_tokens_value not in (None, ""):
             max_rq_tokens = int(max_rq_tokens_value)
+        gguf_type_k_value = model_payload.get("gguf_type_k")
+        gguf_type_k = None
+        if gguf_type_k_value is not None:
+            parsed_gguf_type_k = str(gguf_type_k_value).strip()
+            if parsed_gguf_type_k:
+                gguf_type_k = parsed_gguf_type_k
+        gguf_type_v_value = model_payload.get("gguf_type_v")
+        gguf_type_v = None
+        if gguf_type_v_value is not None:
+            parsed_gguf_type_v = str(gguf_type_v_value).strip()
+            if parsed_gguf_type_v:
+                gguf_type_v = parsed_gguf_type_v
         models[str(model_name)] = ModelSettings(
             model_path=model_path,
             backend=backend,
@@ -145,6 +159,8 @@ def load_settings(path: str | Path | None = None) -> AppSettings:
             gguf_n_gpu_layers=int(model_payload.get("gguf_n_gpu_layers", -1)),
             gguf_n_ctx=int(model_payload.get("gguf_n_ctx", 4096)),
             gguf_flash_attn=bool(model_payload.get("gguf_flash_attn", True)),
+            gguf_type_k=gguf_type_k,
+            gguf_type_v=gguf_type_v,
         )
 
     return AppSettings(

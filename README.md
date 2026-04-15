@@ -27,7 +27,7 @@ Current scope:
 `GET /v1/admin/models`
 
 - returns all configured models plus their live runtime state.
-- includes fields such as `configured_enabled`, `runtime_state`, `inflight_requests`, `last_error`, and the resolved model definition.
+- includes fields such as `configured_enabled`, `runtime_state`, `inflight_requests`, `last_error`, `load_constraints`, and the resolved model definition.
 
 `GET /v1/admin/gpu-memory`
 
@@ -36,7 +36,60 @@ Current scope:
 `POST /v1/admin/models/{model_name}/load`
 
 - live-loads one configured model without modifying `settings.json` or `local.json`.
+- accepts an optional request body with temporary backend-specific load overrides such as `gguf_n_ctx`, `gguf_type_k`, `gguf_type_v`, `exllama_cache_size`, `exllama_cache_quant`, and `exllama_max_rq_tokens`.
 - returns `404` for an unknown model, `409` if the model is currently unloading, and `500` if the load attempt fails.
+
+Example load bodies:
+
+```json
+{
+  "gguf_n_ctx": 8192
+}
+```
+
+```json
+{
+  "gguf_n_ctx": 16384
+}
+```
+
+```json
+{
+  "gguf_n_ctx": 32768
+}
+```
+
+```json
+{
+  "gguf_n_ctx": 32768,
+  "gguf_type_k": "q8_0",
+  "gguf_type_v": "q4_0"
+}
+```
+
+```json
+{
+  "exllama_cache_size": 32768,
+  "exllama_cache_quant": null,
+  "exllama_max_rq_tokens": 32768
+}
+```
+
+```json
+{
+  "exllama_cache_size": 32768,
+  "exllama_cache_quant": "8,8",
+  "exllama_max_rq_tokens": 32768
+}
+```
+
+```json
+{
+  "exllama_cache_size": 32768,
+  "exllama_cache_quant": "8,4",
+  "exllama_max_rq_tokens": 32768
+}
+```
 
 `POST /v1/admin/models/{model_name}/unload`
 
@@ -154,7 +207,9 @@ Per model, you can set `model_path`, `device`, `compute_type`, `prompt_format`, 
         "enabled": true,
         "gguf_n_gpu_layers": -1,
         "gguf_n_ctx": 4096,
-        "gguf_flash_attn": false
+        "gguf_flash_attn": false,
+        "gguf_type_k": "q8_0",
+        "gguf_type_v": "q4_0"
       }
     }
   }
@@ -168,7 +223,10 @@ Notes:
 - `enable_thinking` is an optional per-model template setting for formats that expose a thinking toggle.
 - Request-level decoding values override `engine.decoding` defaults when provided.
 - ExLlamaV3 models also support `exllama_tp_backend`, `exllama_max_batch_size`, `exllama_max_chunk_size`, `exllama_max_q_size`, and `exllama_max_rq_tokens`.
-- GGUF models also support `gguf_n_gpu_layers`, `gguf_n_ctx`, and `gguf_flash_attn`.
+- GGUF models also support `gguf_n_gpu_layers`, `gguf_n_ctx`, `gguf_flash_attn`, `gguf_type_k`, and `gguf_type_v`.
+- When loading through the admin API, you may temporarily override `gguf_n_ctx`, `gguf_type_k`, and `gguf_type_v` for GGUF or `exllama_cache_size`, `exllama_cache_quant`, and `exllama_max_rq_tokens` for ExLlamaV3 without modifying config files.
+- `gguf_type_k` and `gguf_type_v` accept `null` or a GGML type name such as `"f16"`, `"q8_0"`, or `"q4_0"`.
+- `exllama_cache_quant` accepts `null`, `"<bits>"`, or `"<k_bits>,<v_bits>"`, for example `null`, `"8"`, `"8,8"`, or `"8,4"`.
 - ExLlamaV3 dependencies are loaded lazily and required only when an ExLlamaV3 model is configured.
 - GGUF dependencies are loaded lazily and required only when a GGUF model is configured.
 
