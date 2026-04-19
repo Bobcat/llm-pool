@@ -1,121 +1,38 @@
 # llm-pool
 
-FastAPI service for local LLM inference behind one generic `POST /v1/responses` contract.
+FastAPI service for local LLM inference with one `POST /v1/responses` inference API across CT2, ExLlamaV3, and GGUF/`llama.cpp` backends, plus admin endpoints for loading, unloading, and inspecting models at runtime.
 
-Current scope:
-- generic request schema with per-request instructions and decoding params
-- JSON response mode
-- SSE streaming mode
-- `GET /v1/models` endpoint for loaded model discovery
-- admin endpoints for runtime inspection and live model load/unload
-- per-request runtime metrics in the response
-- CT2, ExLlamaV3, and GGUF/`llama.cpp` engines behind the same API contract
-- per-model backend routing inside one llm-pool instance
-- includes model serving and routing; queue/scheduler and runtime-isolation work is tracked in the design notes below
+## Overview
 
-## Endpoints
+- one inference API for CT2, ExLlamaV3, and GGUF/`llama.cpp` backends
+- JSON responses and SSE streaming from the same endpoint
+- runtime metrics included in inference responses
+- admin endpoints for model state inspection and live load/unload
+- per-model backend routing inside one `llm-pool` instance
+- scheduler/runtime-isolation work is intentionally tracked in the design notes below, not implemented in the main service yet
 
-`POST /v1/responses`
+## HTTP API
 
-- `stream: false` returns a JSON response envelope.
-- `stream: true` returns SSE events: `response.created`, `response.output_text.delta`, `response.metrics`, `response.completed`.
+| Endpoint | Purpose |
+| --- | --- |
+| `POST /v1/responses` | Run inference. `stream: false` returns one JSON response; `stream: true` returns Server-Sent Events (SSE). |
+| `GET /v1/models` | List currently loaded models. |
+| `GET /v1/admin/models` | List configured models plus current model state and load options. |
+| `GET /v1/admin/gpu-memory` | Return current GPU memory usage plus per-model VRAM estimates. |
+| `POST /v1/admin/models/{model_name}/load` | Load one configured model at runtime with optional runtime-only backend-specific overrides. |
+| `POST /v1/admin/models/{model_name}/unload` | Gracefully unload one loaded model. |
 
-`GET /v1/models`
+See [runtime-admin-api.md](docs/runtime-admin-api.md) for the full admin API.
 
-- returns the currently loaded models.
-
-`GET /v1/admin/models`
-
-- returns all configured models plus their live runtime state.
-- includes fields such as `configured_enabled`, `runtime_state`, `inflight_requests`, `last_error`, `load_constraints`, `load_recommendations`, and the resolved model definition.
-
-`GET /v1/admin/gpu-memory`
-
-- returns current GPU memory usage from `nvidia-smi` plus per-model VRAM estimates.
-
-`POST /v1/admin/models/{model_name}/load`
-
-- live-loads one configured model without modifying `settings.json` or `local.json`.
-- accepts an optional request body with temporary backend-specific load overrides such as `gguf_n_ctx`, `gguf_type_k`, `gguf_type_v`, `exllama_cache_size`, `exllama_cache_quant`, `exllama_cache_k_bits`, `exllama_cache_v_bits`, and `exllama_max_rq_tokens`.
-- returns `404` for an unknown model, `409` if the model is currently unloading, and `500` if the load attempt fails.
-
-Example load bodies:
-
-```json
-{
-  "gguf_n_ctx": 8192
-}
-```
-
-```json
-{
-  "gguf_n_ctx": 16384
-}
-```
-
-```json
-{
-  "gguf_n_ctx": 32768
-}
-```
-
-```json
-{
-  "gguf_n_ctx": 32768,
-  "gguf_flash_attn": "auto",
-  "gguf_type_k": "q8_0",
-  "gguf_type_v": "q4_0"
-}
-```
-
-```json
-{
-  "exllama_cache_size": 32768,
-  "exllama_cache_quant": null,
-  "exllama_max_rq_tokens": 32768
-}
-```
-
-```json
-{
-  "exllama_cache_size": 32768,
-  "exllama_cache_quant": "8,8",
-  "exllama_max_rq_tokens": 32768
-}
-```
-
-```json
-{
-  "exllama_cache_size": 32768,
-  "exllama_cache_quant": "8,4",
-  "exllama_max_rq_tokens": 32768
-}
-```
-
-```json
-{
-  "exllama_cache_size": 32768,
-  "exllama_cache_k_bits": 8,
-  "exllama_cache_v_bits": 4,
-  "exllama_max_rq_tokens": 32768
-}
-```
-
-`POST /v1/admin/models/{model_name}/unload`
-
-- gracefully unloads one configured model at runtime.
-- new inference requests are rejected once unloading starts, and in-flight requests are allowed to finish before cleanup.
-- returns `404` for an unknown model and `409` if the model is currently loading.
-
-The original design note for this control plane is in [runtime-admin-api.md](docs/runtime-admin-api.md).
+## Inference Example
 
 Example request:
 
 ```json
 {
-  "model": "eurollm-9b-ct2-int8",
-  "input": "Hello world",
-  "instructions": "Translate to Dutch.",
+  "model": "google_gemma-4-26B-A4B-it-Q4_K_M-gguf",
+  "input": "The weather is pleasant today, and I would like to take a walk in the park after lunch.",
+  "instructions": "Translate to Dutch. Return only the translation.",
   "stream": false,
   "decoding": {
     "beam_size": 1,
@@ -134,25 +51,30 @@ Example response:
 {
   "id": "resp_123",
   "object": "response",
-  "model": "eurollm-9b-ct2-int8",
+  "model": "google_gemma-4-26B-A4B-it-Q4_K_M-gguf",
   "output": [
     {
       "type": "output_text",
-      "text": "Hallo wereld"
+      "text": "Het weer is aangenaam vandaag en ik zou na de lunch graag een wandeling in het park willen maken."
     }
   ],
-  "output_text": "Hallo wereld",
+  "output_text": "Het weer is aangenaam vandaag en ik zou na de lunch graag een wandeling in het park willen maken.",
   "metrics": {
-    "engine_tokenize_ms": 2.7,
-    "gpu_time_to_first_token_ms": 38.1,
-    "gpu_generate_total_ms": 144.5,
-    "gpu_decode_after_first_token_ms": 106.4,
-    "engine_prompt_tokens": 22,
-    "engine_output_tokens": 5,
-    "engine_tokens_per_second": 34.6
+    "engine_tokenize_ms": null,
+    "gpu_time_to_first_token_ms": null,
+    "gpu_generate_total_ms": 138.4,
+    "gpu_decode_after_first_token_ms": null,
+    "engine_prompt_tokens": 47,
+    "engine_output_tokens": 23,
+    "engine_tokens_per_second": 166.2
   }
 }
 ```
+
+`POST /v1/responses` supports:
+
+- `stream: false` for one JSON response envelope
+- `stream: true` for SSE events: `response.created`, `response.output_text.delta`, `response.metrics`, `response.completed`
 
 ## Request Fields
 
@@ -161,8 +83,8 @@ Currently supported API request fields:
 | Field | Type | Required | Default if omitted | Notes |
 | --- | --- | --- | --- | --- |
 | `model` | `string` | yes | none | Must match a currently loaded configured model. |
-| `input` | `string` | yes | none | Main user input text. |
-| `instructions` | `string \| null` | no | `null` | If omitted, the pool falls back to an internal default instruction prompt. |
+| `input` | `string` | yes | none | Main user input text. Roughly the user-prompt field. |
+| `instructions` | `string \| null` | no | `null` | Optional high-level guidance. Roughly the system-prompt field. If omitted, the pool falls back to an internal default instruction prompt. |
 | `stream` | `boolean` | no | `false` | `false` returns one JSON response; `true` returns SSE events. |
 | `decoding` | `object` | no | `{}` | Omitted subfields fall back to `engine.decoding` server defaults. |
 
@@ -190,13 +112,8 @@ Per model, you can set `model_path`, `device`, `compute_type`, `prompt_format`, 
 ```json
 {
   "engine": {
-    "backend": "ct2",
+    "backend": "gguf",
     "models": {
-      "eurollm-9b-ct2-int8": {
-        "model_path": "/models/eurollm-ct2",
-        "backend": "ct2",
-        "enabled": true
-      },
       "gemma-4-26B-A4B-it-exl3-5.10bpw": {
         "model_path": "/home/gunnar/models/gemma-4-26B-A4B-it-exl3-5.10bpw",
         "backend": "exllamav3",
@@ -208,8 +125,8 @@ Per model, you can set `model_path`, `device`, `compute_type`, `prompt_format`, 
         "exllama_tensor_parallel": true,
         "exllama_gpu_split": "24,24"
       },
-      "google_gemma-4-E2B-it-Q8_0-gguf": {
-        "model_path": "/home/gunnar/models/google_gemma-4-E2B-it-Q8_0/google_gemma-4-E2B-it-Q8_0.gguf",
+      "google_gemma-4-26B-A4B-it-Q4_K_M-gguf": {
+        "model_path": "/home/gunnar/models/google_gemma-4-26B-A4B-it-Q4_K_M/google_gemma-4-26B-A4B-it-Q4_K_M.gguf",
         "backend": "gguf",
         "device": "cuda",
         "prompt_format": "gemma4_template",
@@ -234,14 +151,8 @@ Notes:
 - Request-level decoding values override `engine.decoding` defaults when provided.
 - ExLlamaV3 models also support `exllama_tp_backend`, `exllama_max_batch_size`, `exllama_max_chunk_size`, `exllama_max_q_size`, and `exllama_max_rq_tokens`.
 - GGUF models also support `gguf_n_gpu_layers`, `gguf_n_ctx`, `gguf_flash_attn`, `gguf_type_k`, and `gguf_type_v`.
-- When loading through the admin API, you may temporarily override `gguf_n_ctx`, `gguf_flash_attn`, `gguf_type_k`, and `gguf_type_v` for GGUF or `exllama_cache_size`, `exllama_cache_quant`, `exllama_cache_k_bits`, `exllama_cache_v_bits`, and `exllama_max_rq_tokens` for ExLlamaV3 without modifying config files.
-- `gguf_flash_attn` accepts `"on"`, `"off"`, or `"auto"`.
-- `gguf_type_k` and `gguf_type_v` accept `null` or a GGML type name such as `"f16"`, `"q8_0"`, or `"q4_0"`.
-- `GET /v1/admin/models` reports the concrete GGUF runtime default via `load_constraints.gguf_type_k.default` and `load_constraints.gguf_type_v.default`, currently `"f16"`.
-- `GET /v1/admin/models` also reports service-curated K/V presets via `load_recommendations`, for example conservative symmetric GGUF pairs and common ExLlamaV3 cache-bit pairs.
-- `GET /v1/admin/models` also reports the supported GGUF K/V cache type choices and the supported ExLlamaV3 `k_bits`/`v_bits` choices via `load_constraints`.
-- `exllama_cache_quant` accepts `null`, `"<bits>"`, or `"<k_bits>,<v_bits>"`, for example `null`, `"8"`, `"8,8"`, or `"8,4"`.
-- ExLlamaV3 load requests may also use `exllama_cache_k_bits` and `exllama_cache_v_bits` with integer values from `2` through `8`; these two fields must be sent together and cannot be combined with `exllama_cache_quant`.
+- The admin API may temporarily override backend-specific load settings at runtime without modifying `settings.json` or `local.json`.
+- The exact load override fields, allowed values, defaults, and recommended presets are documented in [runtime-admin-api.md](docs/runtime-admin-api.md).
 - ExLlamaV3 dependencies are loaded lazily and required only when an ExLlamaV3 model is configured.
 - GGUF dependencies are loaded lazily and required only when a GGUF model is configured.
 
