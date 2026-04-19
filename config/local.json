@@ -32,7 +32,7 @@
                 "prompt_format": "gemma4_template",
                 "enable_thinking": false,
                 "gguf_n_ctx": 16384,
-                "gguf_flash_attn": false,
+                "gguf_flash_attn": "auto",
                 "enabled": true
             },
             "google_gemma-4-E2B-it-Q6_K-gguf": {
@@ -42,7 +42,7 @@
                 "prompt_format": "gemma4_template",
                 "enable_thinking": false,
                 "gguf_n_ctx": 16384,
-                "gguf_flash_attn": false,
+                "gguf_flash_attn": "auto",
                 "enabled": false
             },
             "google_gemma-4-E2B-it-Q5_K_M-gguf": {
@@ -52,7 +52,7 @@
                 "prompt_format": "gemma4_template",
                 "enable_thinking": false,
                 "gguf_n_ctx": 16384,
-                "gguf_flash_attn": false,
+                "gguf_flash_attn": "auto",
                 "enabled": false
             },
             "google_gemma-4-E2B-it-Q4_K_M-gguf": {
@@ -62,7 +62,7 @@
                 "prompt_format": "gemma4_template",
                 "enable_thinking": false,
                 "gguf_n_ctx": 16384,
-                "gguf_flash_attn": false,
+                "gguf_flash_attn": "auto",
                 "enabled": false
             },
             "google_gemma-4-E4B-it-Q8_0-gguf": {
@@ -72,7 +72,7 @@
                 "prompt_format": "gemma4_template",
                 "enable_thinking": false,
                 "gguf_n_ctx": 16384,
-                "gguf_flash_attn": false,
+                "gguf_flash_attn": "auto",
                 "enabled": true
             },
             "google_gemma-4-E4B-it-Q6_K-gguf": {
@@ -82,7 +82,7 @@
                 "prompt_format": "gemma4_template",
                 "enable_thinking": false,
                 "gguf_n_ctx": 16384,
-                "gguf_flash_attn": false,
+                "gguf_flash_attn": "auto",
                 "enabled": false
             },
             "google_gemma-4-E4B-it-Q5_K_M-gguf": {
@@ -92,7 +92,7 @@
                 "prompt_format": "gemma4_template",
                 "enable_thinking": false,
                 "gguf_n_ctx": 16384,
-                "gguf_flash_attn": false,
+                "gguf_flash_attn": "auto",
                 "enabled": false
             },
             "google_gemma-4-E4B-it-Q4_K_M-gguf": {
@@ -102,7 +102,7 @@
                 "prompt_format": "gemma4_template",
                 "enable_thinking": false,
                 "gguf_n_ctx": 16384,
-                "gguf_flash_attn": false,
+                "gguf_flash_attn": "auto",
                 "enabled": false
             },
             "google_gemma-4-26B-A4B-it-Q4_K_M-gguf": {
@@ -112,7 +112,7 @@
                 "prompt_format": "gemma4_template",
                 "enable_thinking": false,
                 "gguf_n_ctx": 16384,
-                "gguf_flash_attn": false,
+                "gguf_flash_attn": "auto",
                 "enabled": false
             },
             "google_gemma-4-31B-it-gguf": {
@@ -121,7 +121,7 @@
                 "device": "cuda",
                 "prompt_format": "gemma4_template",
                 "enable_thinking": false,
-                "gguf_flash_attn": false,
+                "gguf_flash_attn": "auto",
                 "enabled": false
             },
             "eurollm-22b-instruct-2512-gguf": {
@@ -130,6 +130,25 @@
                 "device": "cuda",
                 "prompt_format": "generic",
                 "enable_thinking": false,
+                "gguf_flash_attn": "auto",
+                "enabled": false
+            },
+            "eurollm-22b-instruct-2512-q5-k-m-gguf": {
+                "model_path": "/home/gunnar/models/EuroLLM-22B-Instruct-2512-Q5_K_M/utter-project_EuroLLM-22B-Instruct-2512-Q5_K_M.gguf",
+                "backend": "gguf",
+                "device": "cuda",
+                "prompt_format": "generic",
+                "enable_thinking": false,
+                "gguf_flash_attn": "auto",
+                "enabled": false
+            },
+            "eurollm-9b-instruct-q5-k-m-gguf": {
+                "model_path": "/home/gunnar/models/EuroLLM-9B-Instruct-Q5_K_M/EuroLLM-9B-Instruct-Q5_K_M.gguf",
+                "backend": "gguf",
+                "device": "cuda",
+                "prompt_format": "generic",
+                "enable_thinking": false,
+                "gguf_flash_attn": "auto",
                 "enabled": false
             },
             "ministral-3-3b-instruct-2512-gguf": {
@@ -138,6 +157,7 @@
                 "device": "cuda",
                 "prompt_format": "mistral_template",
                 "enable_thinking": false,
+                "gguf_flash_attn": "auto",
                 "enabled": false
             },
             "mistral-small-3.2-24b-instruct-2506-gguf": {
@@ -146,6 +166,7 @@
                 "device": "cuda",
                 "prompt_format": "mistral_template",
                 "enable_thinking": false,
+                "gguf_flash_attn": "auto",
                 "enabled": false
             },
             "eurollm-22b-instruct-2512-ct2-fp16": {
