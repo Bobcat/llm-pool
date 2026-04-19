@@ -27,7 +27,7 @@ Current scope:
 `GET /v1/admin/models`
 
 - returns all configured models plus their live runtime state.
-- includes fields such as `configured_enabled`, `runtime_state`, `inflight_requests`, `last_error`, `load_constraints`, and the resolved model definition.
+- includes fields such as `configured_enabled`, `runtime_state`, `inflight_requests`, `last_error`, `load_constraints`, `load_recommendations`, and the resolved model definition.
 
 `GET /v1/admin/gpu-memory`
 
@@ -36,7 +36,7 @@ Current scope:
 `POST /v1/admin/models/{model_name}/load`
 
 - live-loads one configured model without modifying `settings.json` or `local.json`.
-- accepts an optional request body with temporary backend-specific load overrides such as `gguf_n_ctx`, `gguf_type_k`, `gguf_type_v`, `exllama_cache_size`, `exllama_cache_quant`, and `exllama_max_rq_tokens`.
+- accepts an optional request body with temporary backend-specific load overrides such as `gguf_n_ctx`, `gguf_type_k`, `gguf_type_v`, `exllama_cache_size`, `exllama_cache_quant`, `exllama_cache_k_bits`, `exllama_cache_v_bits`, and `exllama_max_rq_tokens`.
 - returns `404` for an unknown model, `409` if the model is currently unloading, and `500` if the load attempt fails.
 
 Example load bodies:
@@ -62,6 +62,7 @@ Example load bodies:
 ```json
 {
   "gguf_n_ctx": 32768,
+  "gguf_flash_attn": "auto",
   "gguf_type_k": "q8_0",
   "gguf_type_v": "q4_0"
 }
@@ -87,6 +88,15 @@ Example load bodies:
 {
   "exllama_cache_size": 32768,
   "exllama_cache_quant": "8,4",
+  "exllama_max_rq_tokens": 32768
+}
+```
+
+```json
+{
+  "exllama_cache_size": 32768,
+  "exllama_cache_k_bits": 8,
+  "exllama_cache_v_bits": 4,
   "exllama_max_rq_tokens": 32768
 }
 ```
@@ -207,7 +217,7 @@ Per model, you can set `model_path`, `device`, `compute_type`, `prompt_format`, 
         "enabled": true,
         "gguf_n_gpu_layers": -1,
         "gguf_n_ctx": 4096,
-        "gguf_flash_attn": false,
+        "gguf_flash_attn": "auto",
         "gguf_type_k": "q8_0",
         "gguf_type_v": "q4_0"
       }
@@ -224,9 +234,14 @@ Notes:
 - Request-level decoding values override `engine.decoding` defaults when provided.
 - ExLlamaV3 models also support `exllama_tp_backend`, `exllama_max_batch_size`, `exllama_max_chunk_size`, `exllama_max_q_size`, and `exllama_max_rq_tokens`.
 - GGUF models also support `gguf_n_gpu_layers`, `gguf_n_ctx`, `gguf_flash_attn`, `gguf_type_k`, and `gguf_type_v`.
-- When loading through the admin API, you may temporarily override `gguf_n_ctx`, `gguf_type_k`, and `gguf_type_v` for GGUF or `exllama_cache_size`, `exllama_cache_quant`, and `exllama_max_rq_tokens` for ExLlamaV3 without modifying config files.
+- When loading through the admin API, you may temporarily override `gguf_n_ctx`, `gguf_flash_attn`, `gguf_type_k`, and `gguf_type_v` for GGUF or `exllama_cache_size`, `exllama_cache_quant`, `exllama_cache_k_bits`, `exllama_cache_v_bits`, and `exllama_max_rq_tokens` for ExLlamaV3 without modifying config files.
+- `gguf_flash_attn` accepts `"on"`, `"off"`, or `"auto"`.
 - `gguf_type_k` and `gguf_type_v` accept `null` or a GGML type name such as `"f16"`, `"q8_0"`, or `"q4_0"`.
+- `GET /v1/admin/models` reports the concrete GGUF runtime default via `load_constraints.gguf_type_k.default` and `load_constraints.gguf_type_v.default`, currently `"f16"`.
+- `GET /v1/admin/models` also reports service-curated K/V presets via `load_recommendations`, for example conservative symmetric GGUF pairs and common ExLlamaV3 cache-bit pairs.
+- `GET /v1/admin/models` also reports the supported GGUF K/V cache type choices and the supported ExLlamaV3 `k_bits`/`v_bits` choices via `load_constraints`.
 - `exllama_cache_quant` accepts `null`, `"<bits>"`, or `"<k_bits>,<v_bits>"`, for example `null`, `"8"`, `"8,8"`, or `"8,4"`.
+- ExLlamaV3 load requests may also use `exllama_cache_k_bits` and `exllama_cache_v_bits` with integer values from `2` through `8`; these two fields must be sent together and cannot be combined with `exllama_cache_quant`.
 - ExLlamaV3 dependencies are loaded lazily and required only when an ExLlamaV3 model is configured.
 - GGUF dependencies are loaded lazily and required only when a GGUF model is configured.
 

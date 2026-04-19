@@ -280,7 +280,7 @@ class LlamaCppEngineTests(unittest.TestCase):
             model_path="/models/test.gguf",
             backend="gguf",
             gguf_n_ctx=8192,
-            gguf_flash_attn=False,
+            gguf_flash_attn="off",
             gguf_type_k="q8_0",
             gguf_type_v="q4_0",
         )
@@ -295,6 +295,44 @@ class LlamaCppEngineTests(unittest.TestCase):
         self.assertFalse(captured["flash_attn"])
         self.assertEqual(captured["type_k"], 17)
         self.assertEqual(captured["type_v"], 18)
+
+    def test_build_runtime_maps_auto_flash_attn_to_low_level_auto_constant(self) -> None:
+        captured: dict[str, object] = {}
+
+        class FakeLlama:
+            def __init__(self, **kwargs):
+                captured.update(kwargs)
+                captured["disabled_constant_during_init"] = fake_low_level.LLAMA_FLASH_ATTN_TYPE_DISABLED
+
+        fake_package = types.ModuleType("llama_cpp")
+        fake_low_level = types.ModuleType("llama_cpp.llama_cpp")
+        fake_package.Llama = FakeLlama
+        fake_package.llama_cpp = fake_low_level
+        fake_package.LLAMA_FLASH_ATTN_TYPE_AUTO = -1
+        fake_package.LLAMA_FLASH_ATTN_TYPE_DISABLED = 0
+        fake_low_level.LLAMA_FLASH_ATTN_TYPE_AUTO = -1
+        fake_low_level.LLAMA_FLASH_ATTN_TYPE_DISABLED = 0
+
+        settings = ModelSettings(
+            model_path="/models/test.gguf",
+            backend="gguf",
+            gguf_flash_attn="auto",
+        )
+        engine = llamacpp_module.LlamaCppEngine.__new__(llamacpp_module.LlamaCppEngine)
+
+        with mock.patch.dict(
+            sys.modules,
+            {
+                "llama_cpp": fake_package,
+                "llama_cpp.llama_cpp": fake_low_level,
+            },
+        ):
+            runtime = engine._build_runtime(settings)
+
+        self.assertIs(runtime.llm.__class__, FakeLlama)
+        self.assertFalse(captured["flash_attn"])
+        self.assertEqual(captured["disabled_constant_during_init"], -1)
+        self.assertEqual(fake_low_level.LLAMA_FLASH_ATTN_TYPE_DISABLED, 0)
 
 
 if __name__ == "__main__":

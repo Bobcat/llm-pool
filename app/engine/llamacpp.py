@@ -18,6 +18,8 @@ from .common import _merge_stop_strings
 from .common import _resolve_gguf_cache_type_constant
 from .common import ResolvedDecoding
 
+_LLAMA_CPP_FLASH_ATTN_MODE_LOCK = threading.Lock()
+
 
 @dataclass
 class LlamaCppModelRuntime:
@@ -185,17 +187,92 @@ class LlamaCppEngine:
             from llama_cpp import Llama
         except ImportError as exc:  # pragma: no cover - depends on local environment
             raise RuntimeError("llama-cpp-python is required for the GGUF engine") from exc
+        try:
+            import llama_cpp.llama_cpp as llama_cpp_low_level
+        except ImportError:
+            llama_cpp_low_level = getattr(llama_cpp_module, "llama_cpp", llama_cpp_module)
 
-        llm = Llama(
+        llm = self._build_llama(
+            llama_constructor=Llama,
+            llama_cpp_module=llama_cpp_module,
+            llama_cpp_low_level=llama_cpp_low_level,
             model_path=settings.model_path,
             n_gpu_layers=settings.gguf_n_gpu_layers,
             n_ctx=settings.gguf_n_ctx,
-            flash_attn=settings.gguf_flash_attn,
+            flash_attn_mode=settings.gguf_flash_attn,
             type_k=self._resolve_cache_type_constant(settings.gguf_type_k, llama_cpp_module=llama_cpp_module),
             type_v=self._resolve_cache_type_constant(settings.gguf_type_v, llama_cpp_module=llama_cpp_module),
-            verbose=False,
         )
         return LlamaCppModelRuntime(config=settings, llm=llm)
+
+    def _build_llama(
+        self,
+        *,
+        llama_constructor,
+        llama_cpp_module: object,
+        llama_cpp_low_level: object,
+        model_path: str,
+        n_gpu_layers: int,
+        n_ctx: int,
+        flash_attn_mode: str,
+        type_k,
+        type_v,
+    ):
+        kwargs = {
+            "model_path": model_path,
+            "n_gpu_layers": n_gpu_layers,
+            "n_ctx": n_ctx,
+            "type_k": type_k,
+            "type_v": type_v,
+            "verbose": False,
+        }
+        if flash_attn_mode == "on":
+            return llama_constructor(flash_attn=True, **kwargs)
+        if flash_attn_mode == "off":
+            return llama_constructor(flash_attn=False, **kwargs)
+        if flash_attn_mode == "auto":
+            return self._build_llama_with_auto_flash_attn(
+                llama_constructor=llama_constructor,
+                llama_cpp_module=llama_cpp_module,
+                llama_cpp_low_level=llama_cpp_low_level,
+                **kwargs,
+            )
+        raise ValueError(f"unsupported gguf_flash_attn mode: {flash_attn_mode!r}")
+
+    def _build_llama_with_auto_flash_attn(
+        self,
+        *,
+        llama_constructor,
+        llama_cpp_module: object,
+        llama_cpp_low_level: object,
+        **kwargs,
+    ):
+        auto_constant = getattr(llama_cpp_low_level, "LLAMA_FLASH_ATTN_TYPE_AUTO", None)
+        if auto_constant is None:
+            raise RuntimeError("llama-cpp-python does not expose LLAMA_FLASH_ATTN_TYPE_AUTO")
+
+        namespaces: list[object] = []
+        for namespace in (llama_cpp_low_level, getattr(llama_cpp_module, "llama_cpp", None), llama_cpp_module):
+            if namespace is not None and hasattr(namespace, "LLAMA_FLASH_ATTN_TYPE_DISABLED"):
+                if namespace not in namespaces:
+                    namespaces.append(namespace)
+        if not namespaces:
+            raise RuntimeError("llama-cpp-python does not expose LLAMA_FLASH_ATTN_TYPE_DISABLED")
+
+        originals = {
+            id(namespace): getattr(namespace, "LLAMA_FLASH_ATTN_TYPE_DISABLED")
+            for namespace in namespaces
+        }
+        # The installed llama-cpp-python binding still exposes a bool flash_attn argument,
+        # so set the underlying enum to AUTO for this constructor call only.
+        with _LLAMA_CPP_FLASH_ATTN_MODE_LOCK:
+            try:
+                for namespace in namespaces:
+                    setattr(namespace, "LLAMA_FLASH_ATTN_TYPE_DISABLED", auto_constant)
+                return llama_constructor(flash_attn=False, **kwargs)
+            finally:
+                for namespace in namespaces:
+                    setattr(namespace, "LLAMA_FLASH_ATTN_TYPE_DISABLED", originals[id(namespace)])
 
     def _resolve_cache_type_constant(self, cache_type_name: str | None, *, llama_cpp_module: object):
         if cache_type_name is None:

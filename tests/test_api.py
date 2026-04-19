@@ -136,6 +136,7 @@ class ApiTests(unittest.TestCase):
         self.assertIn("vram_estimate_mib", enabled_model)
         self.assertIn("vram_estimate_source", enabled_model)
         self.assertEqual(enabled_model["load_constraints"], {})
+        self.assertEqual(enabled_model["load_recommendations"], {})
         self.assertEqual(enabled_model["definition"]["model_path"], "/tmp/test-model")
         self.assertTrue(enabled_model["definition"]["enabled"])
         self.assertNotIn("exllama_cache_size", enabled_model["definition"])
@@ -152,6 +153,7 @@ class ApiTests(unittest.TestCase):
         self.assertIn("vram_estimate_mib", disabled_model)
         self.assertIn("vram_estimate_source", disabled_model)
         self.assertEqual(disabled_model["load_constraints"], {})
+        self.assertEqual(disabled_model["load_recommendations"], {})
         self.assertEqual(disabled_model["definition"]["model_path"], "/tmp/disabled-model")
         self.assertFalse(disabled_model["definition"]["enabled"])
         self.assertNotIn("exllama_cache_size", disabled_model["definition"])
@@ -300,24 +302,86 @@ class ApiTests(unittest.TestCase):
                             "vram_estimate_source": "unavailable",
                             "load_constraints": {
                                 "gguf_n_ctx": {"kind": "integer", "minimum": 1, "step": 1},
+                                "gguf_flash_attn": {
+                                    "kind": "enum",
+                                    "default": "auto",
+                                    "allowed_values": ["on", "off", "auto"],
+                                    "examples": ["auto", "on", "off"],
+                                },
                                 "gguf_type_k": {
                                     "kind": "string_or_null",
                                     "format": "ggml_type_name",
+                                    "default": "f16",
+                                    "allowed_values": [
+                                        "f32",
+                                        "f16",
+                                        "bf16",
+                                        "q8_0",
+                                        "q4_0",
+                                        "q4_1",
+                                        "iq4_nl",
+                                        "q5_0",
+                                        "q5_1",
+                                    ],
                                     "examples": ["f16", "q8_0", "q4_0"],
                                 },
                                 "gguf_type_v": {
                                     "kind": "string_or_null",
                                     "format": "ggml_type_name",
+                                    "default": "f16",
+                                    "allowed_values": [
+                                        "f32",
+                                        "f16",
+                                        "bf16",
+                                        "q8_0",
+                                        "q4_0",
+                                        "q4_1",
+                                        "iq4_nl",
+                                        "q5_0",
+                                        "q5_1",
+                                    ],
                                     "examples": ["f16", "q8_0", "q4_0"],
                                 },
                             },
-                            "load_override": {"gguf_n_ctx": 32768, "gguf_type_k": "q8_0", "gguf_type_v": "q4_0"},
+                            "load_recommendations": {
+                                "gguf_cache_type_pairs": {
+                                    "kind": "pair_presets",
+                                    "fields": ["gguf_type_k", "gguf_type_v"],
+                                    "recommended_pairs": [
+                                        {
+                                            "label": "f16/f16",
+                                            "gguf_type_k": "f16",
+                                            "gguf_type_v": "f16",
+                                        },
+                                        {
+                                            "label": "q8_0/q8_0",
+                                            "gguf_type_k": "q8_0",
+                                            "gguf_type_v": "q8_0",
+                                        },
+                                        {
+                                            "label": "q4_0/q4_0",
+                                            "gguf_type_k": "q4_0",
+                                            "gguf_type_v": "q4_0",
+                                        },
+                                    ],
+                                    "notes": [
+                                        "Service-curated presets for GGUF cache types.",
+                                        "Prefer symmetric GGUF K/V pairs by default; asymmetric pairs may reduce or disable GPU offload in upstream llama.cpp.",
+                                    ],
+                                }
+                            },
+                            "load_override": {
+                                "gguf_n_ctx": 32768,
+                                "gguf_flash_attn": "auto",
+                                "gguf_type_k": "q8_0",
+                                "gguf_type_v": "q4_0",
+                            },
                             "definition": {
                                 "model_path": "/tmp/test.gguf",
                                 "backend": "gguf",
                                 "enabled": False,
                                 "gguf_n_ctx": 4096,
-                                "gguf_flash_attn": True,
+                                "gguf_flash_attn": "auto",
                                 "gguf_n_gpu_layers": -1,
                                 "gguf_type_k": None,
                                 "gguf_type_v": None,
@@ -343,17 +407,18 @@ class ApiTests(unittest.TestCase):
         client = TestClient(app)
         response = client.post(
             "/v1/admin/models/gguf-model/load",
-            json={"gguf_n_ctx": 32768, "gguf_type_k": "q8_0", "gguf_type_v": "q4_0"},
+            json={"gguf_n_ctx": 32768, "gguf_flash_attn": "auto", "gguf_type_k": "q8_0", "gguf_type_v": "q4_0"},
         )
 
         self.assertEqual(response.status_code, 200)
         self.assertEqual(captured["model_name"], "gguf-model")
         self.assertEqual(captured["load_request"].gguf_n_ctx, 32768)
+        self.assertEqual(captured["load_request"].gguf_flash_attn, "auto")
         self.assertEqual(captured["load_request"].gguf_type_k, "q8_0")
         self.assertEqual(captured["load_request"].gguf_type_v, "q4_0")
         self.assertEqual(
             response.json()["load_override"],
-            {"gguf_n_ctx": 32768, "gguf_type_k": "q8_0", "gguf_type_v": "q4_0"},
+            {"gguf_n_ctx": 32768, "gguf_flash_attn": "auto", "gguf_type_k": "q8_0", "gguf_type_v": "q4_0"},
         )
 
     def test_load_model_endpoint_rejects_unknown_model(self) -> None:

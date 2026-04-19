@@ -9,6 +9,7 @@ from pathlib import Path
 
 DEFAULT_SETTINGS_PATH = Path(__file__).resolve().parents[1] / "config" / "settings.json"
 DEFAULT_LOCAL_SETTINGS_PATH = Path(__file__).resolve().parents[1] / "config" / "local.json"
+_GGUF_FLASH_ATTN_ALLOWED_VALUES = ("on", "off", "auto")
 
 
 @dataclass(frozen=True)
@@ -38,7 +39,7 @@ class ModelSettings:
     exllama_max_rq_tokens: int | None = None
     gguf_n_gpu_layers: int = -1
     gguf_n_ctx: int = 4096
-    gguf_flash_attn: bool = True
+    gguf_flash_attn: str = "auto"
     gguf_type_k: str | None = None
     gguf_type_v: str | None = None
 
@@ -158,7 +159,7 @@ def load_settings(path: str | Path | None = None) -> AppSettings:
             exllama_max_rq_tokens=max_rq_tokens,
             gguf_n_gpu_layers=int(model_payload.get("gguf_n_gpu_layers", -1)),
             gguf_n_ctx=int(model_payload.get("gguf_n_ctx", 4096)),
-            gguf_flash_attn=bool(model_payload.get("gguf_flash_attn", True)),
+            gguf_flash_attn=_coerce_gguf_flash_attn_mode(model_payload.get("gguf_flash_attn", "auto")),
             gguf_type_k=gguf_type_k,
             gguf_type_v=gguf_type_v,
         )
@@ -223,3 +224,17 @@ def _coerce_stop_tokens(value: object, *, default: list[str]) -> list[str]:
         if tokens:
             return tokens
     return list(default)
+
+
+def _coerce_gguf_flash_attn_mode(value: object, *, default: str = "auto") -> str:
+    if value is None:
+        return default
+    if isinstance(value, bool):
+        return "on" if value else "off"
+    normalized = str(value).strip().lower()
+    if normalized == "":
+        return default
+    if normalized not in _GGUF_FLASH_ATTN_ALLOWED_VALUES:
+        allowed_values = ", ".join(_GGUF_FLASH_ATTN_ALLOWED_VALUES)
+        raise ValueError(f"gguf_flash_attn must be one of: {allowed_values}")
+    return normalized

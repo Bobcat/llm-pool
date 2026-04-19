@@ -9,6 +9,21 @@ import subprocess
 
 LOGGER = logging.getLogger("llm_pool.engine")
 
+_GGUF_CACHE_TYPE_ALLOWED_VALUES = (
+    "f32",
+    "f16",
+    "bf16",
+    "q8_0",
+    "q4_0",
+    "q4_1",
+    "iq4_nl",
+    "q5_0",
+    "q5_1",
+)
+_GGUF_FLASH_ATTN_ALLOWED_VALUES = ("on", "off", "auto")
+
+_EXLLAMA_CACHE_BIT_ALLOWED_VALUES = (2, 3, 4, 5, 6, 7, 8)
+
 _COMMON_MODEL_DEFINITION_FIELDS = (
     "model_path",
     "backend",
@@ -174,14 +189,24 @@ def _load_constraints_for_backend(backend: str) -> dict[str, object]:
                 "minimum": 1,
                 "step": 1,
             },
+            "gguf_flash_attn": {
+                "kind": "enum",
+                "default": "auto",
+                "allowed_values": list(_GGUF_FLASH_ATTN_ALLOWED_VALUES),
+                "examples": ["auto", "on", "off"],
+            },
             "gguf_type_k": {
                 "kind": "string_or_null",
                 "format": "ggml_type_name",
+                "default": "f16",
+                "allowed_values": list(_GGUF_CACHE_TYPE_ALLOWED_VALUES),
                 "examples": ["f16", "q8_0", "q4_0"],
             },
             "gguf_type_v": {
                 "kind": "string_or_null",
                 "format": "ggml_type_name",
+                "default": "f16",
+                "allowed_values": list(_GGUF_CACHE_TYPE_ALLOWED_VALUES),
                 "examples": ["f16", "q8_0", "q4_0"],
             },
         }
@@ -197,10 +222,87 @@ def _load_constraints_for_backend(backend: str) -> dict[str, object]:
                 "minimum": 1,
                 "step": 1,
             },
+            "exllama_cache_k_bits": {
+                "kind": "integer_or_null",
+                "minimum": 2,
+                "maximum": 8,
+                "default": None,
+                "null_means": "fp16",
+                "allowed_values": list(_EXLLAMA_CACHE_BIT_ALLOWED_VALUES),
+            },
+            "exllama_cache_v_bits": {
+                "kind": "integer_or_null",
+                "minimum": 2,
+                "maximum": 8,
+                "default": None,
+                "null_means": "fp16",
+                "allowed_values": list(_EXLLAMA_CACHE_BIT_ALLOWED_VALUES),
+            },
             "exllama_cache_quant": {
                 "kind": "string_or_null",
                 "format": "<bits>|<k_bits>,<v_bits>",
             },
+        }
+    return {}
+
+
+def _load_recommendations_for_backend(backend: str) -> dict[str, object]:
+    normalized_backend = backend.strip().lower()
+    if normalized_backend == "gguf":
+        return {
+            "gguf_cache_type_pairs": {
+                "kind": "pair_presets",
+                "fields": ["gguf_type_k", "gguf_type_v"],
+                "recommended_pairs": [
+                    {
+                        "label": "f16/f16",
+                        "gguf_type_k": "f16",
+                        "gguf_type_v": "f16",
+                    },
+                    {
+                        "label": "q8_0/q8_0",
+                        "gguf_type_k": "q8_0",
+                        "gguf_type_v": "q8_0",
+                    },
+                    {
+                        "label": "q4_0/q4_0",
+                        "gguf_type_k": "q4_0",
+                        "gguf_type_v": "q4_0",
+                    },
+                ],
+                "notes": [
+                    "Service-curated presets for GGUF cache types.",
+                    "Prefer symmetric GGUF K/V pairs by default; asymmetric pairs may reduce or disable GPU offload in upstream llama.cpp.",
+                ],
+            }
+        }
+    if normalized_backend == "exllamav3":
+        return {
+            "exllama_cache_bit_pairs": {
+                "kind": "pair_presets",
+                "fields": ["exllama_cache_k_bits", "exllama_cache_v_bits"],
+                "recommended_pairs": [
+                    {
+                        "label": "fp16",
+                        "exllama_cache_k_bits": None,
+                        "exllama_cache_v_bits": None,
+                    },
+                    {
+                        "label": "8/8",
+                        "exllama_cache_k_bits": 8,
+                        "exllama_cache_v_bits": 8,
+                    },
+                    {
+                        "label": "8/4",
+                        "exllama_cache_k_bits": 8,
+                        "exllama_cache_v_bits": 4,
+                    },
+                ],
+                "notes": [
+                    "Service-curated presets for ExLlamaV3 cache bits.",
+                    "These presets are not an exhaustive list of valid ExLlamaV3 K/V bit pairs.",
+                ],
+            }
         }
     return {}
 
@@ -211,6 +313,15 @@ def _normalize_gguf_cache_type_name(cache_type: str) -> str:
         raise ValueError("GGUF cache type must be a non-empty GGML type name")
     if any(character not in "abcdefghijklmnopqrstuvwxyz0123456789_" for character in normalized):
         raise ValueError("GGUF cache type must contain only letters, digits, and underscores")
+    return normalized
+
+
+def _normalize_gguf_flash_attn_mode(mode: str) -> str:
+    normalized = mode.strip().lower()
+    if normalized == "":
+        raise ValueError("gguf_flash_attn must be one of: on, off, auto")
+    if normalized not in _GGUF_FLASH_ATTN_ALLOWED_VALUES:
+        raise ValueError("gguf_flash_attn must be one of: on, off, auto")
     return normalized
 
 

@@ -53,9 +53,12 @@ class ResponseEnvelope(BaseModel):
 
 class AdminLoadRequest(BaseModel):
     gguf_n_ctx: int | None = Field(default=None, ge=1)
+    gguf_flash_attn: str | None = None
     gguf_type_k: str | None = None
     gguf_type_v: str | None = None
     exllama_cache_size: int | None = Field(default=None, ge=256)
+    exllama_cache_k_bits: int | None = Field(default=None, ge=2, le=8)
+    exllama_cache_v_bits: int | None = Field(default=None, ge=2, le=8)
     exllama_cache_quant: str | None = None
     exllama_max_rq_tokens: int | None = Field(default=None, ge=1)
 
@@ -71,6 +74,7 @@ class AdminModelEntry(BaseModel):
     vram_estimate_mib: int | None = Field(default=None, ge=0)
     vram_estimate_source: Literal["observed_load_delta", "model_artifact_size", "unavailable"] = "unavailable"
     load_constraints: dict[str, Any] = Field(default_factory=dict)
+    load_recommendations: dict[str, Any] = Field(default_factory=dict)
     load_override: dict[str, Any] = Field(default_factory=dict)
     definition: dict[str, Any] = Field(default_factory=dict)
 

@@ -225,7 +225,7 @@ class ConfigTests(unittest.TestCase):
                     '        "backend": "gguf",\n'
                     '        "gguf_n_gpu_layers": 42,\n'
                     '        "gguf_n_ctx": 8192,\n'
-                    '        "gguf_flash_attn": false,\n'
+                    '        "gguf_flash_attn": "off",\n'
                     '        "gguf_type_k": "q8_0",\n'
                     '        "gguf_type_v": "q4_0"\n'
                     "      }\n"
@@ -242,6 +242,6 @@ class ConfigTests(unittest.TestCase):
         self.assertEqual(model.backend, "gguf")
         self.assertEqual(model.gguf_n_gpu_layers, 42)
         self.assertEqual(model.gguf_n_ctx, 8192)
-        self.assertFalse(model.gguf_flash_attn)
+        self.assertEqual(model.gguf_flash_attn, "off")
         self.assertEqual(model.gguf_type_k, "q8_0")
         self.assertEqual(model.gguf_type_v, "q4_0")

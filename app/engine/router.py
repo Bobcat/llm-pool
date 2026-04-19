@@ -16,8 +16,10 @@ from .common import _empty_cuda_allocator_cache
 from .common import _estimate_model_artifact_size_mib
 from .common import _exception_message
 from .common import _load_constraints_for_backend
+from .common import _load_recommendations_for_backend
 from .common import _model_definition_payload
 from .common import _normalize_gguf_cache_type_name
+from .common import _normalize_gguf_flash_attn_mode
 from .common import _query_gpu_memory
 from .common import _query_primary_gpu_used_mib
 from .common import _resolve_gguf_cache_type_constant
@@ -270,6 +272,7 @@ class ModelRouterEngine:
             "vram_estimate_mib": vram_estimate_mib,
             "vram_estimate_source": vram_estimate_source,
             "load_constraints": _load_constraints_for_backend(state.resolved_backend),
+            "load_recommendations": _load_recommendations_for_backend(state.resolved_backend),
             "load_override": dict(state.load_override),
             "definition": _model_definition_payload(
                 model_settings,
@@ -407,6 +410,28 @@ class ModelRouterEngine:
         payload: dict[str, object | None] = {}
         for field_name in fields_set:
             payload[field_name] = getattr(load_request, field_name)
+        has_exllama_k_bits = "exllama_cache_k_bits" in payload
+        has_exllama_v_bits = "exllama_cache_v_bits" in payload
+        if has_exllama_k_bits or has_exllama_v_bits:
+            if "exllama_cache_quant" in payload:
+                raise ValueError(
+                    "exllama_cache_quant cannot be combined with exllama_cache_k_bits/exllama_cache_v_bits"
+                )
+            if not (has_exllama_k_bits and has_exllama_v_bits):
+                raise ValueError("exllama_cache_k_bits and exllama_cache_v_bits must be provided together")
+            k_bits = payload.pop("exllama_cache_k_bits")
+            v_bits = payload.pop("exllama_cache_v_bits")
+            if k_bits is None and v_bits is None:
+                payload["exllama_cache_quant"] = None
+            elif isinstance(k_bits, int) and isinstance(v_bits, int):
+                payload["exllama_cache_quant"] = f"{k_bits},{v_bits}"
+            else:
+                raise ValueError("exllama_cache_k_bits and exllama_cache_v_bits must both be integers or both be null")
+        if "gguf_flash_attn" in payload:
+            gguf_flash_attn = payload["gguf_flash_attn"]
+            if gguf_flash_attn is None or not isinstance(gguf_flash_attn, str):
+                raise ValueError("gguf_flash_attn load override must be one of: on, off, auto")
+            payload["gguf_flash_attn"] = _normalize_gguf_flash_attn_mode(gguf_flash_attn)
         return payload
 
     def _apply_load_override(
@@ -421,7 +446,9 @@ class ModelRouterEngine:
 
         if resolved_backend == "gguf":
             unsupported = sorted(
-                field_name for field_name in load_override if field_name not in {"gguf_n_ctx", "gguf_type_k", "gguf_type_v"}
+                field_name
+                for field_name in load_override
+                if field_name not in {"gguf_n_ctx", "gguf_flash_attn", "gguf_type_k", "gguf_type_v"}
             )
             if unsupported:
                 names = ", ".join(unsupported)
@@ -434,6 +461,12 @@ class ModelRouterEngine:
                 if not isinstance(gguf_n_ctx, int):
                     raise ValueError("gguf_n_ctx load override must be a positive integer")
                 replacement_kwargs["gguf_n_ctx"] = gguf_n_ctx
+
+            if "gguf_flash_attn" in load_override:
+                gguf_flash_attn = load_override["gguf_flash_attn"]
+                if not isinstance(gguf_flash_attn, str):
+                    raise ValueError("gguf_flash_attn load override must be one of: on, off, auto")
+                replacement_kwargs["gguf_flash_attn"] = _normalize_gguf_flash_attn_mode(gguf_flash_attn)
 
             if "gguf_type_k" in load_override:
                 gguf_type_k = load_override["gguf_type_k"]

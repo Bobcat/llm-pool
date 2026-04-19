@@ -155,6 +155,7 @@ class ModelRouterEngineTests(unittest.TestCase):
         self.assertIn("vram_estimate_mib", loaded_model)
         self.assertIn("vram_estimate_source", loaded_model)
         self.assertEqual(loaded_model["load_constraints"], {})
+        self.assertEqual(loaded_model["load_recommendations"], {})
         self.assertIn("device", loaded_model["definition"])
         self.assertIn("compute_type", loaded_model["definition"])
         self.assertNotIn("exllama_cache_size", loaded_model["definition"])
@@ -168,6 +169,7 @@ class ModelRouterEngineTests(unittest.TestCase):
         self.assertIn("vram_estimate_mib", failed_model)
         self.assertIn("vram_estimate_source", failed_model)
         self.assertEqual(failed_model["load_constraints"], {})
+        self.assertEqual(failed_model["load_recommendations"], {})
         self.assertIn("device", failed_model["definition"])
         self.assertIn("compute_type", failed_model["definition"])
         self.assertNotIn("exllama_cache_size", failed_model["definition"])
@@ -181,6 +183,7 @@ class ModelRouterEngineTests(unittest.TestCase):
         self.assertIn("vram_estimate_mib", unloaded_model)
         self.assertIn("vram_estimate_source", unloaded_model)
         self.assertEqual(unloaded_model["load_constraints"], {})
+        self.assertEqual(unloaded_model["load_recommendations"], {})
         self.assertIn("device", unloaded_model["definition"])
         self.assertIn("compute_type", unloaded_model["definition"])
         self.assertNotIn("exllama_cache_size", unloaded_model["definition"])
@@ -217,14 +220,24 @@ class ModelRouterEngineTests(unittest.TestCase):
                     "minimum": 1,
                     "step": 1,
                 },
+                "gguf_flash_attn": {
+                    "kind": "enum",
+                    "default": "auto",
+                    "allowed_values": ["on", "off", "auto"],
+                    "examples": ["auto", "on", "off"],
+                },
                 "gguf_type_k": {
                     "kind": "string_or_null",
                     "format": "ggml_type_name",
+                    "default": "f16",
+                    "allowed_values": ["f32", "f16", "bf16", "q8_0", "q4_0", "q4_1", "iq4_nl", "q5_0", "q5_1"],
                     "examples": ["f16", "q8_0", "q4_0"],
                 },
                 "gguf_type_v": {
                     "kind": "string_or_null",
                     "format": "ggml_type_name",
+                    "default": "f16",
+                    "allowed_values": ["f32", "f16", "bf16", "q8_0", "q4_0", "q4_1", "iq4_nl", "q5_0", "q5_1"],
                     "examples": ["f16", "q8_0", "q4_0"],
                 },
             },
@@ -233,6 +246,36 @@ class ModelRouterEngineTests(unittest.TestCase):
         self.assertIn("gguf_flash_attn", payload["models"][0]["definition"])
         self.assertIn("gguf_type_k", payload["models"][0]["definition"])
         self.assertIn("gguf_type_v", payload["models"][0]["definition"])
+        self.assertEqual(
+            payload["models"][0]["load_recommendations"],
+            {
+                "gguf_cache_type_pairs": {
+                    "kind": "pair_presets",
+                    "fields": ["gguf_type_k", "gguf_type_v"],
+                    "recommended_pairs": [
+                        {
+                            "label": "f16/f16",
+                            "gguf_type_k": "f16",
+                            "gguf_type_v": "f16",
+                        },
+                        {
+                            "label": "q8_0/q8_0",
+                            "gguf_type_k": "q8_0",
+                            "gguf_type_v": "q8_0",
+                        },
+                        {
+                            "label": "q4_0/q4_0",
+                            "gguf_type_k": "q4_0",
+                            "gguf_type_v": "q4_0",
+                        },
+                    ],
+                    "notes": [
+                        "Service-curated presets for GGUF cache types.",
+                        "Prefer symmetric GGUF K/V pairs by default; asymmetric pairs may reduce or disable GPU offload in upstream llama.cpp.",
+                    ],
+                }
+            },
+        )
         self.assertNotIn("device", payload["models"][0]["definition"])
         self.assertNotIn("compute_type", payload["models"][0]["definition"])
         self.assertNotIn("exllama_cache_size", payload["models"][0]["definition"])
@@ -273,6 +316,22 @@ class ModelRouterEngineTests(unittest.TestCase):
                     "minimum": 1,
                     "step": 1,
                 },
+                "exllama_cache_k_bits": {
+                    "kind": "integer_or_null",
+                    "minimum": 2,
+                    "maximum": 8,
+                    "default": None,
+                    "null_means": "fp16",
+                    "allowed_values": [2, 3, 4, 5, 6, 7, 8],
+                },
+                "exllama_cache_v_bits": {
+                    "kind": "integer_or_null",
+                    "minimum": 2,
+                    "maximum": 8,
+                    "default": None,
+                    "null_means": "fp16",
+                    "allowed_values": [2, 3, 4, 5, 6, 7, 8],
+                },
                 "exllama_cache_quant": {
                     "kind": "string_or_null",
                     "format": "<bits>|<k_bits>,<v_bits>",
@@ -282,6 +341,36 @@ class ModelRouterEngineTests(unittest.TestCase):
         self.assertIn("device", payload["models"][0]["definition"])
         self.assertIn("exllama_cache_size", payload["models"][0]["definition"])
         self.assertIn("exllama_max_rq_tokens", payload["models"][0]["definition"])
+        self.assertEqual(
+            payload["models"][0]["load_recommendations"],
+            {
+                "exllama_cache_bit_pairs": {
+                    "kind": "pair_presets",
+                    "fields": ["exllama_cache_k_bits", "exllama_cache_v_bits"],
+                    "recommended_pairs": [
+                        {
+                            "label": "fp16",
+                            "exllama_cache_k_bits": None,
+                            "exllama_cache_v_bits": None,
+                        },
+                        {
+                            "label": "8/8",
+                            "exllama_cache_k_bits": 8,
+                            "exllama_cache_v_bits": 8,
+                        },
+                        {
+                            "label": "8/4",
+                            "exllama_cache_k_bits": 8,
+                            "exllama_cache_v_bits": 4,
+                        },
+                    ],
+                    "notes": [
+                        "Service-curated presets for ExLlamaV3 cache bits.",
+                        "These presets are not an exhaustive list of valid ExLlamaV3 K/V bit pairs.",
+                    ],
+                }
+            },
+        )
         self.assertNotIn("compute_type", payload["models"][0]["definition"])
         self.assertNotIn("gguf_n_ctx", payload["models"][0]["definition"])
 
@@ -371,6 +460,7 @@ class ModelRouterEngineTests(unittest.TestCase):
                         backend="gguf",
                         enabled=False,
                         gguf_n_ctx=4096,
+                        gguf_flash_attn="off",
                         gguf_type_k="f16",
                         gguf_type_v="f16",
                     ),
@@ -390,6 +480,7 @@ class ModelRouterEngineTests(unittest.TestCase):
         def fake_build_backend(backend: str, scoped_settings: AppSettings):
             captured["backend"] = backend
             captured["gguf_n_ctx"] = scoped_settings.engine.models["gguf-model"].gguf_n_ctx
+            captured["gguf_flash_attn"] = scoped_settings.engine.models["gguf-model"].gguf_flash_attn
             captured["gguf_type_k"] = scoped_settings.engine.models["gguf-model"].gguf_type_k
             captured["gguf_type_v"] = scoped_settings.engine.models["gguf-model"].gguf_type_v
             return FakeBackend()
@@ -400,6 +491,7 @@ class ModelRouterEngineTests(unittest.TestCase):
                 settings,
                 AdminLoadRequest(
                     gguf_n_ctx=32768,
+                    gguf_flash_attn="AUTO",
                     gguf_type_k="Q8_0",
                     gguf_type_v="q4_0",
                 ),
@@ -407,11 +499,12 @@ class ModelRouterEngineTests(unittest.TestCase):
 
         self.assertEqual(captured["backend"], "gguf")
         self.assertEqual(captured["gguf_n_ctx"], 32768)
+        self.assertEqual(captured["gguf_flash_attn"], "auto")
         self.assertEqual(captured["gguf_type_k"], "q8_0")
         self.assertEqual(captured["gguf_type_v"], "q4_0")
         self.assertEqual(
             entry["load_override"],
-            {"gguf_n_ctx": 32768, "gguf_type_k": "Q8_0", "gguf_type_v": "q4_0"},
+            {"gguf_n_ctx": 32768, "gguf_flash_attn": "auto", "gguf_type_k": "Q8_0", "gguf_type_v": "q4_0"},
         )
 
     def test_load_model_applies_exllama_cache_overrides(self) -> None:
@@ -455,20 +548,21 @@ class ModelRouterEngineTests(unittest.TestCase):
                 settings,
                 AdminLoadRequest(
                     exllama_cache_size=16384,
-                    exllama_cache_quant=None,
+                    exllama_cache_k_bits=8,
+                    exllama_cache_v_bits=4,
                     exllama_max_rq_tokens=8192,
                 ),
             )
 
         self.assertEqual(captured["backend"], "exllamav3")
         self.assertEqual(captured["exllama_cache_size"], 16384)
-        self.assertIsNone(captured["exllama_cache_quant"])
+        self.assertEqual(captured["exllama_cache_quant"], "8,4")
         self.assertEqual(captured["exllama_max_rq_tokens"], 8192)
         self.assertEqual(
             entry["load_override"],
             {
                 "exllama_cache_size": 16384,
-                "exllama_cache_quant": None,
+                "exllama_cache_quant": "8,4",
                 "exllama_max_rq_tokens": 8192,
             },
         )
@@ -612,6 +706,27 @@ class ModelRouterEngineTests(unittest.TestCase):
             "GGUF cache type must contain only letters, digits, and underscores",
         )
 
+    def test_load_model_rejects_invalid_gguf_flash_attn_override(self) -> None:
+        settings = AppSettings(
+            service=ServiceSettings(),
+            engine=EngineSettings(
+                backend="gguf",
+                models={
+                    "gguf-model": ModelSettings(model_path="/models/test.gguf", backend="gguf", enabled=False),
+                },
+            ),
+        )
+
+        engine = ModelRouterEngine(settings)
+
+        with self.assertRaises(ValueError) as exc_info:
+            engine.load_model("gguf-model", settings, AdminLoadRequest(gguf_flash_attn="sometimes"))
+
+        self.assertEqual(
+            str(exc_info.exception),
+            "gguf_flash_attn must be one of: on, off, auto",
+        )
+
     def test_load_model_rejects_unknown_gguf_cache_type_override(self) -> None:
         settings = AppSettings(
             service=ServiceSettings(),
@@ -634,6 +749,52 @@ class ModelRouterEngineTests(unittest.TestCase):
                 engine.load_model("gguf-model", settings, AdminLoadRequest(gguf_type_k="foo"))
 
         self.assertEqual(str(exc_info.exception), "unsupported GGUF cache type: 'foo'")
+
+    def test_load_model_rejects_partial_exllama_cache_bits_override(self) -> None:
+        settings = AppSettings(
+            service=ServiceSettings(),
+            engine=EngineSettings(
+                backend="exllamav3",
+                models={
+                    "exl-model": ModelSettings(model_path="/models/exl3", backend="exllamav3", enabled=False),
+                },
+            ),
+        )
+
+        engine = ModelRouterEngine(settings)
+
+        with self.assertRaises(ValueError) as exc_info:
+            engine.load_model("exl-model", settings, AdminLoadRequest(exllama_cache_k_bits=8))
+
+        self.assertEqual(
+            str(exc_info.exception),
+            "exllama_cache_k_bits and exllama_cache_v_bits must be provided together",
+        )
+
+    def test_load_model_rejects_mixed_exllama_quant_and_cache_bits_override(self) -> None:
+        settings = AppSettings(
+            service=ServiceSettings(),
+            engine=EngineSettings(
+                backend="exllamav3",
+                models={
+                    "exl-model": ModelSettings(model_path="/models/exl3", backend="exllamav3", enabled=False),
+                },
+            ),
+        )
+
+        engine = ModelRouterEngine(settings)
+
+        with self.assertRaises(ValueError) as exc_info:
+            engine.load_model(
+                "exl-model",
+                settings,
+                AdminLoadRequest(exllama_cache_quant="8,8", exllama_cache_k_bits=8, exllama_cache_v_bits=4),
+            )
+
+        self.assertEqual(
+            str(exc_info.exception),
+            "exllama_cache_quant cannot be combined with exllama_cache_k_bits/exllama_cache_v_bits",
+        )
 
     def test_load_model_rejects_model_that_is_unloading(self) -> None:
         settings = AppSettings(

@@ -7,6 +7,7 @@ from app.schemas import ResponseRequest
 
 from .common import _estimate_model_artifact_size_mib
 from .common import _load_constraints_for_backend
+from .common import _load_recommendations_for_backend
 from .common import _model_definition_payload
 
 
@@ -54,6 +55,7 @@ class StubEngine:
                         "model_artifact_size" if vram_estimate_mib is not None else "unavailable"
                     ),
                     "load_constraints": _load_constraints_for_backend(settings.engine.backend),
+                    "load_recommendations": _load_recommendations_for_backend(settings.engine.backend),
                     "load_override": {},
                     "definition": _model_definition_payload(
                         model_settings,
@@ -110,6 +112,7 @@ class StubEngine:
             "vram_estimate_mib": vram_estimate_mib,
             "vram_estimate_source": "model_artifact_size" if vram_estimate_mib is not None else "unavailable",
             "load_constraints": _load_constraints_for_backend(settings.engine.backend),
+            "load_recommendations": _load_recommendations_for_backend(settings.engine.backend),
             "load_override": {},
             "definition": _model_definition_payload(
                 model_settings,
@@ -136,6 +139,7 @@ class StubEngine:
             "vram_estimate_mib": vram_estimate_mib,
             "vram_estimate_source": "model_artifact_size" if vram_estimate_mib is not None else "unavailable",
             "load_constraints": _load_constraints_for_backend(settings.engine.backend),
+            "load_recommendations": _load_recommendations_for_backend(settings.engine.backend),
             "load_override": {},
             "definition": _model_definition_payload(
                 model_settings,

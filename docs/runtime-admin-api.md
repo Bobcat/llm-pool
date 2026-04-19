@@ -135,15 +135,52 @@ Suggested response shape:
           "minimum": 1,
           "step": 1
         },
+        "gguf_flash_attn": {
+          "kind": "enum",
+          "default": "auto",
+          "allowed_values": ["on", "off", "auto"],
+          "examples": ["auto", "on", "off"]
+        },
         "gguf_type_k": {
           "kind": "string_or_null",
           "format": "ggml_type_name",
+          "default": "f16",
+          "allowed_values": ["f32", "f16", "bf16", "q8_0", "q4_0", "q4_1", "iq4_nl", "q5_0", "q5_1"],
           "examples": ["f16", "q8_0", "q4_0"]
         },
         "gguf_type_v": {
           "kind": "string_or_null",
           "format": "ggml_type_name",
+          "default": "f16",
+          "allowed_values": ["f32", "f16", "bf16", "q8_0", "q4_0", "q4_1", "iq4_nl", "q5_0", "q5_1"],
           "examples": ["f16", "q8_0", "q4_0"]
+        }
+      },
+      "load_recommendations": {
+        "gguf_cache_type_pairs": {
+          "kind": "pair_presets",
+          "fields": ["gguf_type_k", "gguf_type_v"],
+          "recommended_pairs": [
+            {
+              "label": "f16/f16",
+              "gguf_type_k": "f16",
+              "gguf_type_v": "f16"
+            },
+            {
+              "label": "q8_0/q8_0",
+              "gguf_type_k": "q8_0",
+              "gguf_type_v": "q8_0"
+            },
+            {
+              "label": "q4_0/q4_0",
+              "gguf_type_k": "q4_0",
+              "gguf_type_v": "q4_0"
+            }
+          ],
+          "notes": [
+            "Service-curated presets for GGUF cache types.",
+            "Prefer symmetric GGUF K/V pairs by default; asymmetric pairs may reduce or disable GPU offload in upstream llama.cpp."
+          ]
         }
       },
       "load_override": {},
@@ -154,7 +191,7 @@ Suggested response shape:
         "enabled": true,
         "gguf_n_gpu_layers": -1,
         "gguf_n_ctx": 4096,
-        "gguf_flash_attn": false,
+        "gguf_flash_attn": "auto",
         "gguf_type_k": null,
         "gguf_type_v": null
       }
@@ -170,6 +207,7 @@ Notes:
 - `vram_estimate_mib` is an approximate per-model VRAM estimate
 - `vram_estimate_source` is either `observed_load_delta`, `model_artifact_size`, or `unavailable`
 - `load_constraints` describes backend-specific live-load fields for UI controls
+- `load_recommendations` describes service-curated recommended presets and pairings for UI defaults
 - `load_override` reports the runtime-only override currently active on a loaded model
 - `definition` contains common model fields plus only the fields relevant to the resolved backend
 
@@ -181,8 +219,22 @@ Rules:
 
 - if a field is absent from `load_constraints`, the UI should treat that field as unsupported for that model
 - for `kind: "integer"`, the UI should use `minimum` and `step` directly for numeric inputs or sliders
+- for `kind: "enum"`, the UI should use `allowed_values` directly for a constrained select or segmented control
 - for `kind: "string_or_null"`, the UI should use a text input or a constrained select if the frontend chooses to offer known values
+- if a `default` is present in `load_constraints`, the UI may use it as the concrete runtime default when both `definition` and `load_override` resolve to `null`
 - `load_constraints` is derived from the resolved backend, not from whether the model is currently loaded or unloaded
+- when this document and upstream backend docs differ, the UI should follow the live `load_constraints` payload returned by the service
+
+#### UI-Facing `load_recommendations`
+
+For UI work, `load_recommendations` is the source of truth for which presets the service recommends surfacing first.
+
+Rules:
+
+- `load_recommendations` is optional and additive; it does not replace `load_constraints`
+- fields listed in `recommended_pairs` must still be validated against `load_constraints`
+- the service may accept more combinations than it recommends
+- the UI should treat these presets as convenience defaults, not as an exhaustive list of allowed values
 
 #### Effective Loaded Values
 
@@ -221,6 +273,13 @@ Example:
 
 In this case, the effective loaded value is `null`.
 
+For GGUF, the UI may interpret the effective cache type value as:
+
+- field absent in `load_override` and absent or `null` in `definition`: use `load_constraints.<field>.default`, currently `"f16"`
+- effective value `null`: use `load_constraints.<field>.default`, currently `"f16"`
+- effective value `"q8_0"`: `q8_0`
+- effective value `"q4_0"`: `q4_0`
+
 For ExLlamaV3, the UI may interpret the effective quant value as:
 
 - field absent in `load_override` and absent or `null` in `definition`: fp16
@@ -242,15 +301,53 @@ GGUF:
     "minimum": 1,
     "step": 1
   },
+  "gguf_flash_attn": {
+    "kind": "enum",
+    "default": "auto",
+    "allowed_values": ["on", "off", "auto"],
+    "examples": ["auto", "on", "off"]
+  },
   "gguf_type_k": {
     "kind": "string_or_null",
     "format": "ggml_type_name",
+    "default": "f16",
+    "allowed_values": ["f32", "f16", "bf16", "q8_0", "q4_0", "q4_1", "iq4_nl", "q5_0", "q5_1"],
     "examples": ["f16", "q8_0", "q4_0"]
   },
   "gguf_type_v": {
     "kind": "string_or_null",
     "format": "ggml_type_name",
+    "default": "f16",
+    "allowed_values": ["f32", "f16", "bf16", "q8_0", "q4_0", "q4_1", "iq4_nl", "q5_0", "q5_1"],
     "examples": ["f16", "q8_0", "q4_0"]
+  }
+}
+```
+
+GGUF recommended presets:
+
+```json
+{
+  "gguf_cache_type_pairs": {
+    "kind": "pair_presets",
+    "fields": ["gguf_type_k", "gguf_type_v"],
+    "recommended_pairs": [
+      {
+        "label": "f16/f16",
+        "gguf_type_k": "f16",
+        "gguf_type_v": "f16"
+      },
+      {
+        "label": "q8_0/q8_0",
+        "gguf_type_k": "q8_0",
+        "gguf_type_v": "q8_0"
+      },
+      {
+        "label": "q4_0/q4_0",
+        "gguf_type_k": "q4_0",
+        "gguf_type_v": "q4_0"
+      }
+    ]
   }
 }
 ```
@@ -269,9 +366,53 @@ ExLlamaV3:
     "minimum": 1,
     "step": 1
   },
+  "exllama_cache_k_bits": {
+    "kind": "integer_or_null",
+    "minimum": 2,
+    "maximum": 8,
+    "default": null,
+    "null_means": "fp16",
+    "allowed_values": [2, 3, 4, 5, 6, 7, 8]
+  },
+  "exllama_cache_v_bits": {
+    "kind": "integer_or_null",
+    "minimum": 2,
+    "maximum": 8,
+    "default": null,
+    "null_means": "fp16",
+    "allowed_values": [2, 3, 4, 5, 6, 7, 8]
+  },
   "exllama_cache_quant": {
     "kind": "string_or_null",
     "format": "<bits>|<k_bits>,<v_bits>"
+  }
+}
+```
+
+ExLlamaV3 recommended presets:
+
+```json
+{
+  "exllama_cache_bit_pairs": {
+    "kind": "pair_presets",
+    "fields": ["exllama_cache_k_bits", "exllama_cache_v_bits"],
+    "recommended_pairs": [
+      {
+        "label": "fp16",
+        "exllama_cache_k_bits": null,
+        "exllama_cache_v_bits": null
+      },
+      {
+        "label": "8/8",
+        "exllama_cache_k_bits": 8,
+        "exllama_cache_v_bits": 8
+      },
+      {
+        "label": "8/4",
+        "exllama_cache_k_bits": 8,
+        "exllama_cache_v_bits": 4
+      }
+    ]
   }
 }
 ```
@@ -340,8 +481,8 @@ Rules:
 
 Supported load override fields:
 
-- GGUF: `gguf_n_ctx`, `gguf_type_k`, `gguf_type_v`
-- ExLlamaV3: `exllama_cache_size`, `exllama_cache_quant`, `exllama_max_rq_tokens`
+- GGUF: `gguf_n_ctx`, `gguf_flash_attn`, `gguf_type_k`, `gguf_type_v`
+- ExLlamaV3: `exllama_cache_size`, `exllama_cache_quant`, `exllama_cache_k_bits`, `exllama_cache_v_bits`, `exllama_max_rq_tokens`
 
 Example load bodies:
 
@@ -366,6 +507,7 @@ Example load bodies:
 ```json
 {
   "gguf_n_ctx": 32768,
+  "gguf_flash_attn": "auto",
   "gguf_type_k": "q8_0",
   "gguf_type_v": "q4_0"
 }
@@ -395,16 +537,49 @@ Example load bodies:
 }
 ```
 
+```json
+{
+  "exllama_cache_size": 32768,
+  "exllama_cache_k_bits": 8,
+  "exllama_cache_v_bits": 4,
+  "exllama_max_rq_tokens": 32768
+}
+```
+
 `exllama_cache_quant` format:
 
 - omitted or `null`: fp16 KV cache
 - `"<bits>"`: same quantization for K and V, for example `"8"`
 - `"<k_bits>,<v_bits>"`: separate K/V quantization, for example `"8,4"`
 
+`exllama_cache_k_bits` and `exllama_cache_v_bits` format:
+
+- both omitted: do not override the current configured value
+- both `null`: reset to fp16 KV cache
+- both integers from `2` through `8`: override K and V separately
+- they must be provided together
+- they cannot be combined with `exllama_cache_quant` in the same load request
+
 `gguf_type_k` and `gguf_type_v` format:
 
 - omitted or `null`: use the runtime default cache type
 - `"<ggml_type_name>"`: a GGML cache type name, for example `"f16"`, `"q8_0"`, or `"q4_0"`
+
+`gguf_flash_attn` format:
+
+- omitted: do not override the current configured value
+- `"on"`: force Flash Attention on
+- `"off"`: force Flash Attention off
+- `"auto"`: use the runtime auto mode
+
+Upstream references for these backend-specific value sets:
+
+- GGUF `allowed_values` and default `f16` are based on the official `llama.cpp` server docs:
+  https://github.com/ggml-org/llama.cpp/blob/master/tools/server/README.md
+- ExLlamaV3 `k_bits`/`v_bits` allowed range `2..8` is based on the official ExLlamaV3 README, which documents `2-8 bit cache quantization`:
+  https://github.com/turboderp-org/exllamav3
+- The conservative GGUF preset guidance above is informed by upstream llama.cpp reports that asymmetric K/V pairs can disable GPU offload in some setups:
+  https://github.com/ggml-org/llama.cpp/issues/20866
 
 These overrides are runtime-only:
 
@@ -434,16 +609,44 @@ Suggested response shape:
     "gguf_type_k": {
       "kind": "string_or_null",
       "format": "ggml_type_name",
+      "default": "f16",
+      "allowed_values": ["f32", "f16", "bf16", "q8_0", "q4_0", "q4_1", "iq4_nl", "q5_0", "q5_1"],
       "examples": ["f16", "q8_0", "q4_0"]
     },
     "gguf_type_v": {
       "kind": "string_or_null",
       "format": "ggml_type_name",
+      "default": "f16",
+      "allowed_values": ["f32", "f16", "bf16", "q8_0", "q4_0", "q4_1", "iq4_nl", "q5_0", "q5_1"],
       "examples": ["f16", "q8_0", "q4_0"]
+    }
+  },
+  "load_recommendations": {
+    "gguf_cache_type_pairs": {
+      "kind": "pair_presets",
+      "fields": ["gguf_type_k", "gguf_type_v"],
+      "recommended_pairs": [
+        {
+          "label": "f16/f16",
+          "gguf_type_k": "f16",
+          "gguf_type_v": "f16"
+        },
+        {
+          "label": "q8_0/q8_0",
+          "gguf_type_k": "q8_0",
+          "gguf_type_v": "q8_0"
+        },
+        {
+          "label": "q4_0/q4_0",
+          "gguf_type_k": "q4_0",
+          "gguf_type_v": "q4_0"
+        }
+      ]
     }
   },
   "load_override": {
     "gguf_n_ctx": 32768,
+    "gguf_flash_attn": "auto",
     "gguf_type_k": "q8_0",
     "gguf_type_v": "q4_0"
   },
@@ -454,7 +657,7 @@ Suggested response shape:
     "enabled": false,
     "gguf_n_gpu_layers": -1,
     "gguf_n_ctx": 4096,
-    "gguf_flash_attn": false,
+    "gguf_flash_attn": "auto",
     "gguf_type_k": null,
     "gguf_type_v": null
   }
@@ -477,6 +680,8 @@ Validation behavior:
   Examples:
   `gguf_type_k: "q8-0"`
   `gguf_type_k: "foo"`
+  sending only `exllama_cache_k_bits` without `exllama_cache_v_bits`
+  combining `exllama_cache_quant` with `exllama_cache_k_bits`/`exllama_cache_v_bits`
   `exllama_cache_size: 8000`
   `exllama_cache_quant: "fp16"`
   sending ExLlamaV3-only fields to a GGUF model
