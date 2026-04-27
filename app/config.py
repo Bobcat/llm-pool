@@ -28,6 +28,7 @@ class ModelSettings:
     prompt_format: str = "generic"
     enable_thinking: bool | None = None
     enabled: bool = True
+    target_inflight: int = 1
     exllama_cache_size: int = 8192
     exllama_cache_quant: str | None = None
     exllama_gpu_split: str | None = None
@@ -148,6 +149,7 @@ def load_settings(path: str | Path | None = None) -> AppSettings:
                 else None
             ),
             enabled=bool(model_payload.get("enabled", True)),
+            target_inflight=max(1, int(model_payload.get("target_inflight", 1))),
             exllama_cache_size=int(model_payload.get("exllama_cache_size", 8192)),
             exllama_cache_quant=cache_quant,
             exllama_gpu_split=gpu_split,

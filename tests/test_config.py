@@ -34,6 +34,7 @@ class ConfigTests(unittest.TestCase):
                     '        "compute_type": "float32",\n'
                     '        "prompt_format": "qwen3_template",\n'
                     '        "enable_thinking": false,\n'
+                    '        "target_inflight": 3,\n'
                     '        "enabled": false\n'
                     "      }\n"
                     "    }\n"
@@ -53,6 +54,7 @@ class ConfigTests(unittest.TestCase):
         self.assertEqual(settings.engine.models["test-model"].compute_type, "float32")
         self.assertEqual(settings.engine.models["test-model"].prompt_format, "qwen3_template")
         self.assertFalse(settings.engine.models["test-model"].enable_thinking)
+        self.assertEqual(settings.engine.models["test-model"].target_inflight, 3)
         self.assertFalse(settings.engine.models["test-model"].enabled)
         self.assertEqual(settings.engine.decoding.beam_size, 2)
         self.assertEqual(settings.engine.decoding.top_k, 3)
@@ -245,3 +247,26 @@ class ConfigTests(unittest.TestCase):
         self.assertEqual(model.gguf_flash_attn, "off")
         self.assertEqual(model.gguf_type_k, "q8_0")
         self.assertEqual(model.gguf_type_v, "q4_0")
+
+    def test_load_settings_defaults_target_inflight_to_one(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = Path(tmpdir) / "settings.json"
+            path.write_text(
+                (
+                    "{\n"
+                    '  "engine": {\n'
+                    '    "backend": "stub",\n'
+                    '    "models": {\n'
+                    '      "test-model": {\n'
+                    '        "model_path": "/models/test"\n'
+                    "      }\n"
+                    "    }\n"
+                    "  }\n"
+                    "}\n"
+                ),
+                encoding="utf-8",
+            )
+
+            settings = load_settings(path)
+
+        self.assertEqual(settings.engine.models["test-model"].target_inflight, 1)

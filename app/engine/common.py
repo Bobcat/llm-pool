@@ -30,6 +30,7 @@ _COMMON_MODEL_DEFINITION_FIELDS = (
     "prompt_format",
     "enable_thinking",
     "enabled",
+    "target_inflight",
 )
 
 _BACKEND_MODEL_DEFINITION_FIELDS = {

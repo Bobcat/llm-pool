@@ -69,6 +69,11 @@ class ApiTests(unittest.TestCase):
         self.assertEqual(payload["output"][0]["type"], "output_text")
         self.assertIn("Hello world", payload["output_text"])
         self.assertIn("metrics", payload)
+        self.assertIn("engine_queue_wait_ms", payload["metrics"])
+        self.assertIn("backend_inference_wall_ms", payload["metrics"])
+        self.assertIn("engine_total_wall_ms", payload["metrics"])
+        self.assertIn("engine_outside_backend_wall_ms", payload["metrics"])
+        self.assertIn("pool_total_wall_ms", payload["metrics"])
         self.assertIn("gpu_generate_total_ms", payload["metrics"])
 
     def test_streaming_mode_returns_sse_events(self) -> None:
@@ -103,6 +108,8 @@ class ApiTests(unittest.TestCase):
         metrics = events[-2].split("data: ", 1)[1]
         metrics_payload = json.loads(metrics)
         self.assertIn("metrics", metrics_payload)
+        self.assertIn("engine_total_wall_ms", metrics_payload["metrics"])
+        self.assertIn("pool_total_wall_ms", metrics_payload["metrics"])
         completed = events[-1].split("data: ", 1)[1]
         completed_payload = json.loads(completed)
         self.assertEqual(completed_payload["output_text"], "Hello world")

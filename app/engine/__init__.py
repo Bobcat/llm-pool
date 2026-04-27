@@ -23,6 +23,6 @@ from .stub import StubEngine
 
 
 def build_engine(settings):
-    if settings.engine.backend == "stub":
+    if settings.engine.backend == "stub" and not settings.engine.models:
         return StubEngine(settings)
     return ModelRouterEngine(settings)

@@ -4,11 +4,13 @@ from dataclasses import replace
 import gc
 from importlib import import_module
 import threading
+import time
 
 from app.config import AppSettings
 from app.config import ModelSettings
 from app.schemas import AdminLoadRequest
 from app.schemas import EngineResult
+from app.schemas import ResponseMetrics
 from app.schemas import ResponseRequest
 
 from .common import LOGGER
@@ -26,6 +28,8 @@ from .common import _resolve_gguf_cache_type_constant
 from .common import ModelRuntimeState
 from .common import ModelStateError
 from .common import UnknownModelError
+from .scheduler import ExecutorSnapshot
+from .scheduler import RuntimeScheduler
 
 
 class ModelRouterEngine:
@@ -34,6 +38,7 @@ class ModelRouterEngine:
         self._models: dict[str, object] = {}
         self._model_engines: dict[str, object] = {}
         self._model_states: dict[str, ModelRuntimeState] = {}
+        self._scheduler = RuntimeScheduler()
         self._state_lock = threading.RLock()
         self._state_changed = threading.Condition(self._state_lock)
         if not self._configured_models:
@@ -91,20 +96,37 @@ class ModelRouterEngine:
             for model_name, runtime in loaded_models.items():
                 self._models[model_name] = runtime
                 self._model_engines[model_name] = backend_engine
+                self._register_executor(model_name, backend_engine)
 
     def complete(self, request: ResponseRequest) -> EngineResult:
+        started_at = time.perf_counter()
         with self._state_lock:
             if request.model not in self._configured_models:
                 raise UnknownModelError(request.model)
             state = self._model_states[request.model]
             if state.lifecycle != "loaded":
                 raise ModelStateError(request.model, self._lifecycle_error_code(state.lifecycle))
-            engine = self._model_engines.get(request.model)
-            if engine is None:
+            executor = self._scheduler.get(request.model)
+            if executor is None:
                 raise ModelStateError(request.model, "model_not_loaded")
             state.inflight_requests += 1
         try:
-            return engine.complete(request)
+            result_future = executor.enqueue(request)
+            result = result_future.result()
+            total_ms = max(0.0, (time.perf_counter() - started_at) * 1000.0)
+            metrics_payload = (
+                result.metrics.model_dump()
+                if hasattr(result.metrics, "model_dump")
+                else result.metrics.dict()
+            )
+            metrics_payload["engine_total_wall_ms"] = total_ms
+            backend_wall_ms = metrics_payload.get("backend_inference_wall_ms")
+            if backend_wall_ms is not None:
+                metrics_payload["engine_outside_backend_wall_ms"] = max(0.0, total_ms - float(backend_wall_ms))
+            return EngineResult(
+                text=result.text,
+                metrics=ResponseMetrics(**metrics_payload),
+            )
         finally:
             with self._state_lock:
                 state = self._model_states.get(request.model)
@@ -217,6 +239,7 @@ class ModelRouterEngine:
                     existing_engine._load_errors.pop(model_name, None)
             self._models[model_name] = runtime
             self._model_engines[model_name] = target_engine
+            self._register_executor(model_name, target_engine)
             state = self._model_states[model_name]
             state.lifecycle = "loaded"
             state.last_error = None
@@ -227,6 +250,7 @@ class ModelRouterEngine:
 
     def unload_model(self, model_name: str, settings: AppSettings | None = None) -> dict[str, object]:
         del settings
+        executor = None
         with self._state_lock:
             model_settings = self._configured_models.get(model_name)
             if model_settings is None:
@@ -238,16 +262,23 @@ class ModelRouterEngine:
                 return self._admin_model_entry_locked(model_name, model_settings)
 
             state.lifecycle = "unloading"
+            executor = self._scheduler.get(model_name)
+        if executor is not None:
+            executor.begin_shutdown()
+        with self._state_lock:
             while state.inflight_requests > 0:
                 self._state_changed.wait()
 
             runtime = self._models.pop(model_name, None)
             backend_engine = self._model_engines.pop(model_name, None)
+            executor = self._scheduler.unregister(model_name)
             if backend_engine is not None:
                 backend_engine._models.pop(model_name, None)
                 if hasattr(backend_engine, "_load_errors"):
                     backend_engine._load_errors.pop(model_name, None)
 
+        if executor is not None:
+            executor.join(timeout=1.0)
         self._cleanup_runtime(runtime)
 
         with self._state_lock:
@@ -260,6 +291,7 @@ class ModelRouterEngine:
 
     def _admin_model_entry_locked(self, model_name: str, model_settings: ModelSettings) -> dict[str, object]:
         state = self._model_states[model_name]
+        executor_snapshot = self._executor_snapshot_locked(model_name)
         vram_estimate_mib, vram_estimate_source = self._vram_estimate_locked(model_name, model_settings)
         return {
             "name": model_name,
@@ -268,6 +300,10 @@ class ModelRouterEngine:
             "runtime_state": state.lifecycle,
             "is_loaded": state.lifecycle == "loaded",
             "inflight_requests": state.inflight_requests,
+            "queue_depth": executor_snapshot.queue_depth,
+            "runtime_inflight": executor_snapshot.runtime_inflight,
+            "configured_target_inflight": executor_snapshot.configured_target_inflight,
+            "effective_target_inflight": executor_snapshot.effective_target_inflight,
             "last_error": state.last_error,
             "vram_estimate_mib": vram_estimate_mib,
             "vram_estimate_source": vram_estimate_source,
@@ -282,11 +318,14 @@ class ModelRouterEngine:
 
     def _admin_gpu_model_entry_locked(self, model_name: str, model_settings: ModelSettings) -> dict[str, object]:
         state = self._model_states[model_name]
+        executor_snapshot = self._executor_snapshot_locked(model_name)
         vram_estimate_mib, vram_estimate_source = self._vram_estimate_locked(model_name, model_settings)
         return {
             "name": model_name,
             "runtime_state": state.lifecycle,
             "is_loaded": state.lifecycle == "loaded",
+            "configured_target_inflight": executor_snapshot.configured_target_inflight,
+            "effective_target_inflight": executor_snapshot.effective_target_inflight,
             "vram_estimate_mib": vram_estimate_mib,
             "vram_estimate_source": vram_estimate_source,
         }
@@ -311,6 +350,31 @@ class ModelRouterEngine:
             if state is not None and state.resolved_backend == backend:
                 return engine
         return None
+
+    def _executor_snapshot_locked(self, model_name: str) -> ExecutorSnapshot:
+        executor = self._scheduler.get(model_name)
+        configured_target_inflight = self._configured_models[model_name].target_inflight
+        if executor is None:
+            return ExecutorSnapshot(
+                queue_depth=0,
+                runtime_inflight=0,
+                configured_target_inflight=configured_target_inflight,
+                effective_target_inflight=min(configured_target_inflight, 1),
+                accepting_new_requests=False,
+            )
+        return executor.snapshot()
+
+    def _register_executor(self, model_name: str, backend_engine: object) -> None:
+        self._scheduler.register(
+            model_name=model_name,
+            complete_fn=backend_engine.complete,
+            configured_target_inflight=self._configured_models[model_name].target_inflight,
+            runtime_capability=self._runtime_capability_for_model(model_name, backend_engine),
+        )
+
+    def _runtime_capability_for_model(self, model_name: str, backend_engine: object) -> int:
+        del model_name, backend_engine
+        return 1
 
     def _cleanup_runtime(self, runtime: object | None) -> None:
         if runtime is None:
@@ -538,6 +602,8 @@ class ModelRouterEngine:
             return engine_module.ExLlamaV3Engine(settings)
         if backend == "gguf":
             return engine_module.LlamaCppEngine(settings)
+        if backend == "stub":
+            return engine_module.StubEngine(settings)
         raise ValueError(f"unsupported engine backend: {backend!r}")
 
     def _parse_exllama_cache_quant(self, cache_quant: str) -> tuple[int, int]:
@@ -555,3 +621,6 @@ class ModelRouterEngine:
         except ImportError:
             return
         _resolve_gguf_cache_type_constant(cache_type_name, llama_cpp_module=llama_cpp_module)
+
+    def close(self) -> None:
+        self._scheduler.close()

@@ -152,6 +152,10 @@ class ModelRouterEngineTests(unittest.TestCase):
         self.assertEqual(loaded_model["runtime_state"], "loaded")
         self.assertTrue(loaded_model["is_loaded"])
         self.assertIsNone(loaded_model["last_error"])
+        self.assertEqual(loaded_model["queue_depth"], 0)
+        self.assertEqual(loaded_model["runtime_inflight"], 0)
+        self.assertEqual(loaded_model["configured_target_inflight"], 1)
+        self.assertEqual(loaded_model["effective_target_inflight"], 1)
         self.assertIn("vram_estimate_mib", loaded_model)
         self.assertIn("vram_estimate_source", loaded_model)
         self.assertEqual(loaded_model["load_constraints"], {})
@@ -166,6 +170,10 @@ class ModelRouterEngineTests(unittest.TestCase):
         self.assertEqual(failed_model["runtime_state"], "failed")
         self.assertFalse(failed_model["is_loaded"])
         self.assertEqual(failed_model["last_error"], "boom")
+        self.assertEqual(failed_model["queue_depth"], 0)
+        self.assertEqual(failed_model["runtime_inflight"], 0)
+        self.assertEqual(failed_model["configured_target_inflight"], 1)
+        self.assertEqual(failed_model["effective_target_inflight"], 1)
         self.assertIn("vram_estimate_mib", failed_model)
         self.assertIn("vram_estimate_source", failed_model)
         self.assertEqual(failed_model["load_constraints"], {})
@@ -180,6 +188,10 @@ class ModelRouterEngineTests(unittest.TestCase):
         self.assertEqual(unloaded_model["runtime_state"], "unloaded")
         self.assertFalse(unloaded_model["is_loaded"])
         self.assertIsNone(unloaded_model["last_error"])
+        self.assertEqual(unloaded_model["queue_depth"], 0)
+        self.assertEqual(unloaded_model["runtime_inflight"], 0)
+        self.assertEqual(unloaded_model["configured_target_inflight"], 1)
+        self.assertEqual(unloaded_model["effective_target_inflight"], 1)
         self.assertIn("vram_estimate_mib", unloaded_model)
         self.assertIn("vram_estimate_source", unloaded_model)
         self.assertEqual(unloaded_model["load_constraints"], {})
@@ -411,13 +423,158 @@ class ModelRouterEngineTests(unittest.TestCase):
 
         payload = engine.admin_models_payload()
         self.assertEqual(payload["models"][0]["inflight_requests"], 1)
+        self.assertEqual(payload["models"][0]["queue_depth"], 0)
+        self.assertEqual(payload["models"][0]["runtime_inflight"], 1)
 
         gate.set()
         thread.join(timeout=1.0)
 
         self.assertEqual(result_holder["result"].text, "ct2:ct2-model")
+        self.assertIsNotNone(result_holder["result"].metrics.engine_queue_wait_ms)
+        self.assertIsNotNone(result_holder["result"].metrics.backend_inference_wall_ms)
+        self.assertIsNotNone(result_holder["result"].metrics.engine_total_wall_ms)
+        self.assertIsNotNone(result_holder["result"].metrics.engine_outside_backend_wall_ms)
+        self.assertIsNotNone(result_holder["result"].metrics.pool_total_wall_ms)
+        self.assertGreaterEqual(result_holder["result"].metrics.engine_total_wall_ms, 0.0)
+        self.assertGreaterEqual(result_holder["result"].metrics.pool_total_wall_ms, 0.0)
+        self.assertGreaterEqual(result_holder["result"].metrics.backend_inference_wall_ms, 0.0)
         payload = engine.admin_models_payload()
         self.assertEqual(payload["models"][0]["inflight_requests"], 0)
+        self.assertEqual(payload["models"][0]["queue_depth"], 0)
+        self.assertEqual(payload["models"][0]["runtime_inflight"], 0)
+
+    def test_scheduler_tracks_queued_work_separately_from_runtime_inflight(self) -> None:
+        settings = AppSettings(
+            service=ServiceSettings(),
+            engine=EngineSettings(
+                backend="ct2",
+                models={
+                    "ct2-model": ModelSettings(model_path="/models/ct2", target_inflight=4),
+                },
+            ),
+        )
+        gate = threading.Event()
+        entered = threading.Event()
+
+        class FakeCt2Engine:
+            def __init__(self, scoped_settings):
+                self._models = {"ct2-model": object()}
+                self._load_errors = {}
+
+            def complete(self, request: ResponseRequest) -> EngineResult:
+                entered.set()
+                gate.wait(timeout=1.0)
+                return EngineResult(text=f"ct2:{request.model}")
+
+        with mock.patch.object(engine_module, "Ct2Engine", FakeCt2Engine):
+            engine = ModelRouterEngine(settings)
+
+        results: list[EngineResult] = []
+
+        def run_complete() -> None:
+            result = engine.complete(ResponseRequest(model="ct2-model", input="hello"))
+            results.append(result)
+
+        first_thread = threading.Thread(target=run_complete)
+        second_thread = threading.Thread(target=run_complete)
+        first_thread.start()
+        entered.wait(timeout=1.0)
+        second_thread.start()
+        time.sleep(0.05)
+
+        payload = engine.admin_models_payload()["models"][0]
+        self.assertEqual(payload["inflight_requests"], 2)
+        self.assertEqual(payload["queue_depth"], 1)
+        self.assertEqual(payload["runtime_inflight"], 1)
+        self.assertEqual(payload["configured_target_inflight"], 4)
+        self.assertEqual(payload["effective_target_inflight"], 1)
+
+        gate.set()
+        first_thread.join(timeout=1.0)
+        second_thread.join(timeout=1.0)
+        self.assertEqual([result.text for result in results], ["ct2:ct2-model", "ct2:ct2-model"])
+        self.assertTrue(all(result.metrics.engine_total_wall_ms is not None for result in results))
+        self.assertTrue(all(result.metrics.pool_total_wall_ms is not None for result in results))
+        self.assertTrue(all(result.metrics.backend_inference_wall_ms is not None for result in results))
+        self.assertTrue(any((result.metrics.engine_queue_wait_ms or 0.0) > 0.0 for result in results))
+        self.assertTrue(
+            all(
+                (result.metrics.engine_total_wall_ms or 0.0) >= (result.metrics.backend_inference_wall_ms or 0.0)
+                for result in results
+            )
+        )
+        self.assertTrue(
+            all(
+                (result.metrics.pool_total_wall_ms or 0.0) >= (result.metrics.engine_total_wall_ms or 0.0)
+                for result in results
+            )
+        )
+
+    def test_unload_cancels_queued_work_and_drains_running_work(self) -> None:
+        settings = AppSettings(
+            service=ServiceSettings(),
+            engine=EngineSettings(
+                backend="ct2",
+                models={
+                    "ct2-model": ModelSettings(model_path="/models/ct2"),
+                },
+            ),
+        )
+        gate = threading.Event()
+        entered = threading.Event()
+
+        class FakeCt2Engine:
+            def __init__(self, scoped_settings):
+                self._models = {"ct2-model": object()}
+                self._load_errors = {}
+
+            def complete(self, request: ResponseRequest) -> EngineResult:
+                entered.set()
+                gate.wait(timeout=1.0)
+                return EngineResult(text=f"ct2:{request.model}")
+
+        with mock.patch.object(engine_module, "Ct2Engine", FakeCt2Engine):
+            engine = ModelRouterEngine(settings)
+
+        running_result: dict[str, str] = {}
+        queued_error: dict[str, str] = {}
+        unload_result: dict[str, dict[str, object]] = {}
+
+        def run_first() -> None:
+            running_result["text"] = engine.complete(ResponseRequest(model="ct2-model", input="first")).text
+
+        def run_second() -> None:
+            try:
+                engine.complete(ResponseRequest(model="ct2-model", input="second"))
+            except engine_module.ModelStateError as exc:
+                queued_error["code"] = exc.code
+
+        def run_unload() -> None:
+            unload_result["entry"] = engine.unload_model("ct2-model", settings)
+
+        first_thread = threading.Thread(target=run_first)
+        second_thread = threading.Thread(target=run_second)
+        unload_thread = threading.Thread(target=run_unload)
+        first_thread.start()
+        entered.wait(timeout=1.0)
+        second_thread.start()
+        time.sleep(0.05)
+        unload_thread.start()
+        time.sleep(0.05)
+
+        payload = engine.admin_models_payload()["models"][0]
+        self.assertEqual(payload["runtime_state"], "unloading")
+        self.assertEqual(payload["queue_depth"], 0)
+        self.assertEqual(payload["runtime_inflight"], 1)
+
+        gate.set()
+        first_thread.join(timeout=1.0)
+        second_thread.join(timeout=1.0)
+        unload_thread.join(timeout=1.0)
+
+        self.assertEqual(running_result["text"], "ct2:ct2-model")
+        self.assertEqual(queued_error["code"], "model_unloading")
+        self.assertEqual(unload_result["entry"]["runtime_state"], "unloaded")
 
     def test_load_model_can_load_disabled_model(self) -> None:
         settings = AppSettings(

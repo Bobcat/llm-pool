@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import logging
+import time
 import uuid
 from collections.abc import Iterator
 from pathlib import Path
@@ -83,6 +84,12 @@ def create_app(settings_path: str | Path | None = None) -> FastAPI:
     settings = load_settings(settings_path)
     engine = build_engine(settings)
     app = FastAPI(title="LLM Pool API")
+
+    @app.on_event("shutdown")
+    def shutdown_engine() -> None:
+        close = getattr(engine, "close", None)
+        if callable(close):
+            close()
 
     @app.get("/v1/models")
     def list_models() -> dict[str, object]:
@@ -184,6 +191,7 @@ def create_app(settings_path: str | Path | None = None) -> FastAPI:
 
     @app.post("/v1/responses")
     def create_response(request: ResponseRequest):
+        started_at = time.perf_counter()
         response_id = f"resp_{uuid.uuid4().hex}"
         try:
             result = engine.complete(request)
@@ -197,10 +205,18 @@ def create_app(settings_path: str | Path | None = None) -> FastAPI:
                 status_code=409,
                 detail={"code": exc.code, "model": request.model},
             ) from exc
-        _log_inference(response_id, request, result.metrics)
+        total_ms = max(0.0, (time.perf_counter() - started_at) * 1000.0)
+        metrics_payload = (
+            result.metrics.model_dump()
+            if hasattr(result.metrics, "model_dump")
+            else result.metrics.dict()
+        )
+        metrics_payload["pool_total_wall_ms"] = total_ms
+        metrics = ResponseMetrics(**metrics_payload)
+        _log_inference(response_id, request, metrics)
         if request.stream:
             return StreamingResponse(
-                _stream_response(response_id, request, result.text, result.metrics),
+                _stream_response(response_id, request, result.text, metrics),
                 media_type="text/event-stream",
             )
 
@@ -209,7 +225,7 @@ def create_app(settings_path: str | Path | None = None) -> FastAPI:
             model=request.model,
             output=[OutputText(text=result.text)],
             output_text=result.text,
-            metrics=result.metrics,
+            metrics=metrics,
         )
 
     return app

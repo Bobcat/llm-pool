@@ -33,6 +33,11 @@ class OutputText(BaseModel):
 
 
 class ResponseMetrics(BaseModel):
+    engine_queue_wait_ms: float | None = None
+    backend_inference_wall_ms: float | None = None
+    engine_total_wall_ms: float | None = None
+    engine_outside_backend_wall_ms: float | None = None
+    pool_total_wall_ms: float | None = None
     engine_tokenize_ms: float | None = None
     gpu_time_to_first_token_ms: float | None = None
     gpu_generate_total_ms: float | None = None
@@ -70,6 +75,10 @@ class AdminModelEntry(BaseModel):
     runtime_state: Literal["unloaded", "loading", "loaded", "unloading", "failed"]
     is_loaded: bool
     inflight_requests: int = Field(default=0, ge=0)
+    queue_depth: int = Field(default=0, ge=0)
+    runtime_inflight: int = Field(default=0, ge=0)
+    configured_target_inflight: int = Field(default=1, ge=1)
+    effective_target_inflight: int = Field(default=1, ge=1)
     last_error: str | None = None
     vram_estimate_mib: int | None = Field(default=None, ge=0)
     vram_estimate_source: Literal["observed_load_delta", "model_artifact_size", "unavailable"] = "unavailable"
@@ -95,6 +104,8 @@ class AdminGpuMemoryModelEstimate(BaseModel):
     name: str
     runtime_state: Literal["unloaded", "loading", "loaded", "unloading", "failed"]
     is_loaded: bool
+    configured_target_inflight: int = Field(default=1, ge=1)
+    effective_target_inflight: int = Field(default=1, ge=1)
     vram_estimate_mib: int | None = Field(default=None, ge=0)
     vram_estimate_source: Literal["observed_load_delta", "model_artifact_size", "unavailable"] = "unavailable"
 

@@ -1,5 +1,7 @@
 # Runtime Scheduler Notes
 
+Companion working tracker: [runtime-scheduler-tracker.md](runtime-scheduler-tracker.md)
+
 This note captures the current discussion around CT2, ExLlamaV3, and a possible future queue/scheduler layer for `llm-pool-dev`.
 
 It is intentionally a design note, not an implementation spec.
