@@ -57,6 +57,7 @@ class ResponseEnvelope(BaseModel):
 
 
 class AdminLoadRequest(BaseModel):
+    replicas: int | None = Field(default=None, ge=1)
     gguf_n_ctx: int | None = Field(default=None, ge=1)
     gguf_flash_attn: str | None = None
     gguf_type_k: str | None = None
@@ -74,6 +75,9 @@ class AdminModelEntry(BaseModel):
     configured_enabled: bool
     runtime_state: Literal["unloaded", "loading", "loaded", "unloading", "failed"]
     is_loaded: bool
+    replicas: int = Field(default=1, ge=1)
+    replica_max: int = Field(default=1, ge=1)
+    loaded_replicas: int = Field(default=0, ge=0)
     inflight_requests: int = Field(default=0, ge=0)
     queue_depth: int = Field(default=0, ge=0)
     runtime_inflight: int = Field(default=0, ge=0)
@@ -81,6 +85,7 @@ class AdminModelEntry(BaseModel):
     effective_target_inflight: int = Field(default=1, ge=1)
     last_error: str | None = None
     vram_estimate_mib: int | None = Field(default=None, ge=0)
+    vram_estimate_replica_count: int | None = Field(default=None, ge=1)
     vram_estimate_source: Literal["observed_load_delta", "model_artifact_size", "unavailable"] = "unavailable"
     load_constraints: dict[str, Any] = Field(default_factory=dict)
     load_recommendations: dict[str, Any] = Field(default_factory=dict)
@@ -107,6 +112,7 @@ class AdminGpuMemoryModelEstimate(BaseModel):
     configured_target_inflight: int = Field(default=1, ge=1)
     effective_target_inflight: int = Field(default=1, ge=1)
     vram_estimate_mib: int | None = Field(default=None, ge=0)
+    vram_estimate_replica_count: int | None = Field(default=None, ge=1)
     vram_estimate_source: Literal["observed_load_delta", "model_artifact_size", "unavailable"] = "unavailable"
 
 

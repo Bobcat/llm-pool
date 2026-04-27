@@ -30,6 +30,8 @@ _COMMON_MODEL_DEFINITION_FIELDS = (
     "prompt_format",
     "enable_thinking",
     "enabled",
+    "replicas",
+    "replica_max",
     "target_inflight",
 )
 
@@ -368,6 +370,7 @@ class ModelRuntimeState:
     last_error: str | None = None
     artifact_size_mib: int | None = None
     observed_vram_mib: int | None = None
+    observed_vram_replicas: int | None = None
     load_override: dict[str, object | None] = field(default_factory=dict)
 
 

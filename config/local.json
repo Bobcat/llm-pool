@@ -51,6 +51,8 @@
                 "device": "cuda",
                 "prompt_format": "gemma4_template",
                 "enable_thinking": false,
+                "replicas": 3,
+                "replica_max": 4,
                 "gguf_n_ctx": 16384,
                 "gguf_flash_attn": "auto",
                 "enabled": false

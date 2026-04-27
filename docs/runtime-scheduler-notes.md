@@ -6,6 +6,12 @@ This note captures the current discussion around CT2, ExLlamaV3, and a possible 
 
 It is intentionally a design note, not an implementation spec.
 
+Current reality note:
+
+- `llm-pool` already has a first in-process scheduler/executor layer
+- requests are already queue-backed per public model
+- this note now describes the broader scheduler design space beyond that first implemented cut
+
 ## Why This Is Worth Doing
 
 The service already exposes one API contract for multiple backends, but the backend control surfaces are still very different:
@@ -27,7 +33,7 @@ The key design goal is to keep those policy decisions outside backend-specific c
 
 ## Current Behavior
 
-Today there is no real scheduler layer in front of the engines yet.
+Today there is already a first scheduler layer in front of the engines, but not yet the fuller backend-native design described below.
 
 ### CT2
 
@@ -372,3 +378,4 @@ For now the main architectural idea is:
 - external queue and scheduler are still useful
 - ExLlamaV3 should use one loaded model with multiple in-flight jobs, not multiple reloaded runtimes
 - the scheduler should talk to a small runtime adapter interface, not to backend internals
+Note: public-model replica routing is described separately in `model-replica-routing-notes.md`. The scheduler note here still applies at the per-loaded-runtime boundary.

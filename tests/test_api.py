@@ -138,7 +138,14 @@ class ApiTests(unittest.TestCase):
         self.assertTrue(enabled_model["configured_enabled"])
         self.assertEqual(enabled_model["runtime_state"], "loaded")
         self.assertTrue(enabled_model["is_loaded"])
+        self.assertEqual(enabled_model["replicas"], 1)
+        self.assertEqual(enabled_model["replica_max"], 1)
+        self.assertEqual(enabled_model["loaded_replicas"], 1)
         self.assertEqual(enabled_model["inflight_requests"], 0)
+        self.assertEqual(enabled_model["queue_depth"], 0)
+        self.assertEqual(enabled_model["runtime_inflight"], 0)
+        self.assertEqual(enabled_model["configured_target_inflight"], 1)
+        self.assertEqual(enabled_model["effective_target_inflight"], 1)
         self.assertIsNone(enabled_model["last_error"])
         self.assertIn("vram_estimate_mib", enabled_model)
         self.assertIn("vram_estimate_source", enabled_model)
@@ -155,7 +162,14 @@ class ApiTests(unittest.TestCase):
         self.assertFalse(disabled_model["configured_enabled"])
         self.assertEqual(disabled_model["runtime_state"], "unloaded")
         self.assertFalse(disabled_model["is_loaded"])
+        self.assertEqual(disabled_model["replicas"], 1)
+        self.assertEqual(disabled_model["replica_max"], 1)
+        self.assertEqual(disabled_model["loaded_replicas"], 0)
         self.assertEqual(disabled_model["inflight_requests"], 0)
+        self.assertEqual(disabled_model["queue_depth"], 0)
+        self.assertEqual(disabled_model["runtime_inflight"], 0)
+        self.assertEqual(disabled_model["configured_target_inflight"], 1)
+        self.assertEqual(disabled_model["effective_target_inflight"], 1)
         self.assertIsNone(disabled_model["last_error"])
         self.assertIn("vram_estimate_mib", disabled_model)
         self.assertIn("vram_estimate_source", disabled_model)
@@ -247,6 +261,37 @@ class ApiTests(unittest.TestCase):
         self.assertEqual(payload["models"][0]["vram_estimate_source"], "model_artifact_size")
         self.assertIsNone(payload["error"])
 
+    def test_admin_models_endpoint_reports_replica_configuration(self) -> None:
+        client = self._create_client(
+            (
+                "{\n"
+                '  "engine": {\n'
+                '    "backend": "stub",\n'
+                '    "models": {\n'
+                '      "replica-model": {\n'
+                '        "model_path": "/tmp/replica-model",\n'
+                '        "enabled": true,\n'
+                '        "replicas": 3,\n'
+                '        "replica_max": 4\n'
+                "      }\n"
+                "    }\n"
+                "  }\n"
+                "}\n"
+            )
+        )
+
+        response = client.get("/v1/models")
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json(), {"models": ["replica-model"]})
+
+        admin_response = client.get("/v1/admin/models")
+        self.assertEqual(admin_response.status_code, 200)
+        model = admin_response.json()["models"][0]
+        self.assertEqual(model["name"], "replica-model")
+        self.assertEqual(model["replicas"], 3)
+        self.assertEqual(model["replica_max"], 4)
+        self.assertEqual(model["loaded_replicas"], 3)
+
     def test_load_model_endpoint_loads_disabled_model_live(self) -> None:
         client = self._create_client()
 
@@ -303,7 +348,14 @@ class ApiTests(unittest.TestCase):
                             "configured_enabled": False,
                             "runtime_state": "loaded",
                             "is_loaded": True,
+                            "replicas": 2,
+                            "replica_max": 3,
+                            "loaded_replicas": 2,
                             "inflight_requests": 0,
+                            "queue_depth": 0,
+                            "runtime_inflight": 0,
+                            "configured_target_inflight": 1,
+                            "effective_target_inflight": 1,
                             "last_error": None,
                             "vram_estimate_mib": None,
                             "vram_estimate_source": "unavailable",
@@ -414,15 +466,23 @@ class ApiTests(unittest.TestCase):
         client = TestClient(app)
         response = client.post(
             "/v1/admin/models/gguf-model/load",
-            json={"gguf_n_ctx": 32768, "gguf_flash_attn": "auto", "gguf_type_k": "q8_0", "gguf_type_v": "q4_0"},
+            json={
+                "replicas": 2,
+                "gguf_n_ctx": 32768,
+                "gguf_flash_attn": "auto",
+                "gguf_type_k": "q8_0",
+                "gguf_type_v": "q4_0",
+            },
         )
 
         self.assertEqual(response.status_code, 200)
         self.assertEqual(captured["model_name"], "gguf-model")
+        self.assertEqual(captured["load_request"].replicas, 2)
         self.assertEqual(captured["load_request"].gguf_n_ctx, 32768)
         self.assertEqual(captured["load_request"].gguf_flash_attn, "auto")
         self.assertEqual(captured["load_request"].gguf_type_k, "q8_0")
         self.assertEqual(captured["load_request"].gguf_type_v, "q4_0")
+        self.assertEqual(response.json()["loaded_replicas"], 2)
         self.assertEqual(
             response.json()["load_override"],
             {"gguf_n_ctx": 32768, "gguf_flash_attn": "auto", "gguf_type_k": "q8_0", "gguf_type_v": "q4_0"},

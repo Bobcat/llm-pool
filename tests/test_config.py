@@ -54,6 +54,8 @@ class ConfigTests(unittest.TestCase):
         self.assertEqual(settings.engine.models["test-model"].compute_type, "float32")
         self.assertEqual(settings.engine.models["test-model"].prompt_format, "qwen3_template")
         self.assertFalse(settings.engine.models["test-model"].enable_thinking)
+        self.assertEqual(settings.engine.models["test-model"].replicas, 1)
+        self.assertEqual(settings.engine.models["test-model"].replica_max, 1)
         self.assertEqual(settings.engine.models["test-model"].target_inflight, 3)
         self.assertFalse(settings.engine.models["test-model"].enabled)
         self.assertEqual(settings.engine.decoding.beam_size, 2)
@@ -269,4 +271,61 @@ class ConfigTests(unittest.TestCase):
 
             settings = load_settings(path)
 
+        self.assertEqual(settings.engine.models["test-model"].replicas, 1)
+        self.assertEqual(settings.engine.models["test-model"].replica_max, 1)
         self.assertEqual(settings.engine.models["test-model"].target_inflight, 1)
+
+    def test_load_settings_reads_replica_configuration(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = Path(tmpdir) / "settings.json"
+            path.write_text(
+                (
+                    "{\n"
+                    '  "engine": {\n'
+                    '    "backend": "stub",\n'
+                    '    "models": {\n'
+                    '      "test-model": {\n'
+                    '        "model_path": "/models/test",\n'
+                    '        "replicas": 3,\n'
+                    '        "replica_max": 4\n'
+                    "      }\n"
+                    "    }\n"
+                    "  }\n"
+                    "}\n"
+                ),
+                encoding="utf-8",
+            )
+
+            settings = load_settings(path)
+
+        self.assertEqual(settings.engine.models["test-model"].replicas, 3)
+        self.assertEqual(settings.engine.models["test-model"].replica_max, 4)
+
+    def test_load_settings_rejects_replicas_above_replica_max(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = Path(tmpdir) / "settings.json"
+            path.write_text(
+                (
+                    "{\n"
+                    '  "engine": {\n'
+                    '    "backend": "stub",\n'
+                    '    "models": {\n'
+                    '      "test-model": {\n'
+                    '        "model_path": "/models/test",\n'
+                    '        "replicas": 3,\n'
+                    '        "replica_max": 2\n'
+                    "      }\n"
+                    "    }\n"
+                    "  }\n"
+                    "}\n"
+                ),
+                encoding="utf-8",
+            )
+
+            with self.assertRaises(ValueError) as exc_info:
+                load_settings(path)
+
+        self.assertEqual(
+            str(exc_info.exception),
+            "model 'test-model' has replicas=3 greater than replica_max=2",
+        )

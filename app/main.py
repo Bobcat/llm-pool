@@ -93,6 +93,9 @@ def create_app(settings_path: str | Path | None = None) -> FastAPI:
 
     @app.get("/v1/models")
     def list_models() -> dict[str, object]:
+        list_models_payload = getattr(engine, "list_models_payload", None)
+        if callable(list_models_payload):
+            return list_models_payload()
         loaded_models = sorted(getattr(engine, "_models", {}).keys())
         return {"models": loaded_models}
 

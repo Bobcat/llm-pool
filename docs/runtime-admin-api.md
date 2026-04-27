@@ -125,9 +125,17 @@ Suggested response shape:
       "configured_enabled": true,
       "runtime_state": "loaded",
       "is_loaded": true,
+      "replicas": 3,
+      "replica_max": 4,
+      "loaded_replicas": 3,
       "inflight_requests": 0,
+      "queue_depth": 0,
+      "runtime_inflight": 0,
+      "configured_target_inflight": 1,
+      "effective_target_inflight": 1,
       "last_error": null,
       "vram_estimate_mib": 57200,
+      "vram_estimate_replica_count": 3,
       "vram_estimate_source": "model_artifact_size",
       "load_constraints": {
         "gguf_n_ctx": {
@@ -189,6 +197,9 @@ Suggested response shape:
         "backend": "gguf",
         "prompt_format": "gemma4_template",
         "enabled": true,
+        "replicas": 3,
+        "replica_max": 4,
+        "target_inflight": 1,
         "gguf_n_gpu_layers": -1,
         "gguf_n_ctx": 4096,
         "gguf_flash_attn": "auto",
@@ -204,7 +215,15 @@ Notes:
 
 - `configured_enabled` reports what the merged config says
 - `runtime_state` reports the live process state
+- `replicas` reports the current effective replica count for the admin row
+- `definition.replicas` reports the configured default replica count
+- `loaded_replicas` reports how many replicas of the public model are currently loaded
+- `queue_depth` is the public-model queue depth inside the scheduler
+- `runtime_inflight` is aggregate inflight work across loaded replicas of the public model
+- `configured_target_inflight` is the configured per-replica inflight target
+- `effective_target_inflight` is the currently honest per-replica scheduler target after capability clamping
 - `vram_estimate_mib` is an approximate per-model VRAM estimate
+- `vram_estimate_replica_count` is the replica count that the VRAM estimate was measured or derived for
 - `vram_estimate_source` is either `observed_load_delta`, `model_artifact_size`, or `unavailable`
 - `load_constraints` describes backend-specific live-load fields for UI controls
 - `load_recommendations` describes service-curated recommended presets and pairings for UI defaults
@@ -445,14 +464,20 @@ Suggested response shape:
       "name": "google_gemma-4-E2B-it-Q8_0-gguf",
       "runtime_state": "loaded",
       "is_loaded": true,
+      "configured_target_inflight": 1,
+      "effective_target_inflight": 1,
       "vram_estimate_mib": 12500,
+      "vram_estimate_replica_count": 3,
       "vram_estimate_source": "model_artifact_size"
     },
     {
       "name": "mistral-small-3.2-24b-instruct-2506-gguf",
       "runtime_state": "unloaded",
       "is_loaded": false,
+      "configured_target_inflight": 1,
+      "effective_target_inflight": 1,
       "vram_estimate_mib": 16800,
+      "vram_estimate_replica_count": 1,
       "vram_estimate_source": "model_artifact_size"
     }
   ],
@@ -464,6 +489,7 @@ Notes:
 
 - `used_over_total` matches the compact view you typically read from `nvidia-smi`
 - `vram_estimate_mib` for unloaded models is still an estimate, not a reservation
+- `vram_estimate_replica_count` tells the caller how many replicas that estimate corresponds to
 - if `nvidia-smi` is unavailable, `gpus` can be empty and `error` will explain why
 
 ### `POST /v1/admin/models/{model_name}/load`
@@ -477,14 +503,22 @@ Rules:
 - transition `unloaded -> loading -> loaded`
 - transition `failed -> loading -> loaded`
 - if load fails, transition to `failed` and retain `last_error`
+- an optional request body may provide `replicas` for this load, but only while the model is `unloaded` or `failed`
 - an optional request body may provide temporary backend-specific load overrides for this one live load
 
 Supported load override fields:
 
+- public model: `replicas`
 - GGUF: `gguf_n_ctx`, `gguf_flash_attn`, `gguf_type_k`, `gguf_type_v`
 - ExLlamaV3: `exllama_cache_size`, `exllama_cache_quant`, `exllama_cache_k_bits`, `exllama_cache_v_bits`, `exllama_max_rq_tokens`
 
 Example load bodies:
+
+```json
+{
+  "replicas": 3
+}
+```
 
 ```json
 {
@@ -586,6 +620,7 @@ These overrides are runtime-only:
 - they do not modify `settings.json`
 - they do not modify `local.json`
 - they should be surfaced separately from the configured definition in admin responses
+- `replicas` in the load request does not modify `definition.replicas`; it only selects the replica count for that one live load
 
 Suggested response shape:
 
@@ -596,9 +631,17 @@ Suggested response shape:
   "configured_enabled": false,
   "runtime_state": "loaded",
   "is_loaded": true,
+  "replicas": 3,
+  "replica_max": 4,
+  "loaded_replicas": 3,
   "inflight_requests": 0,
+  "queue_depth": 0,
+  "runtime_inflight": 0,
+  "configured_target_inflight": 1,
+  "effective_target_inflight": 1,
   "last_error": null,
   "vram_estimate_mib": 12340,
+  "vram_estimate_replica_count": 3,
   "vram_estimate_source": "observed_load_delta",
   "load_constraints": {
     "gguf_n_ctx": {
@@ -655,6 +698,9 @@ Suggested response shape:
     "backend": "gguf",
     "prompt_format": "gemma4_template",
     "enabled": false,
+    "replicas": 3,
+    "replica_max": 4,
+    "target_inflight": 1,
     "gguf_n_gpu_layers": -1,
     "gguf_n_ctx": 4096,
     "gguf_flash_attn": "auto",
@@ -668,6 +714,8 @@ Notes:
 
 - loading is allowed for configured models even when `configured_enabled` is `false`
 - after a successful load, `vram_estimate_source` may switch to `observed_load_delta` if a GPU delta could be measured during load
+- when `replicas` is provided, the model load is aggregate and all-or-nothing for that selected replica count
+- `replicas` and load overrides may only be changed while the model is `unloaded` or `failed`
 
 Validation behavior:
 
@@ -698,6 +746,7 @@ Rules:
 - `200` if already `unloaded`
 - `200` if already `unloading`
 - transition `loaded -> unloading -> unloaded`
+- unload stops all loaded replicas of the public model
 - new inference requests are rejected once `unloading` starts
 - in-flight requests are allowed to finish before resources are released
 
@@ -710,16 +759,27 @@ Suggested response shape:
   "configured_enabled": false,
   "runtime_state": "unloaded",
   "is_loaded": false,
+  "replicas": 3,
+  "replica_max": 4,
+  "loaded_replicas": 0,
   "inflight_requests": 0,
+  "queue_depth": 0,
+  "runtime_inflight": 0,
+  "configured_target_inflight": 1,
+  "effective_target_inflight": 1,
   "last_error": null,
   "vram_estimate_mib": 12340,
+  "vram_estimate_replica_count": 4,
   "vram_estimate_source": "observed_load_delta",
   "definition": {
     "model_path": "/home/gunnar/models/google_gemma-4-E2B-it-Q8_0/google_gemma-4-E2B-it-Q8_0.gguf",
     "backend": "gguf",
     "device": "cuda",
     "prompt_format": "gemma4_template",
-    "enabled": false
+    "enabled": false,
+    "replicas": 3,
+    "replica_max": 4,
+    "target_inflight": 1
   }
 }
 ```

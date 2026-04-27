@@ -1,23 +1,24 @@
 # llm-pool
 
-FastAPI service for local LLM inference with one `POST /v1/responses` inference API across CT2, ExLlamaV3, and GGUF/`llama.cpp` backends, plus admin endpoints for loading, unloading, and inspecting models at runtime.
+FastAPI service for local LLM inference with a single `POST /v1/responses` API across CT2, ExLlamaV3, and GGUF/`llama.cpp` backends, plus admin endpoints for loading, unloading, and inspecting models at runtime.
 
 ## Overview
 
-- one inference API for CT2, ExLlamaV3, and GGUF/`llama.cpp` backends
+- one inference API across CT2, ExLlamaV3, and GGUF/`llama.cpp` backends
 - JSON responses and SSE streaming from the same endpoint
 - runtime metrics included in inference responses
-- admin endpoints for model state inspection and live load/unload
-- per-model backend routing inside one `llm-pool` instance
-- scheduler/runtime-isolation work is intentionally tracked in the design notes below, not implemented in the main service yet
+- admin endpoints for inspecting models and loading or unloading them at runtime
+- an in-process scheduler/executor layer in front of inference
+- per-model queueing, runtime inflight tracking, and configurable target inflight
+- request routing across multiple identical internal replicas for the same model id
 
 ## HTTP API
 
 | Endpoint | Purpose |
 | --- | --- |
 | `POST /v1/responses` | Run inference. `stream: false` returns one JSON response; `stream: true` returns Server-Sent Events (SSE). |
-| `GET /v1/models` | List currently loaded models. |
-| `GET /v1/admin/models` | List configured models plus current model state and load options. |
+| `GET /v1/models` | List currently loaded model ids. |
+| `GET /v1/admin/models` | List configured model ids plus aggregate runtime, replica, queue, and load state. |
 | `GET /v1/admin/gpu-memory` | Return current GPU memory usage plus per-model VRAM estimates. |
 | `POST /v1/admin/models/{model_name}/load` | Load one configured model at runtime with optional runtime-only backend-specific overrides. |
 | `POST /v1/admin/models/{model_name}/unload` | Gracefully unload one loaded model. |
@@ -60,6 +61,10 @@ Example response:
   ],
   "output_text": "Het weer is aangenaam vandaag en ik zou na de lunch graag een wandeling in het park willen maken.",
   "metrics": {
+    "backend_inference_wall_ms": 138.1,
+    "engine_total_wall_ms": 138.6,
+    "engine_outside_backend_wall_ms": 0.5,
+    "pool_total_wall_ms": 139.0,
     "engine_tokenize_ms": null,
     "gpu_time_to_first_token_ms": null,
     "gpu_generate_total_ms": 138.4,
@@ -76,15 +81,20 @@ Example response:
 - `stream: false` for one JSON response envelope
 - `stream: true` for SSE events: `response.created`, `response.output_text.delta`, `response.metrics`, `response.completed`
 
+Current SSE note:
+
+- `stream: true` still uses the current service-side SSE event path
+- it is not yet a true backend-native live token stream from every runtime implementation
+
 ## Request Fields
 
 Currently supported API request fields:
 
 | Field | Type | Required | Default if omitted | Notes |
 | --- | --- | --- | --- | --- |
-| `model` | `string` | yes | none | Must match a currently loaded configured model. |
-| `input` | `string` | yes | none | Main user input text. Roughly the user-prompt field. |
-| `instructions` | `string \| null` | no | `null` | Optional high-level guidance. Roughly the system-prompt field. If omitted, the pool falls back to an internal default instruction prompt. |
+| `model` | `string` | yes | none | Must match a currently loaded model id. |
+| `input` | `string` | yes | none | Main input text. |
+| `instructions` | `string \| null` | no | `null` | Optional high-level guidance. If omitted, the pool falls back to an internal default instruction prompt. |
 | `stream` | `boolean` | no | `false` | `false` returns one JSON response; `true` returns SSE events. |
 | `decoding` | `object` | no | `{}` | Omitted subfields fall back to `engine.decoding` server defaults. |
 
@@ -107,7 +117,7 @@ When present, `local.json` is merged over `settings.json` (override wins per key
 
 Settings files can also define `service.host`, `service.port`, `service.log_level`, and global `engine.decoding` defaults.
 
-Per model, you can set `model_path`, `device`, `compute_type`, `prompt_format`, `enable_thinking`, `enabled`, and optionally override the backend:
+Per model, you can set `model_path`, `device`, `compute_type`, `prompt_format`, `enable_thinking`, `enabled`, `replicas`, `replica_max`, `target_inflight`, and optionally override the backend:
 
 ```json
 {
@@ -120,6 +130,9 @@ Per model, you can set `model_path`, `device`, `compute_type`, `prompt_format`, 
         "prompt_format": "gemma4_template",
         "enable_thinking": false,
         "enabled": true,
+        "replicas": 1,
+        "replica_max": 1,
+        "target_inflight": 1,
         "exllama_cache_size": 16384,
         "exllama_cache_quant": "8,8",
         "exllama_tensor_parallel": true,
@@ -132,6 +145,9 @@ Per model, you can set `model_path`, `device`, `compute_type`, `prompt_format`, 
         "prompt_format": "gemma4_template",
         "enable_thinking": false,
         "enabled": true,
+        "replicas": 3,
+        "replica_max": 4,
+        "target_inflight": 1,
         "gguf_n_gpu_layers": -1,
         "gguf_n_ctx": 4096,
         "gguf_flash_attn": "auto",
@@ -147,6 +163,9 @@ Notes:
 - Models without a `backend` field use the global `engine.backend`.
 - `enabled` controls whether a model is loaded by the pool at startup.
 - A configured model with `enabled: false` may still be loaded later through the admin API.
+- `replicas` is the default replica count that will be started for that model id when it is loaded.
+- `replica_max` is the maximum allowed replica count for that model id.
+- `target_inflight` is configured per model id and applied per loaded replica through the scheduler.
 - `enable_thinking` is an optional per-model template setting for formats that expose a thinking toggle.
 - Request-level decoding values override `engine.decoding` defaults when provided.
 - ExLlamaV3 models also support `exllama_tp_backend`, `exllama_max_batch_size`, `exllama_max_chunk_size`, `exllama_max_q_size`, and `exllama_max_rq_tokens`.
@@ -160,6 +179,31 @@ Optional env vars:
 - `LLM_POOL_SETTINGS_PATH`: explicit base settings file path.
 - `LLM_POOL_LOCAL_SETTINGS_PATH`: explicit local override file path.
 
+## Replicas
+
+- Clients send only the model id that appears in the API and config.
+- A single model id may map to multiple identical internal replicas.
+- `/v1/models` returns model ids, not internal replica ids.
+- `/v1/admin/models` returns one aggregate row per model id.
+- `replicas` is the default replica count for that model id when it is loaded.
+- `replica_max` is the maximum allowed replica count for that model id.
+- Replicas are only for identical runtime instances. Different context sizes or cache settings require different model ids.
+
+## Timing Metrics
+
+The response `metrics` payload is structured around these boundaries:
+
+- `backend_inference_wall_ms`
+  pure backend inference wall time inside the runtime
+- `engine_total_wall_ms`
+  queue-backed engine/scheduler wall time
+- `engine_outside_backend_wall_ms`
+  engine wall time outside pure backend inference
+- `pool_total_wall_ms`
+  service-level wall time inside the `llm-pool` HTTP boundary
+
+This keeps `Inference`, `Engine`, and `Pool` timings separate for callers that want to measure overhead above pure inference.
+
 ## Test
 
 ```bash
@@ -168,12 +212,16 @@ python3 -m unittest discover -s tests
 
 ## Design Notes
 
-The repo also includes a small set of active design notes for work that is intended but not fully implemented yet:
+The repo also includes a small set of active design notes:
 
 - [runtime-scheduler-notes.md](docs/runtime-scheduler-notes.md)
-  Captures the intended queue and scheduler boundary, including the small runtime adapter interface that backends should implement.
+  Captures the broader scheduler design space beyond the current in-process implementation.
+- [runtime-scheduler-tracker.md](docs/runtime-scheduler-tracker.md)
+  Tracks the current scheduler MVP implementation status and remaining deferred work.
+- [model-replica-routing-notes.md](docs/model-replica-routing-notes.md)
+  Captures the client-visible model and replica-routing semantics.
 - [runtime-subprocess-notes.md](docs/runtime-subprocess-notes.md)
-  Captures the intended process-isolation model for loaded runtimes and how that should fit behind the same runtime adapter boundary.
+  Captures the intended process-isolation model for loaded runtimes and how that should fit behind the same scheduler/runtime adapter boundary.
 
 ## Acknowledgments
 

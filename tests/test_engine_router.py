@@ -60,9 +60,9 @@ class ModelRouterEngineTests(unittest.TestCase):
             ct2_result = engine.complete(ResponseRequest(model="ct2-model", input="hello"))
             exl_result = engine.complete(ResponseRequest(model="exl-model", input="hello"))
 
-        self.assertEqual(ct2_result.text, "ct2:ct2-model")
-        self.assertEqual(exl_result.text, "exl3:exl-model")
-        self.assertEqual(sorted(engine._models.keys()), ["ct2-model", "exl-model"])
+        self.assertEqual(ct2_result.text, "ct2:ct2-model#1")
+        self.assertEqual(exl_result.text, "exl3:exl-model#1")
+        self.assertEqual(sorted(engine._models.keys()), ["ct2-model#1", "exl-model#1"])
 
     def test_dispatches_gguf_backend(self) -> None:
         settings = AppSettings(
@@ -100,7 +100,7 @@ class ModelRouterEngineTests(unittest.TestCase):
             engine = ModelRouterEngine(settings)
             gguf_result = engine.complete(ResponseRequest(model="gguf-model", input="hello"))
 
-        self.assertEqual(gguf_result.text, "gguf:gguf-model")
+        self.assertEqual(gguf_result.text, "gguf:gguf-model#1")
 
     def test_build_engine_uses_model_router_for_non_stub_backends(self) -> None:
         settings = AppSettings(
@@ -134,8 +134,13 @@ class ModelRouterEngineTests(unittest.TestCase):
 
         class FakeCt2Engine:
             def __init__(self, scoped_settings):
-                self._models = {"ct2-model": object()}
-                self._load_errors = {"broken-model": "boom"}
+                self._models = {}
+                self._load_errors = {}
+                for model_name in scoped_settings.engine.models:
+                    if model_name.startswith("broken-model#"):
+                        self._load_errors[model_name] = "boom"
+                    else:
+                        self._models[model_name] = object()
 
             def complete(self, request: ResponseRequest) -> EngineResult:
                 return EngineResult(text=f"ct2:{request.model}")
@@ -151,6 +156,9 @@ class ModelRouterEngineTests(unittest.TestCase):
         self.assertEqual(loaded_model["name"], "ct2-model")
         self.assertEqual(loaded_model["runtime_state"], "loaded")
         self.assertTrue(loaded_model["is_loaded"])
+        self.assertEqual(loaded_model["replicas"], 1)
+        self.assertEqual(loaded_model["replica_max"], 1)
+        self.assertEqual(loaded_model["loaded_replicas"], 1)
         self.assertIsNone(loaded_model["last_error"])
         self.assertEqual(loaded_model["queue_depth"], 0)
         self.assertEqual(loaded_model["runtime_inflight"], 0)
@@ -169,7 +177,10 @@ class ModelRouterEngineTests(unittest.TestCase):
         self.assertEqual(failed_model["name"], "broken-model")
         self.assertEqual(failed_model["runtime_state"], "failed")
         self.assertFalse(failed_model["is_loaded"])
-        self.assertEqual(failed_model["last_error"], "boom")
+        self.assertEqual(failed_model["replicas"], 1)
+        self.assertEqual(failed_model["replica_max"], 1)
+        self.assertEqual(failed_model["loaded_replicas"], 0)
+        self.assertEqual(failed_model["last_error"], "broken-model#1: boom")
         self.assertEqual(failed_model["queue_depth"], 0)
         self.assertEqual(failed_model["runtime_inflight"], 0)
         self.assertEqual(failed_model["configured_target_inflight"], 1)
@@ -187,6 +198,9 @@ class ModelRouterEngineTests(unittest.TestCase):
         self.assertEqual(unloaded_model["name"], "disabled-model")
         self.assertEqual(unloaded_model["runtime_state"], "unloaded")
         self.assertFalse(unloaded_model["is_loaded"])
+        self.assertEqual(unloaded_model["replicas"], 1)
+        self.assertEqual(unloaded_model["replica_max"], 1)
+        self.assertEqual(unloaded_model["loaded_replicas"], 0)
         self.assertIsNone(unloaded_model["last_error"])
         self.assertEqual(unloaded_model["queue_depth"], 0)
         self.assertEqual(unloaded_model["runtime_inflight"], 0)
@@ -401,7 +415,7 @@ class ModelRouterEngineTests(unittest.TestCase):
 
         class FakeCt2Engine:
             def __init__(self, scoped_settings):
-                self._models = {"ct2-model": object()}
+                self._models = {name: object() for name in scoped_settings.engine.models}
                 self._load_errors = {}
 
             def complete(self, request: ResponseRequest) -> EngineResult:
@@ -429,7 +443,7 @@ class ModelRouterEngineTests(unittest.TestCase):
         gate.set()
         thread.join(timeout=1.0)
 
-        self.assertEqual(result_holder["result"].text, "ct2:ct2-model")
+        self.assertEqual(result_holder["result"].text, "ct2:ct2-model#1")
         self.assertIsNotNone(result_holder["result"].metrics.engine_queue_wait_ms)
         self.assertIsNotNone(result_holder["result"].metrics.backend_inference_wall_ms)
         self.assertIsNotNone(result_holder["result"].metrics.engine_total_wall_ms)
@@ -458,7 +472,7 @@ class ModelRouterEngineTests(unittest.TestCase):
 
         class FakeCt2Engine:
             def __init__(self, scoped_settings):
-                self._models = {"ct2-model": object()}
+                self._models = {name: object() for name in scoped_settings.engine.models}
                 self._load_errors = {}
 
             def complete(self, request: ResponseRequest) -> EngineResult:
@@ -492,7 +506,7 @@ class ModelRouterEngineTests(unittest.TestCase):
         gate.set()
         first_thread.join(timeout=1.0)
         second_thread.join(timeout=1.0)
-        self.assertEqual([result.text for result in results], ["ct2:ct2-model", "ct2:ct2-model"])
+        self.assertEqual([result.text for result in results], ["ct2:ct2-model#1", "ct2:ct2-model#1"])
         self.assertTrue(all(result.metrics.engine_total_wall_ms is not None for result in results))
         self.assertTrue(all(result.metrics.pool_total_wall_ms is not None for result in results))
         self.assertTrue(all(result.metrics.backend_inference_wall_ms is not None for result in results))
@@ -525,7 +539,7 @@ class ModelRouterEngineTests(unittest.TestCase):
 
         class FakeCt2Engine:
             def __init__(self, scoped_settings):
-                self._models = {"ct2-model": object()}
+                self._models = {name: object() for name in scoped_settings.engine.models}
                 self._load_errors = {}
 
             def complete(self, request: ResponseRequest) -> EngineResult:
@@ -572,7 +586,7 @@ class ModelRouterEngineTests(unittest.TestCase):
         second_thread.join(timeout=1.0)
         unload_thread.join(timeout=1.0)
 
-        self.assertEqual(running_result["text"], "ct2:ct2-model")
+        self.assertEqual(running_result["text"], "ct2:ct2-model#1")
         self.assertEqual(queued_error["code"], "model_unloading")
         self.assertEqual(unload_result["entry"]["runtime_state"], "unloaded")
 
@@ -603,8 +617,139 @@ class ModelRouterEngineTests(unittest.TestCase):
         self.assertEqual(entry["name"], "disabled-model")
         self.assertEqual(entry["runtime_state"], "loaded")
         self.assertTrue(entry["is_loaded"])
-        self.assertIn("disabled-model", engine._models)
+        self.assertEqual(entry["loaded_replicas"], 1)
+        self.assertIn("disabled-model#1", engine._models)
         self.assertEqual(engine.admin_models_payload()["models"][1]["runtime_state"], "loaded")
+
+    def test_load_model_can_load_configured_replica_group(self) -> None:
+        settings = AppSettings(
+            service=ServiceSettings(),
+            engine=EngineSettings(
+                backend="ct2",
+                models={
+                    "replica-model": ModelSettings(
+                        model_path="/models/replica",
+                        enabled=False,
+                        replicas=2,
+                        replica_max=3,
+                    ),
+                },
+            ),
+        )
+
+        class FakeCt2Engine:
+            def __init__(self, scoped_settings):
+                self._models = {name: object() for name in scoped_settings.engine.models}
+                self._load_errors = {}
+
+            def complete(self, request: ResponseRequest) -> EngineResult:
+                return EngineResult(text=f"ct2:{request.model}")
+
+        with mock.patch.object(engine_module, "Ct2Engine", FakeCt2Engine):
+            engine = ModelRouterEngine(settings)
+            entry = engine.load_model("replica-model", settings)
+
+        self.assertEqual(entry["runtime_state"], "loaded")
+        self.assertEqual(entry["replicas"], 2)
+        self.assertEqual(entry["replica_max"], 3)
+        self.assertEqual(entry["loaded_replicas"], 2)
+        self.assertEqual(sorted(engine._models.keys()), ["replica-model#1", "replica-model#2"])
+        self.assertEqual(engine.list_models_payload(), {"models": ["replica-model"]})
+
+    def test_load_model_can_override_replica_count_while_unloaded(self) -> None:
+        settings = AppSettings(
+            service=ServiceSettings(),
+            engine=EngineSettings(
+                backend="ct2",
+                models={
+                    "replica-model": ModelSettings(
+                        model_path="/models/replica",
+                        enabled=False,
+                        replicas=1,
+                        replica_max=3,
+                    ),
+                },
+            ),
+        )
+
+        class FakeCt2Engine:
+            def __init__(self, scoped_settings):
+                self._models = {name: object() for name in scoped_settings.engine.models}
+                self._load_errors = {}
+
+            def complete(self, request: ResponseRequest) -> EngineResult:
+                return EngineResult(text=f"ct2:{request.model}")
+
+        with mock.patch.object(engine_module, "Ct2Engine", FakeCt2Engine):
+            engine = ModelRouterEngine(settings)
+            entry = engine.load_model("replica-model", settings, AdminLoadRequest(replicas=2))
+
+        self.assertEqual(entry["replicas"], 2)
+        self.assertEqual(entry["replica_max"], 3)
+        self.assertEqual(entry["loaded_replicas"], 2)
+        self.assertEqual(sorted(engine._models.keys()), ["replica-model#1", "replica-model#2"])
+
+    def test_scheduler_distributes_work_across_loaded_replicas(self) -> None:
+        settings = AppSettings(
+            service=ServiceSettings(),
+            engine=EngineSettings(
+                backend="ct2",
+                models={
+                    "replica-model": ModelSettings(
+                        model_path="/models/replica",
+                        replicas=2,
+                        replica_max=2,
+                    ),
+                },
+            ),
+        )
+        gate = threading.Event()
+        entered_replicas: list[str] = []
+        entered_lock = threading.Lock()
+
+        class FakeCt2Engine:
+            def __init__(self, scoped_settings):
+                self._models = {name: object() for name in scoped_settings.engine.models}
+                self._load_errors = {}
+
+            def complete(self, request: ResponseRequest) -> EngineResult:
+                with entered_lock:
+                    entered_replicas.append(request.model)
+                gate.wait(timeout=1.0)
+                return EngineResult(text=f"ct2:{request.model}")
+
+        with mock.patch.object(engine_module, "Ct2Engine", FakeCt2Engine):
+            engine = ModelRouterEngine(settings)
+
+        results: list[EngineResult] = []
+
+        def run_complete() -> None:
+            results.append(engine.complete(ResponseRequest(model="replica-model", input="hello")))
+
+        first_thread = threading.Thread(target=run_complete)
+        second_thread = threading.Thread(target=run_complete)
+        first_thread.start()
+        second_thread.start()
+
+        for _ in range(50):
+            payload = engine.admin_models_payload()["models"][0]
+            if payload["runtime_inflight"] == 2:
+                break
+            time.sleep(0.01)
+        else:
+            self.fail("replica group never reached runtime_inflight=2")
+
+        payload = engine.admin_models_payload()["models"][0]
+        self.assertEqual(payload["loaded_replicas"], 2)
+        self.assertEqual(payload["queue_depth"], 0)
+        self.assertEqual(payload["runtime_inflight"], 2)
+
+        gate.set()
+        first_thread.join(timeout=1.0)
+        second_thread.join(timeout=1.0)
+
+        self.assertEqual(sorted(entered_replicas), ["replica-model#1", "replica-model#2"])
+        self.assertEqual(sorted(result.text for result in results), ["ct2:replica-model#1", "ct2:replica-model#2"])
 
     def test_load_model_applies_gguf_load_overrides(self) -> None:
         settings = AppSettings(
@@ -629,18 +774,22 @@ class ModelRouterEngineTests(unittest.TestCase):
 
         class FakeBackend:
             def __init__(self):
-                self._models = {"gguf-model": object()}
+                self._models = {}
                 self._load_errors = {}
 
         engine = ModelRouterEngine(settings)
 
         def fake_build_backend(backend: str, scoped_settings: AppSettings):
+            model_settings = next(iter(scoped_settings.engine.models.values()))
             captured["backend"] = backend
-            captured["gguf_n_ctx"] = scoped_settings.engine.models["gguf-model"].gguf_n_ctx
-            captured["gguf_flash_attn"] = scoped_settings.engine.models["gguf-model"].gguf_flash_attn
-            captured["gguf_type_k"] = scoped_settings.engine.models["gguf-model"].gguf_type_k
-            captured["gguf_type_v"] = scoped_settings.engine.models["gguf-model"].gguf_type_v
-            return FakeBackend()
+            captured["replica_ids"] = sorted(scoped_settings.engine.models.keys())
+            captured["gguf_n_ctx"] = model_settings.gguf_n_ctx
+            captured["gguf_flash_attn"] = model_settings.gguf_flash_attn
+            captured["gguf_type_k"] = model_settings.gguf_type_k
+            captured["gguf_type_v"] = model_settings.gguf_type_v
+            backend_instance = FakeBackend()
+            backend_instance._models = {name: object() for name in scoped_settings.engine.models}
+            return backend_instance
 
         with mock.patch.object(engine, "_build_backend_engine", side_effect=fake_build_backend):
             entry = engine.load_model(
@@ -655,6 +804,7 @@ class ModelRouterEngineTests(unittest.TestCase):
             )
 
         self.assertEqual(captured["backend"], "gguf")
+        self.assertEqual(captured["replica_ids"], ["gguf-model#1"])
         self.assertEqual(captured["gguf_n_ctx"], 32768)
         self.assertEqual(captured["gguf_flash_attn"], "auto")
         self.assertEqual(captured["gguf_type_k"], "q8_0")
@@ -686,18 +836,21 @@ class ModelRouterEngineTests(unittest.TestCase):
 
         class FakeBackend:
             def __init__(self):
-                self._models = {"exl-model": object()}
+                self._models = {}
                 self._load_errors = {}
 
         engine = ModelRouterEngine(settings)
 
         def fake_build_backend(backend: str, scoped_settings: AppSettings):
-            model_settings = scoped_settings.engine.models["exl-model"]
+            model_settings = next(iter(scoped_settings.engine.models.values()))
             captured["backend"] = backend
+            captured["replica_ids"] = sorted(scoped_settings.engine.models.keys())
             captured["exllama_cache_size"] = model_settings.exllama_cache_size
             captured["exllama_cache_quant"] = model_settings.exllama_cache_quant
             captured["exllama_max_rq_tokens"] = model_settings.exllama_max_rq_tokens
-            return FakeBackend()
+            backend_instance = FakeBackend()
+            backend_instance._models = {name: object() for name in scoped_settings.engine.models}
+            return backend_instance
 
         with mock.patch.object(engine, "_build_backend_engine", side_effect=fake_build_backend):
             entry = engine.load_model(
@@ -712,6 +865,7 @@ class ModelRouterEngineTests(unittest.TestCase):
             )
 
         self.assertEqual(captured["backend"], "exllamav3")
+        self.assertEqual(captured["replica_ids"], ["exl-model#1"])
         self.assertEqual(captured["exllama_cache_size"], 16384)
         self.assertEqual(captured["exllama_cache_quant"], "8,4")
         self.assertEqual(captured["exllama_max_rq_tokens"], 8192)
@@ -747,21 +901,26 @@ class ModelRouterEngineTests(unittest.TestCase):
         with mock.patch.object(engine_module, "Ct2Engine", FakeCt2Engine):
             engine = ModelRouterEngine(settings)
 
-        captured: dict[str, bool] = {}
+        captured: dict[str, object] = {}
 
         class FakeBackend:
             def __init__(self):
-                self._models = {"disabled-model": object()}
+                self._models = {}
                 self._load_errors = {}
 
         def fake_build_backend(backend: str, scoped_settings: AppSettings):
             del backend
-            captured["enabled"] = scoped_settings.engine.models["disabled-model"].enabled
-            return FakeBackend()
+            model_settings = next(iter(scoped_settings.engine.models.values()))
+            captured["replica_ids"] = sorted(scoped_settings.engine.models.keys())
+            captured["enabled"] = model_settings.enabled
+            backend_instance = FakeBackend()
+            backend_instance._models = {name: object() for name in scoped_settings.engine.models}
+            return backend_instance
 
         with mock.patch.object(engine, "_build_backend_engine", side_effect=fake_build_backend):
             engine.load_model("disabled-model", settings)
 
+        self.assertEqual(captured["replica_ids"], ["disabled-model#1"])
         self.assertTrue(captured["enabled"])
 
     def test_load_model_is_idempotent_for_loaded_model(self) -> None:
@@ -818,7 +977,7 @@ class ModelRouterEngineTests(unittest.TestCase):
 
         self.assertEqual(
             str(exc_info.exception),
-            "load overrides can only be applied while the model is unloaded or failed; unload first",
+            "replica count and load overrides can only be applied while the model is unloaded or failed; unload first",
         )
 
     def test_load_model_rejects_backend_mismatched_override(self) -> None:
@@ -997,9 +1156,9 @@ class ModelRouterEngineTests(unittest.TestCase):
 
         class FakeCt2Engine:
             def __init__(self, scoped_settings):
-                if "broken-model" in scoped_settings.engine.models:
+                if any(model_name.startswith("broken-model#") for model_name in scoped_settings.engine.models):
                     self._models = {}
-                    self._load_errors = {"broken-model": "boom"}
+                    self._load_errors = {name: "boom" for name in scoped_settings.engine.models}
                 else:
                     self._models = {name: object() for name in scoped_settings.engine.models}
                     self._load_errors = {}
@@ -1012,12 +1171,12 @@ class ModelRouterEngineTests(unittest.TestCase):
             with self.assertRaises(RuntimeError) as exc_info:
                 engine.load_model("broken-model", settings)
 
-        self.assertEqual(str(exc_info.exception), "boom")
+        self.assertEqual(str(exc_info.exception), "broken-model#1: boom")
         payload = engine.admin_models_payload()
         broken_model = payload["models"][1]
         self.assertEqual(broken_model["name"], "broken-model")
         self.assertEqual(broken_model["runtime_state"], "failed")
-        self.assertEqual(broken_model["last_error"], "boom")
+        self.assertEqual(broken_model["last_error"], "broken-model#1: boom")
 
     def test_unload_model_removes_loaded_model_and_cleans_up(self) -> None:
         settings = AppSettings(
@@ -1047,7 +1206,7 @@ class ModelRouterEngineTests(unittest.TestCase):
         self.assertEqual(entry["name"], "other-model")
         self.assertEqual(entry["runtime_state"], "unloaded")
         self.assertFalse(entry["is_loaded"])
-        self.assertNotIn("other-model", engine._models)
+        self.assertNotIn("other-model#1", engine._models)
         cleanup_runtime.assert_called_once()
 
     def test_unload_model_waits_for_inflight_and_blocks_new_requests(self) -> None:
@@ -1070,7 +1229,7 @@ class ModelRouterEngineTests(unittest.TestCase):
                 self._load_errors = {}
 
             def complete(self, request: ResponseRequest) -> EngineResult:
-                if request.model == "other-model":
+                if request.model == "other-model#1":
                     entered.set()
                     gate.wait(timeout=1.0)
                 return EngineResult(text=f"ct2:{request.model}")
@@ -1111,9 +1270,9 @@ class ModelRouterEngineTests(unittest.TestCase):
         request_thread.join(timeout=1.0)
         unload_thread.join(timeout=1.0)
 
-        self.assertEqual(result_holder["result"].text, "ct2:other-model")
+        self.assertEqual(result_holder["result"].text, "ct2:other-model#1")
         self.assertEqual(unload_holder["entry"]["runtime_state"], "unloaded")
-        self.assertNotIn("other-model", engine._models)
+        self.assertNotIn("other-model#1", engine._models)
 
     def test_admin_gpu_memory_payload_reports_gpu_and_model_estimates(self) -> None:
         settings = AppSettings(

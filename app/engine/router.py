@@ -29,6 +29,7 @@ from .common import ModelRuntimeState
 from .common import ModelStateError
 from .common import UnknownModelError
 from .scheduler import ExecutorSnapshot
+from .scheduler import ReplicaRegistration
 from .scheduler import RuntimeScheduler
 
 
@@ -37,66 +38,37 @@ class ModelRouterEngine:
         self._configured_models = dict(settings.engine.models)
         self._models: dict[str, object] = {}
         self._model_engines: dict[str, object] = {}
+        self._loaded_replica_ids: dict[str, list[str]] = {}
         self._model_states: dict[str, ModelRuntimeState] = {}
         self._scheduler = RuntimeScheduler()
         self._state_lock = threading.RLock()
         self._state_changed = threading.Condition(self._state_lock)
         if not self._configured_models:
             raise ValueError("no configured models")
-        grouped_models: dict[str, dict[str, ModelSettings]] = {}
+
         for model_name, model_settings in settings.engine.models.items():
             backend = self._resolve_model_backend(settings.engine.backend, model_settings)
             self._model_states[model_name] = ModelRuntimeState(
                 resolved_backend=backend,
                 configured_enabled=model_settings.enabled,
             )
+
+        for model_name, model_settings in self._configured_models.items():
             if not model_settings.enabled:
                 continue
-            grouped_models.setdefault(backend, {})[model_name] = model_settings
-
-        for backend, models in grouped_models.items():
-            scoped_settings = replace(
-                settings,
-                engine=replace(
-                    settings.engine,
-                    backend=backend,
-                    models=models,
-                ),
-            )
             try:
-                backend_engine = self._build_backend_engine(backend, scoped_settings)
-            except Exception as exc:
-                message = _exception_message(exc)
-                for model_name in models:
-                    state = self._model_states[model_name]
-                    state.lifecycle = "failed"
-                    state.last_error = message
-                LOGGER.exception(
-                    "Failed to initialize backend '%s'; skipping %d model(s).",
-                    backend,
-                    len(models),
-                )
-                continue
-            loaded_models = getattr(backend_engine, "_models", {})
-            load_errors = getattr(backend_engine, "_load_errors", {})
-            for model_name in models:
-                state = self._model_states[model_name]
-                if model_name in loaded_models:
-                    state.lifecycle = "loaded"
-                    state.last_error = None
-                else:
-                    state.lifecycle = "failed"
-                    state.last_error = str(load_errors.get(model_name, "model failed to load"))
-            if not loaded_models:
-                LOGGER.warning(
-                    "Backend '%s' initialized without loaded models; skipping backend.",
-                    backend,
-                )
-                continue
-            for model_name, runtime in loaded_models.items():
-                self._models[model_name] = runtime
-                self._model_engines[model_name] = backend_engine
-                self._register_executor(model_name, backend_engine)
+                self.load_model(model_name, settings)
+            except Exception:
+                LOGGER.exception("Failed to initialize model '%s'.", model_name)
+
+    def list_models_payload(self) -> dict[str, object]:
+        with self._state_lock:
+            models = sorted(
+                model_name
+                for model_name, state in self._model_states.items()
+                if state.lifecycle == "loaded"
+            )
+        return {"models": models}
 
     def complete(self, request: ResponseRequest) -> EngineResult:
         started_at = time.perf_counter()
@@ -160,6 +132,7 @@ class ModelRouterEngine:
         if settings is None:
             raise RuntimeError("settings are required to load a model")
         load_override = self._load_override_payload(load_request)
+        requested_replica_count = self._replica_count_from_load_request(load_request)
 
         with self._state_lock:
             model_settings = self._configured_models.get(model_name)
@@ -169,11 +142,12 @@ class ModelRouterEngine:
             if state.lifecycle == "unloading":
                 raise ModelStateError(model_name, "model_unloading")
             if state.lifecycle in {"loaded", "loading"}:
-                if load_override:
+                if load_override or requested_replica_count is not None:
                     raise ValueError(
-                        "load overrides can only be applied while the model is unloaded or failed; unload first"
+                        "replica count and load overrides can only be applied while the model is unloaded or failed; unload first"
                     )
                 return self._admin_model_entry_locked(model_name, model_settings)
+            replica_count = self._resolve_replica_count(model_name, model_settings, requested_replica_count)
             state.lifecycle = "loading"
             state.last_error = None
             resolved_backend = state.resolved_backend
@@ -184,13 +158,13 @@ class ModelRouterEngine:
             )
             state.load_override = dict(load_override)
         gpu_used_before_mib = _query_primary_gpu_used_mib()
-
+        replica_ids = self._replica_ids_for_model(model_name, replica_count)
         scoped_settings = replace(
             settings,
             engine=replace(
                 settings.engine,
                 backend=resolved_backend,
-                models={model_name: scoped_model_settings},
+                models={replica_id: scoped_model_settings for replica_id in replica_ids},
             ),
         )
 
@@ -211,14 +185,22 @@ class ModelRouterEngine:
 
         loaded_models = getattr(backend_engine, "_models", {})
         load_errors = getattr(backend_engine, "_load_errors", {})
-        runtime = loaded_models.get(model_name)
-        if runtime is None:
-            message = str(load_errors.get(model_name, "model failed to load"))
+        loaded_replicas = {
+            replica_id: loaded_models[replica_id]
+            for replica_id in replica_ids
+            if replica_id in loaded_models
+        }
+        if len(loaded_replicas) != len(replica_ids):
+            for runtime in loaded_replicas.values():
+                self._cleanup_runtime(runtime)
+            missing_replica_ids = [replica_id for replica_id in replica_ids if replica_id not in loaded_replicas]
+            message = self._replica_load_error_message(missing_replica_ids, load_errors)
             with self._state_lock:
                 state = self._model_states[model_name]
                 state.lifecycle = "failed"
                 state.last_error = message
             raise RuntimeError(message)
+
         gpu_used_after_mib = _query_primary_gpu_used_mib()
         observed_vram_mib: int | None = None
         if (
@@ -234,18 +216,27 @@ class ModelRouterEngine:
             existing_engine = self._find_backend_engine_locked(resolved_backend)
             target_engine = existing_engine or backend_engine
             if existing_engine is not None:
-                existing_engine._models[model_name] = runtime
+                for replica_id, runtime in loaded_replicas.items():
+                    existing_engine._models[replica_id] = runtime
                 if hasattr(existing_engine, "_load_errors"):
-                    existing_engine._load_errors.pop(model_name, None)
-            self._models[model_name] = runtime
-            self._model_engines[model_name] = target_engine
-            self._register_executor(model_name, target_engine)
+                    for replica_id in replica_ids:
+                        existing_engine._load_errors.pop(replica_id, None)
+            for replica_id, runtime in loaded_replicas.items():
+                self._models[replica_id] = runtime
+                self._model_engines[replica_id] = target_engine
+            self._loaded_replica_ids[model_name] = list(replica_ids)
+            self._register_executor_group(
+                model_name=model_name,
+                backend_engine=target_engine,
+                replica_ids=replica_ids,
+            )
             state = self._model_states[model_name]
             state.lifecycle = "loaded"
             state.last_error = None
             state.load_override = dict(load_override)
             if observed_vram_mib is not None:
                 state.observed_vram_mib = observed_vram_mib
+                state.observed_vram_replicas = replica_count
             return self._admin_model_entry_locked(model_name, model_settings)
 
     def unload_model(self, model_name: str, settings: AppSettings | None = None) -> dict[str, object]:
@@ -269,17 +260,21 @@ class ModelRouterEngine:
             while state.inflight_requests > 0:
                 self._state_changed.wait()
 
-            runtime = self._models.pop(model_name, None)
-            backend_engine = self._model_engines.pop(model_name, None)
+            replica_ids = list(self._loaded_replica_ids.pop(model_name, []))
+            runtimes = []
+            for replica_id in replica_ids:
+                runtimes.append(self._models.pop(replica_id, None))
+                backend_engine = self._model_engines.pop(replica_id, None)
+                if backend_engine is not None:
+                    backend_engine._models.pop(replica_id, None)
+                    if hasattr(backend_engine, "_load_errors"):
+                        backend_engine._load_errors.pop(replica_id, None)
             executor = self._scheduler.unregister(model_name)
-            if backend_engine is not None:
-                backend_engine._models.pop(model_name, None)
-                if hasattr(backend_engine, "_load_errors"):
-                    backend_engine._load_errors.pop(model_name, None)
 
         if executor is not None:
             executor.join(timeout=1.0)
-        self._cleanup_runtime(runtime)
+        for runtime in runtimes:
+            self._cleanup_runtime(runtime)
 
         with self._state_lock:
             state = self._model_states[model_name]
@@ -292,13 +287,21 @@ class ModelRouterEngine:
     def _admin_model_entry_locked(self, model_name: str, model_settings: ModelSettings) -> dict[str, object]:
         state = self._model_states[model_name]
         executor_snapshot = self._executor_snapshot_locked(model_name)
-        vram_estimate_mib, vram_estimate_source = self._vram_estimate_locked(model_name, model_settings)
+        (
+            vram_estimate_mib,
+            vram_estimate_replica_count,
+            vram_estimate_source,
+        ) = self._vram_estimate_locked(model_name, model_settings)
+        current_replica_count = self._current_replica_count_locked(model_name, model_settings)
         return {
             "name": model_name,
             "resolved_backend": state.resolved_backend,
             "configured_enabled": state.configured_enabled,
             "runtime_state": state.lifecycle,
             "is_loaded": state.lifecycle == "loaded",
+            "replicas": current_replica_count,
+            "replica_max": model_settings.replica_max,
+            "loaded_replicas": executor_snapshot.loaded_replicas,
             "inflight_requests": state.inflight_requests,
             "queue_depth": executor_snapshot.queue_depth,
             "runtime_inflight": executor_snapshot.runtime_inflight,
@@ -306,6 +309,7 @@ class ModelRouterEngine:
             "effective_target_inflight": executor_snapshot.effective_target_inflight,
             "last_error": state.last_error,
             "vram_estimate_mib": vram_estimate_mib,
+            "vram_estimate_replica_count": vram_estimate_replica_count,
             "vram_estimate_source": vram_estimate_source,
             "load_constraints": _load_constraints_for_backend(state.resolved_backend),
             "load_recommendations": _load_recommendations_for_backend(state.resolved_backend),
@@ -319,7 +323,11 @@ class ModelRouterEngine:
     def _admin_gpu_model_entry_locked(self, model_name: str, model_settings: ModelSettings) -> dict[str, object]:
         state = self._model_states[model_name]
         executor_snapshot = self._executor_snapshot_locked(model_name)
-        vram_estimate_mib, vram_estimate_source = self._vram_estimate_locked(model_name, model_settings)
+        (
+            vram_estimate_mib,
+            vram_estimate_replica_count,
+            vram_estimate_source,
+        ) = self._vram_estimate_locked(model_name, model_settings)
         return {
             "name": model_name,
             "runtime_state": state.lifecycle,
@@ -327,6 +335,7 @@ class ModelRouterEngine:
             "configured_target_inflight": executor_snapshot.configured_target_inflight,
             "effective_target_inflight": executor_snapshot.effective_target_inflight,
             "vram_estimate_mib": vram_estimate_mib,
+            "vram_estimate_replica_count": vram_estimate_replica_count,
             "vram_estimate_source": vram_estimate_source,
         }
 
@@ -334,19 +343,24 @@ class ModelRouterEngine:
         self,
         model_name: str,
         model_settings: ModelSettings,
-    ) -> tuple[int | None, str]:
+    ) -> tuple[int | None, int | None, str]:
         state = self._model_states[model_name]
         if state.observed_vram_mib is not None:
-            return state.observed_vram_mib, "observed_load_delta"
+            return (
+                state.observed_vram_mib,
+                state.observed_vram_replicas,
+                "observed_load_delta",
+            )
         if state.artifact_size_mib is None:
             state.artifact_size_mib = _estimate_model_artifact_size_mib(model_settings.model_path)
         if state.artifact_size_mib is not None:
-            return state.artifact_size_mib, "model_artifact_size"
-        return None, "unavailable"
+            return state.artifact_size_mib, 1, "model_artifact_size"
+        return None, None, "unavailable"
 
     def _find_backend_engine_locked(self, backend: str):
-        for loaded_model_name, engine in self._model_engines.items():
-            state = self._model_states.get(loaded_model_name)
+        for replica_id, engine in self._model_engines.items():
+            public_model_name = self._public_model_from_replica_id(replica_id)
+            state = self._model_states.get(public_model_name)
             if state is not None and state.resolved_backend == backend:
                 return engine
         return None
@@ -361,16 +375,29 @@ class ModelRouterEngine:
                 configured_target_inflight=configured_target_inflight,
                 effective_target_inflight=min(configured_target_inflight, 1),
                 accepting_new_requests=False,
+                loaded_replicas=0,
             )
         return executor.snapshot()
 
-    def _register_executor(self, model_name: str, backend_engine: object) -> None:
+    def _register_executor_group(self, *, model_name: str, backend_engine: object, replica_ids: list[str]) -> None:
         self._scheduler.register(
             model_name=model_name,
-            complete_fn=backend_engine.complete,
+            replicas=[
+                ReplicaRegistration(
+                    replica_id=replica_id,
+                    complete_fn=self._runtime_complete_fn(backend_engine, replica_id),
+                    runtime_capability=self._runtime_capability_for_model(model_name, backend_engine),
+                )
+                for replica_id in replica_ids
+            ],
             configured_target_inflight=self._configured_models[model_name].target_inflight,
-            runtime_capability=self._runtime_capability_for_model(model_name, backend_engine),
         )
+
+    def _runtime_complete_fn(self, backend_engine: object, replica_id: str):
+        def _complete(request: ResponseRequest) -> EngineResult:
+            return backend_engine.complete(self._request_for_replica(request, replica_id))
+
+        return _complete
 
     def _runtime_capability_for_model(self, model_name: str, backend_engine: object) -> int:
         del model_name, backend_engine
@@ -465,6 +492,64 @@ class ModelRouterEngine:
             raise ValueError("backend cannot be empty")
         return backend
 
+    def _replica_count_from_load_request(self, load_request: AdminLoadRequest | None) -> int | None:
+        if load_request is None:
+            return None
+        fields_set = getattr(load_request, "model_fields_set", None)
+        if fields_set is None:
+            fields_set = getattr(load_request, "__fields_set__", set())
+        if "replicas" not in fields_set:
+            return None
+        return load_request.replicas
+
+    def _resolve_replica_count(
+        self,
+        model_name: str,
+        model_settings: ModelSettings,
+        requested_replica_count: int | None,
+    ) -> int:
+        replica_count = model_settings.replicas if requested_replica_count is None else int(requested_replica_count)
+        if replica_count <= 0:
+            raise ValueError("replica count must be a positive integer")
+        if replica_count > model_settings.replica_max:
+            raise ValueError(
+                f"replica count {replica_count} exceeds replica_max {model_settings.replica_max} for model '{model_name}'"
+            )
+        return replica_count
+
+    def _replica_ids_for_model(self, model_name: str, replica_count: int) -> list[str]:
+        return [f"{model_name}#{index}" for index in range(1, max(1, int(replica_count)) + 1)]
+
+    def _public_model_from_replica_id(self, replica_id: str) -> str:
+        if "#" not in replica_id:
+            return replica_id
+        return replica_id.rsplit("#", 1)[0]
+
+    def _replica_load_error_message(
+        self,
+        missing_replica_ids: list[str],
+        load_errors: dict[str, object],
+    ) -> str:
+        detailed_errors = [
+            f"{replica_id}: {load_errors[replica_id]}"
+            for replica_id in missing_replica_ids
+            if replica_id in load_errors
+        ]
+        if detailed_errors:
+            return "; ".join(str(item) for item in detailed_errors)
+        return "replica group failed to load completely"
+
+    def _current_replica_count_locked(self, model_name: str, model_settings: ModelSettings) -> int:
+        replica_ids = self._loaded_replica_ids.get(model_name, [])
+        if replica_ids:
+            return len(replica_ids)
+        return model_settings.replicas
+
+    def _request_for_replica(self, request: ResponseRequest, replica_id: str) -> ResponseRequest:
+        if hasattr(request, "model_copy"):
+            return request.model_copy(update={"model": replica_id})
+        return request.copy(update={"model": replica_id})
+
     def _load_override_payload(self, load_request: AdminLoadRequest | None) -> dict[str, object | None]:
         if load_request is None:
             return {}
@@ -473,6 +558,8 @@ class ModelRouterEngine:
             fields_set = getattr(load_request, "__fields_set__", set())
         payload: dict[str, object | None] = {}
         for field_name in fields_set:
+            if field_name == "replicas":
+                continue
             payload[field_name] = getattr(load_request, field_name)
         has_exllama_k_bits = "exllama_cache_k_bits" in payload
         has_exllama_v_bits = "exllama_cache_v_bits" in payload

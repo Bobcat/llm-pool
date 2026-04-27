@@ -21,6 +21,11 @@ class StubEngine:
             for model_name, model_settings in self._configured_models.items()
             if model_settings.enabled
         }
+        self._loaded_replicas = {
+            model_name: model_settings.replicas
+            for model_name, model_settings in self._configured_models.items()
+            if model_name in self._models
+        }
 
     def complete(self, request: ResponseRequest) -> EngineResult:
         if request.model not in self._configured_models:
@@ -36,10 +41,14 @@ class StubEngine:
             text = f"[instructions={request.instructions}] {text}"
         return EngineResult(text=text)
 
+    def list_models_payload(self) -> dict[str, object]:
+        return {"models": sorted(self._models.keys())}
+
     def admin_models_payload(self, settings: AppSettings) -> dict[str, object]:
         models: list[dict[str, object]] = []
         for model_name, model_settings in self._configured_models.items():
             is_loaded = model_name in self._models
+            current_replica_count = self._loaded_replicas.get(model_name, model_settings.replicas)
             vram_estimate_mib = _estimate_model_artifact_size_mib(model_settings.model_path)
             models.append(
                 {
@@ -48,7 +57,14 @@ class StubEngine:
                     "configured_enabled": model_settings.enabled,
                     "runtime_state": "loaded" if is_loaded else "unloaded",
                     "is_loaded": is_loaded,
+                    "replicas": current_replica_count,
+                    "replica_max": model_settings.replica_max,
+                    "loaded_replicas": self._loaded_replicas.get(model_name, 0),
                     "inflight_requests": 0,
+                    "queue_depth": 0,
+                    "runtime_inflight": 0,
+                    "configured_target_inflight": model_settings.target_inflight,
+                    "effective_target_inflight": min(model_settings.target_inflight, 1),
                     "last_error": None,
                     "vram_estimate_mib": vram_estimate_mib,
                     "vram_estimate_source": (
@@ -99,7 +115,15 @@ class StubEngine:
             raise UnknownModelError(model_name)
         if self._has_load_overrides(load_request):
             raise ValueError("load overrides are not supported for the stub backend")
+        replica_count = model_settings.replicas
+        if load_request is not None and load_request.replicas is not None:
+            replica_count = int(load_request.replicas)
+        if replica_count > model_settings.replica_max:
+            raise ValueError(
+                f"replica count {replica_count} exceeds replica_max {model_settings.replica_max} for model '{model_name}'"
+            )
         self._models.setdefault(model_name, object())
+        self._loaded_replicas[model_name] = replica_count
         vram_estimate_mib = _estimate_model_artifact_size_mib(model_settings.model_path)
         return {
             "name": model_name,
@@ -107,7 +131,14 @@ class StubEngine:
             "configured_enabled": model_settings.enabled,
             "runtime_state": "loaded",
             "is_loaded": True,
+            "replicas": replica_count,
+            "replica_max": model_settings.replica_max,
+            "loaded_replicas": replica_count,
             "inflight_requests": 0,
+            "queue_depth": 0,
+            "runtime_inflight": 0,
+            "configured_target_inflight": model_settings.target_inflight,
+            "effective_target_inflight": min(model_settings.target_inflight, 1),
             "last_error": None,
             "vram_estimate_mib": vram_estimate_mib,
             "vram_estimate_source": "model_artifact_size" if vram_estimate_mib is not None else "unavailable",
@@ -127,6 +158,7 @@ class StubEngine:
         if model_settings is None:
             raise UnknownModelError(model_name)
         self._models.pop(model_name, None)
+        self._loaded_replicas.pop(model_name, None)
         vram_estimate_mib = _estimate_model_artifact_size_mib(model_settings.model_path)
         return {
             "name": model_name,
@@ -134,7 +166,14 @@ class StubEngine:
             "configured_enabled": model_settings.enabled,
             "runtime_state": "unloaded",
             "is_loaded": False,
+            "replicas": model_settings.replicas,
+            "replica_max": model_settings.replica_max,
+            "loaded_replicas": 0,
             "inflight_requests": 0,
+            "queue_depth": 0,
+            "runtime_inflight": 0,
+            "configured_target_inflight": model_settings.target_inflight,
+            "effective_target_inflight": min(model_settings.target_inflight, 1),
             "last_error": None,
             "vram_estimate_mib": vram_estimate_mib,
             "vram_estimate_source": "model_artifact_size" if vram_estimate_mib is not None else "unavailable",
@@ -153,4 +192,5 @@ class StubEngine:
         fields_set = getattr(load_request, "model_fields_set", None)
         if fields_set is None:
             fields_set = getattr(load_request, "__fields_set__", set())
+        fields_set = {field_name for field_name in fields_set if field_name != "replicas"}
         return bool(fields_set)

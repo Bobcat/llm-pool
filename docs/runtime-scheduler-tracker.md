@@ -14,7 +14,7 @@ This tracker is where we record implementation scope, accepted MVP cuts, work ph
 
 ## Current MVP Boundary
 
-Status: `proposed`
+Status: `done`
 
 Included in the first scheduler MVP:
 
@@ -40,7 +40,7 @@ Explicitly out of scope for the first scheduler MVP:
 
 ## Current Decisions
 
-Status: `proposed`
+Status: `done`
 
 - scheduler capacity is tracked per loaded model runtime, not per backend family
 - the primary execution owner in `llm-pool` is a loaded model executor
@@ -58,7 +58,7 @@ Status: `proposed`
 
 ## Chosen Model
 
-Status: `proposed`
+Status: `done`
 
 The chosen high-level concurrency model should be intentionally similar to `asr-pool`, but with a different execution owner.
 
@@ -100,7 +100,7 @@ Only the implementation behind the executor changes:
 
 ## Concrete MVP Design
 
-Status: `proposed`
+Status: `done`
 
 ### 1. Scheduler Ownership
 
@@ -191,7 +191,7 @@ The first implementation should bias toward correctness over backend ambition:
 
 ### Phase 1: Scheduler Skeleton
 
-Status: `proposed`
+Status: `done`
 
 Goal:
 - introduce the minimal queue and scheduler structure without changing the external inference API
@@ -210,7 +210,7 @@ Definition of done:
 
 ### Phase 2: Configurable Capacity
 
-Status: `proposed`
+Status: `done`
 
 Goal:
 - make per-model runtime concurrency configurable while keeping the MVP semantics small
@@ -226,7 +226,7 @@ Definition of done:
 
 ### Phase 3: Unload Integration
 
-Status: `proposed`
+Status: `done`
 
 Goal:
 - align runtime unload with scheduler-owned queues
@@ -243,10 +243,10 @@ Definition of done:
 
 ## Open Questions
 
-Status: `proposed`
+Status: `in_progress`
 
-- whether admin responses should expose queue depth separately from runtime inflight in MVP
-- how much of the current SSE behavior should remain untouched in the first scheduler patch
+- whether a future backend-native streaming path should replace the current SSE behavior for `stream: true`
+- whether replica routing should later move from least-inflight to normalized occupancy when replicas can expose different effective capacities
 
 Questions now considered resolved for MVP:
 
@@ -257,7 +257,7 @@ Questions now considered resolved for MVP:
 
 ### 2026-04-26: Initial MVP Cut
 
-Status: `proposed`
+Status: `done`
 
 - build the scheduler around per-model runtime ownership, not per-backend shared ownership
 - keep the first scheduler implementation in-process
@@ -265,7 +265,7 @@ Status: `proposed`
 
 ### 2026-04-26: ASR Pool Comparison And Chosen Direction
 
-Status: `proposed`
+Status: `done`
 
 - `asr-pool` and `llm-pool` should share the same high-level structure:
   intake layer
@@ -276,3 +276,28 @@ Status: `proposed`
 - unlike ASR slots, model executors are model-bound rather than fungible
 - the first `llm-pool` scheduler should therefore be organized as a registry of model executors with per-executor queues and capacities
 - subprocess isolation later should preserve this shape rather than replace it
+
+### 2026-04-27: Scheduler MVP Implemented
+
+Status: `done`
+
+- `POST /v1/responses` now runs through the in-process scheduler/executor layer
+- queue ownership is per public model
+- aggregate queue metrics are surfaced in admin responses:
+  `queue_depth`
+  `runtime_inflight`
+  `configured_target_inflight`
+  `effective_target_inflight`
+- unload semantics now match the MVP rule:
+  queued work is cancelled
+  runtime-submitted work is drained
+
+### 2026-04-27: Public-Model Replicas Implemented
+
+Status: `done`
+
+- one public model may load multiple identical replicas
+- the scheduler dispatches across replicas of the same public model
+- public model load/unload is aggregate
+- replica selection uses least-inflight with round-robin tie-breaking
+- admin remains aggregate per public model rather than per replica
