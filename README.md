@@ -2,6 +2,19 @@
 
 FastAPI service for local LLM inference with a single `POST /v1/responses` API across CT2, ExLlamaV3, and GGUF/`llama.cpp` backends, plus admin endpoints for loading, unloading, and inspecting models at runtime.
 
+## Index
+
+- [Overview](#overview)
+- [HTTP API](#http-api)
+- [Inference Example](#inference-example)
+- [Request Fields](#request-fields)
+- [Local Overrides](#local-overrides)
+- [Replicas](#replicas)
+- [Timing Metrics](#timing-metrics)
+- [Test](#test)
+- [Design Notes](#design-notes)
+- [Acknowledgments](#acknowledgments)
+
 ## Overview
 
 - one inference API across CT2, ExLlamaV3, and GGUF/`llama.cpp` backends
@@ -191,18 +204,20 @@ Optional env vars:
 
 ## Timing Metrics
 
-The response `metrics` payload is structured around these boundaries:
+The response `metrics` payload uses nested timers:
 
 - `backend_inference_wall_ms`
-  pure backend inference wall time inside the runtime
+  time spent inside the model runtime itself generating the result
 - `engine_total_wall_ms`
-  queue-backed engine/scheduler wall time
-- `engine_outside_backend_wall_ms`
-  engine wall time outside pure backend inference
+  backend inference plus queueing, scheduling, and other engine work around it
 - `pool_total_wall_ms`
-  service-level wall time inside the `llm-pool` HTTP boundary
+  total time spent inside the `llm-pool` request handler
 
-This keeps `Inference`, `Engine`, and `Pool` timings separate for callers that want to measure overhead above pure inference.
+In other words:
+
+- `Inference` is the smallest boundary
+- `Engine` wraps `Inference`
+- `Pool` wraps `Engine`
 
 ## Test
 
