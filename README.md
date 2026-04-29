@@ -14,6 +14,7 @@ FastAPI service for local LLM inference with a single `POST /v1/responses` API a
 - [Test](#test)
 - [Design Notes](#design-notes)
 - [Acknowledgments](#acknowledgments)
+- [License](#license)
 
 ## Overview
 
@@ -250,3 +251,7 @@ This pool builds on a number of excellent upstream projects:
 - ExLlamaV3
 - llama-cpp-python
 - llama.cpp
+
+## License
+
+Licensed under the Apache License, Version 2.0. See [LICENSE](LICENSE).
