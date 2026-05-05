@@ -108,7 +108,9 @@ Currently supported API request fields:
 | --- | --- | --- | --- | --- |
 | `model` | `string` | yes | none | Must match a currently loaded model id. |
 | `input` | `string` | yes | none | Main input text. |
-| `instructions` | `string \| null` | no | `null` | Optional high-level guidance. If omitted, the pool falls back to an internal default instruction prompt. |
+| `instructions` | `string \| null` | no | `null` | Optional high-level guidance. If omitted, the pool falls back to an internal default instruction prompt. Ignored by `translategemma_template`; omit it there. |
+| `source_lang_code` | `string \| null` | no | `null` | Required for models using `prompt_format: "translategemma_template"`. |
+| `target_lang_code` | `string \| null` | no | `null` | Required for models using `prompt_format: "translategemma_template"`. |
 | `stream` | `boolean` | no | `false` | `false` returns one JSON response; `true` returns SSE events. |
 | `decoding` | `object` | no | `{}` | Omitted subfields fall back to `engine.decoding` server defaults. |
 
@@ -184,10 +186,22 @@ Notes:
 - Request-level decoding values override `engine.decoding` defaults when provided.
 - ExLlamaV3 models also support `exllama_tp_backend`, `exllama_max_batch_size`, `exllama_max_chunk_size`, `exllama_max_q_size`, and `exllama_max_rq_tokens`.
 - GGUF models also support `gguf_n_gpu_layers`, `gguf_n_ctx`, `gguf_flash_attn`, `gguf_type_k`, and `gguf_type_v`.
+- Requests to GGUF models using `prompt_format: "translategemma_template"` must include `source_lang_code` and `target_lang_code`; put only the source text in `input` and omit `instructions`.
 - The admin API may temporarily override backend-specific load settings at runtime without modifying `settings.json` or `local.json`.
 - The exact load override fields, allowed values, defaults, and recommended presets are documented in [runtime-admin-api.md](docs/runtime-admin-api.md).
 - ExLlamaV3 dependencies are loaded lazily and required only when an ExLlamaV3 model is configured.
 - GGUF dependencies are loaded lazily and required only when a GGUF model is configured.
+
+TranslateGemma request example:
+
+```json
+{
+  "model": "translategemma-12b-it-q5-k-m-gguf",
+  "input": "Ach, hij is gewoon een ouwe brombeer, maar hij bedoelt het goed.",
+  "source_lang_code": "nl",
+  "target_lang_code": "en"
+}
+```
 
 Optional env vars:
 - `LLM_POOL_SETTINGS_PATH`: explicit base settings file path.

@@ -126,6 +126,51 @@
                 "gguf_flash_attn": "auto",
                 "enabled": false
             },
+            "translategemma-12b-it-q5-k-m-gguf": {
+                "model_path": "/home/gunnar/models/translategemma-12b-it-GGUF/translategemma-12b-it-Q5_K_M.gguf",
+                "backend": "gguf",
+                "device": "cuda",
+                "prompt_format": "translategemma_template",
+                "gguf_n_ctx": 2048,
+                "gguf_flash_attn": "auto",
+                "enabled": false
+            },
+            "translategemma-12b-it-q6-k-h-gguf": {
+                "model_path": "/home/gunnar/models/translategemma-12b-it-MP-GGUF/translategemma-12b-it.Q6_K_H.gguf",
+                "backend": "gguf",
+                "device": "cuda",
+                "prompt_format": "translategemma_template",
+                "gguf_n_ctx": 2048,
+                "gguf_flash_attn": "auto",
+                "enabled": false
+            },
+            "translategemma-4b-it-q5-k-m-gguf": {
+                "model_path": "/home/gunnar/models/google/translategemma-4b-it-GGUF/translategemma-4b-it.Q5_K_M.gguf",
+                "backend": "gguf",
+                "device": "cuda",
+                "prompt_format": "translategemma_template",
+                "gguf_n_ctx": 2048,
+                "gguf_flash_attn": "auto",
+                "enabled": false
+            },
+            "translategemma-4b-it-q6-k-gguf": {
+                "model_path": "/home/gunnar/models/translategemma-4b-it-GGUF/translategemma-4b-it.Q6_K.gguf",
+                "backend": "gguf",
+                "device": "cuda",
+                "prompt_format": "translategemma_template",
+                "gguf_n_ctx": 2048,
+                "gguf_flash_attn": "auto",
+                "enabled": false
+            },
+            "translategemma-4b-it-q8-0-gguf": {
+                "model_path": "/home/gunnar/models/google/translategemma-4b-it-GGUF/translategemma-4b-it.Q8_0.gguf",
+                "backend": "gguf",
+                "device": "cuda",
+                "prompt_format": "translategemma_template",
+                "gguf_n_ctx": 2048,
+                "gguf_flash_attn": "auto",
+                "enabled": false
+            },
             "eurollm-22b-instruct-2512-gguf": {
                 "model_path": "/home/gunnar/models/EuroLLM-22B-Instruct-2512-Q6_K/utter-project_EuroLLM-22B-Instruct-2512-Q6_K.gguf",
                 "backend": "gguf",

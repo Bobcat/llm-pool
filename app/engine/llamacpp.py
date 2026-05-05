@@ -71,6 +71,15 @@ class LlamaCppEngine:
                 decoding=decoding,
                 stop_strings=stop_strings,
             )
+        if prompt_format == "translategemma_template":
+            return self._complete_with_translategemma_template(
+                runtime=runtime,
+                user_text=request.input,
+                source_lang_code=request.source_lang_code,
+                target_lang_code=request.target_lang_code,
+                decoding=decoding,
+                stop_strings=stop_strings,
+            )
 
         tokenize_started = time.perf_counter()
         prompt_text = self._render_prompt(
@@ -180,6 +189,74 @@ class LlamaCppEngine:
                 engine_tokens_per_second=engine_tokens_per_second,
             ),
         )
+
+    def _complete_with_translategemma_template(
+        self,
+        *,
+        runtime: LlamaCppModelRuntime,
+        user_text: str,
+        source_lang_code: str | None,
+        target_lang_code: str | None,
+        decoding: ResolvedDecoding,
+        stop_strings: list[str],
+    ) -> EngineResult:
+        source_lang_code = self._resolve_translation_lang_code(
+            source_lang_code,
+            "source_lang_code",
+        )
+        target_lang_code = self._resolve_translation_lang_code(
+            target_lang_code,
+            "target_lang_code",
+        )
+
+        generate_started = time.perf_counter()
+        with runtime.generation_lock:
+            response = runtime.llm.create_chat_completion(
+                messages=[
+                    {
+                        "role": "user",
+                        "content": [
+                            {
+                                "type": "text",
+                                "source_lang_code": source_lang_code,
+                                "target_lang_code": target_lang_code,
+                                "text": user_text,
+                            }
+                        ],
+                    },
+                ],
+                temperature=decoding.temperature,
+                top_p=decoding.top_p,
+                top_k=decoding.top_k,
+                max_tokens=decoding.max_tokens,
+                repeat_penalty=decoding.repetition_penalty,
+                stop=stop_strings,
+            )
+        generate_total_ms = (time.perf_counter() - generate_started) * 1000.0
+        usage = response.get("usage") or {}
+        prompt_token_count = usage.get("prompt_tokens")
+        output_tokens = usage.get("completion_tokens")
+        engine_tokens_per_second = None
+        if output_tokens is not None and generate_total_ms > 0.0:
+            engine_tokens_per_second = output_tokens / (generate_total_ms / 1000.0)
+        text = response["choices"][0]["message"]["content"].strip()
+        return EngineResult(
+            text=text,
+            metrics=ResponseMetrics(
+                gpu_generate_total_ms=generate_total_ms,
+                engine_prompt_tokens=prompt_token_count,
+                engine_output_tokens=output_tokens,
+                engine_tokens_per_second=engine_tokens_per_second,
+            ),
+        )
+
+    def _resolve_translation_lang_code(self, value: str | None, field_name: str) -> str:
+        if value is None:
+            raise ValueError(f"translategemma_template requires request.{field_name}")
+        normalized = value.strip()
+        if normalized == "":
+            raise ValueError(f"translategemma_template requires non-empty request.{field_name}")
+        return normalized
 
     def _build_runtime(self, settings: ModelSettings) -> LlamaCppModelRuntime:
         try:

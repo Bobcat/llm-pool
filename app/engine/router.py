@@ -445,18 +445,19 @@ class ModelRouterEngine:
             except Exception:
                 LOGGER.warning("Failed to detach ExLlamaV3 cache during cleanup.", exc_info=True)
 
-        try:
-            from exllamav3.util.tensor import g_tensor_cache  # type: ignore
+        if model is not None or cache is not None or generator is not None:
+            try:
+                from exllamav3.util.tensor import g_tensor_cache  # type: ignore
 
-            g_tensor_cache.drop_all()
-        except Exception:
-            pass
-        try:
-            from exllamav3.util.memory import free_mem as exllama_free_mem  # type: ignore
+                g_tensor_cache.drop_all()
+            except Exception:
+                pass
+            try:
+                from exllamav3.util.memory import free_mem as exllama_free_mem  # type: ignore
 
-            exllama_free_mem()
-        except Exception:
-            pass
+                exllama_free_mem()
+            except Exception:
+                pass
 
         for attr_name in (
             "generator",

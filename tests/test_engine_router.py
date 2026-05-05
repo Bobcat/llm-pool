@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import builtins
 import importlib.util
 import sys
 import threading
@@ -1208,6 +1209,40 @@ class ModelRouterEngineTests(unittest.TestCase):
         self.assertFalse(entry["is_loaded"])
         self.assertNotIn("other-model#1", engine._models)
         cleanup_runtime.assert_called_once()
+
+    def test_cleanup_gguf_runtime_does_not_import_exllamav3(self) -> None:
+        class FakeLlama:
+            def __init__(self) -> None:
+                self.closed = False
+
+            def close(self) -> None:
+                self.closed = True
+
+        class FakeGgufRuntime:
+            def __init__(self, llm: FakeLlama) -> None:
+                self.llm = llm
+
+        fake_llm = FakeLlama()
+        runtime = FakeGgufRuntime(fake_llm)
+        engine = ModelRouterEngine.__new__(ModelRouterEngine)
+        original_import = builtins.__import__
+
+        def guarded_import(name, *args, **kwargs):
+            if name.startswith("exllamav3"):
+                raise AssertionError(
+                    f"unexpected ExLlamaV3 import during GGUF cleanup: {name}"
+                )
+            return original_import(name, *args, **kwargs)
+
+        with (
+            mock.patch("builtins.__import__", side_effect=guarded_import),
+            mock.patch.object(router_module, "_empty_cuda_allocator_cache"),
+            mock.patch.object(router_module.gc, "collect"),
+        ):
+            engine._cleanup_runtime(runtime)
+
+        self.assertTrue(fake_llm.closed)
+        self.assertIsNone(runtime.llm)
 
     def test_unload_model_waits_for_inflight_and_blocks_new_requests(self) -> None:
         settings = AppSettings(

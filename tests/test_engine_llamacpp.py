@@ -264,6 +264,92 @@ class LlamaCppEngineTests(unittest.TestCase):
         self.assertIn("<end_of_turn>", runtime.llm.chat_kwargs["stop"])
         self.assertIn("</stop>", runtime.llm.chat_kwargs["stop"])
 
+    def test_complete_translategemma_uses_structured_translation_content(self) -> None:
+        class FakeLlama:
+            def create_chat_completion(self, **kwargs):
+                self.chat_kwargs = kwargs
+                return {
+                    "choices": [{"message": {"content": "Het weer is vandaag prachtig."}}],
+                    "usage": {"prompt_tokens": 81, "completion_tokens": 7},
+                }
+
+        runtime = llamacpp_module.LlamaCppModelRuntime(
+            config=ModelSettings(
+                model_path="/models/translategemma.gguf",
+                backend="gguf",
+                prompt_format="translategemma_template",
+            ),
+            llm=FakeLlama(),
+        )
+        engine = llamacpp_module.LlamaCppEngine.__new__(llamacpp_module.LlamaCppEngine)
+        engine.decoding_defaults = DecodingDefaults(
+            top_k=64,
+            top_p=0.95,
+            temperature=0.1,
+            repetition_penalty=1.0,
+            max_tokens=64,
+            stop=[],
+        )
+        engine._models = {"translategemma": runtime}
+
+        result = engine.complete(
+            ResponseRequest(
+                model="translategemma",
+                input="The weather is beautiful today.",
+                source_lang_code="en",
+                target_lang_code="nl",
+            )
+        )
+
+        self.assertEqual(result.text, "Het weer is vandaag prachtig.")
+        self.assertEqual(
+            runtime.llm.chat_kwargs["messages"],
+            [
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "text",
+                            "source_lang_code": "en",
+                            "target_lang_code": "nl",
+                            "text": "The weather is beautiful today.",
+                        }
+                    ],
+                },
+            ],
+        )
+        self.assertEqual(runtime.llm.chat_kwargs["top_k"], 64)
+        self.assertEqual(runtime.llm.chat_kwargs["top_p"], 0.95)
+        self.assertEqual(runtime.llm.chat_kwargs["temperature"], 0.1)
+        self.assertEqual(runtime.llm.chat_kwargs["repeat_penalty"], 1.0)
+        self.assertEqual(runtime.llm.chat_kwargs["max_tokens"], 64)
+        self.assertIn("<end_of_turn>", runtime.llm.chat_kwargs["stop"])
+
+    def test_complete_translategemma_requires_request_language_codes(self) -> None:
+        class FakeLlama:
+            def create_chat_completion(self, **kwargs):
+                raise AssertionError("chat completion should not be called")
+
+        runtime = llamacpp_module.LlamaCppModelRuntime(
+            config=ModelSettings(
+                model_path="/models/translategemma.gguf",
+                backend="gguf",
+                prompt_format="translategemma_template",
+            ),
+            llm=FakeLlama(),
+        )
+        engine = llamacpp_module.LlamaCppEngine.__new__(llamacpp_module.LlamaCppEngine)
+        engine.decoding_defaults = DecodingDefaults()
+        engine._models = {"translategemma": runtime}
+
+        with self.assertRaises(ValueError) as exc_info:
+            engine.complete(ResponseRequest(model="translategemma", input="Hello"))
+
+        self.assertEqual(
+            str(exc_info.exception),
+            "translategemma_template requires request.source_lang_code",
+        )
+
     def test_build_runtime_passes_gguf_cache_types(self) -> None:
         captured: dict[str, object] = {}
 

@@ -23,6 +23,8 @@ class ResponseRequest(BaseModel):
     model: str
     input: str
     instructions: str | None = None
+    source_lang_code: str | None = None
+    target_lang_code: str | None = None
     stream: bool = False
     decoding: DecodingParams = Field(default_factory=DecodingParams)
 

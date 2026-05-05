@@ -67,6 +67,8 @@ def _native_stop_strings(prompt_format: str) -> list[str]:
         return ["<|im_end|>"]
     if prompt_format == "gemma4_template":
         return ["<turn|>"]
+    if prompt_format == "translategemma_template":
+        return ["<end_of_turn>"]
     return []
 
 
