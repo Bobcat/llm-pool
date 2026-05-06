@@ -33,7 +33,7 @@
                 "enable_thinking": false,
                 "gguf_n_ctx": 16384,
                 "gguf_flash_attn": "auto",
-                "enabled": true
+                "enabled": false
             },
             "google_gemma-4-E2B-it-Q6_K-gguf": {
                 "model_path": "/home/gunnar/models/google_gemma-4-E2B-it-Q6_K/google_gemma-4-E2B-it-Q6_K.gguf",
@@ -133,10 +133,28 @@
                 "prompt_format": "translategemma_template",
                 "gguf_n_ctx": 2048,
                 "gguf_flash_attn": "auto",
-                "enabled": false
+                "enabled": true
             },
             "translategemma-12b-it-q6-k-h-gguf": {
                 "model_path": "/home/gunnar/models/translategemma-12b-it-MP-GGUF/translategemma-12b-it.Q6_K_H.gguf",
+                "backend": "gguf",
+                "device": "cuda",
+                "prompt_format": "translategemma_template",
+                "gguf_n_ctx": 2048,
+                "gguf_flash_attn": "auto",
+                "enabled": false
+            },
+            "translategemma-27b-it-q4-k-m-gguf": {
+                "model_path": "/home/gunnar/models/translategemma-27b-it.Q4_K_M.gguf",
+                "backend": "gguf",
+                "device": "cuda",
+                "prompt_format": "translategemma_template",
+                "gguf_n_ctx": 2048,
+                "gguf_flash_attn": "auto",
+                "enabled": false
+            },
+            "translategemma-27b-it-q6-k-gguf": {
+                "model_path": "/home/gunnar/models/translategemma-27b-it.Q6_K.gguf",
                 "backend": "gguf",
                 "device": "cuda",
                 "prompt_format": "translategemma_template",
@@ -151,7 +169,7 @@
                 "prompt_format": "translategemma_template",
                 "gguf_n_ctx": 2048,
                 "gguf_flash_attn": "auto",
-                "enabled": false
+                "enabled": true
             },
             "translategemma-4b-it-q6-k-gguf": {
                 "model_path": "/home/gunnar/models/translategemma-4b-it-GGUF/translategemma-4b-it.Q6_K.gguf",

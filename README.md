@@ -234,6 +234,25 @@ In other words:
 - `Engine` wraps `Inference`
 - `Pool` wraps `Engine`
 
+The payload may also include runtime-specific counters and sub-timers:
+
+- `engine_queue_wait_ms`
+  time spent waiting in the per-model scheduler queue before backend work starts
+- `engine_tokenize_ms`
+  prompt tokenization time when the backend reports it separately
+- `gpu_time_to_first_token_ms`
+  time from generation start to first generated token, when available
+- `gpu_generate_total_ms`
+  backend-reported generation time
+- `gpu_decode_after_first_token_ms`
+  generation time after the first token, when available
+- `engine_prompt_tokens` / `engine_output_tokens`
+  prompt and generated token counts, when available
+- `engine_tokens_per_second`
+  generated output tokens divided by the measured generation wall time
+
+Some fields are backend-dependent and may be `null`.
+
 ## Test
 
 ```bash
