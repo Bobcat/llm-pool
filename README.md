@@ -261,7 +261,7 @@ python3 -m unittest discover -s tests
 
 ## Design Notes
 
-The repo also includes a small set of active design notes:
+The repo also includes design notes and trackers in various stages of completion:
 
 - [runtime-scheduler-notes.md](docs/runtime-scheduler-notes.md)
   Captures the broader scheduler design space beyond the current in-process implementation.
@@ -269,6 +269,8 @@ The repo also includes a small set of active design notes:
   Tracks the current scheduler MVP implementation status and remaining deferred work.
 - [model-replica-routing-notes.md](docs/model-replica-routing-notes.md)
   Captures the client-visible model and replica-routing semantics.
+- [remote-openai-compatible-backend-notes.md](docs/remote-openai-compatible-backend-notes.md)
+  Captures the proposed remote OpenAI-compatible backend shape, including cost-control notes.
 - [runtime-subprocess-notes.md](docs/runtime-subprocess-notes.md)
   Captures the intended process-isolation model for loaded runtimes and how that should fit behind the same scheduler/runtime adapter boundary.
 
