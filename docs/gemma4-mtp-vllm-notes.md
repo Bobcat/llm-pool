@@ -35,14 +35,43 @@ The clean first backend shape is a new backend adapter:
 
 The backend should represent one vLLM-served model route.
 
-Possible V1 implementation approaches:
+V1 should use the vLLM Python engine in-process.
 
-- spawn/manage a local `vllm serve` subprocess and call its OpenAI-compatible API
-- connect to an already-running vLLM OpenAI-compatible server
+The intended runtime shape is:
 
-The subprocess option is more self-contained. The external-server option is smaller and overlaps with the remote OpenAI-compatible backend idea.
+```text
+llm-pool backend runtime
+  -> in-process vLLM Python engine
+```
 
-The decision does not need to be made in this note.
+The backend should not start `vllm serve` and then call it through the OpenAI-compatible HTTP API. That would add a second serving process, a second queue/scheduler layer, and another lifecycle surface underneath `llm-pool`.
+
+The likely vLLM API target is `AsyncLLMEngine` / `AsyncLLM`, because vLLM documents the simpler `LLM` entrypoint as an offline inference API. `LLM` may still be useful for a local spike, but it should not be assumed to be the final backend API.
+
+## Runtime Boundary
+
+This note intentionally keeps vLLM inside the `llm-pool` backend runtime.
+
+If runtime subprocess isolation is introduced later, the intended shape becomes:
+
+```text
+llm-pool parent process
+  -> llm-pool runtime child process
+       -> in-process vLLM Python engine
+```
+
+It should not become:
+
+```text
+llm-pool parent process
+  -> llm-pool runtime child process
+       -> vLLM server process
+            -> vLLM engine
+```
+
+The subprocess boundary, if added, should belong to `llm-pool`, not to a nested vLLM server deployment.
+
+See `runtime-subprocess-notes.md`.
 
 ## Config Shape
 
@@ -122,6 +151,9 @@ This design does not introduce:
 
 - a hand-written MTP decode loop inside `llm-pool`
 - router-level coordination between two normal model calls
+- a `vllm serve` subprocess managed by this backend
+- calls to vLLM through the OpenAI-compatible HTTP API
+- support for an already-running external vLLM server in this backend
 - generic request-time selection of arbitrary assistant models
 - vLLM GGUF support as the initial Gemma 4 MTP path
 - support for every vLLM speculative decoding method in V1
@@ -129,8 +161,8 @@ This design does not introduce:
 
 ## Open Questions
 
-- Should V1 manage a local vLLM subprocess, or only call an already-running vLLM server?
 - Should `model_path` be reused for vLLM model ids, or should vLLM get a dedicated `vllm_model` field?
+- Should the backend use `AsyncLLMEngine` or the newer `AsyncLLM` alias directly?
 - Which vLLM runtime settings should be first-class config fields versus opaque extra args?
 - Should MTP-specific metrics be pulled from vLLM logs, vLLM metrics, or omitted in V1?
 
