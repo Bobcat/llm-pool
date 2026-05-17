@@ -1,6 +1,6 @@
 # llm-pool
 
-FastAPI service for local LLM inference with a single `POST /v1/responses` API across CT2, ExLlamaV3, and GGUF/`llama.cpp` backends, plus admin endpoints for loading, unloading, and inspecting models at runtime.
+FastAPI service that exposes one `POST /v1/responses` API across local CT2, ExLlamaV3, GGUF/`llama.cpp`, and OpenAI-compatible remote Chat Completions backends. It includes runtime metrics, per-model scheduling, replica routing, and admin endpoints for loading, unloading, and inspecting models.
 
 ## Index
 
@@ -9,6 +9,7 @@ FastAPI service for local LLM inference with a single `POST /v1/responses` API a
 - [Inference Example](#inference-example)
 - [Request Fields](#request-fields)
 - [Local Overrides](#local-overrides)
+- [Remote Backends](#remote-backends)
 - [Replicas](#replicas)
 - [Timing Metrics](#timing-metrics)
 - [Test](#test)
@@ -18,13 +19,16 @@ FastAPI service for local LLM inference with a single `POST /v1/responses` API a
 
 ## Overview
 
-- one inference API across CT2, ExLlamaV3, and GGUF/`llama.cpp` backends
+- one inference API across local and remote model backends
+- local CT2, ExLlamaV3, and GGUF/`llama.cpp` runtime adapters
+- OpenAI-compatible remote Chat Completions adapter
 - JSON responses and SSE streaming from the same endpoint
 - runtime metrics included in inference responses
 - admin endpoints for inspecting models and loading or unloading them at runtime
 - an in-process scheduler/executor layer in front of inference
 - per-model queueing, runtime inflight tracking, and configurable target inflight
 - request routing across multiple identical internal replicas for the same model id
+- request-level `allow_remote` gate for external or paid model calls
 
 ## HTTP API
 
@@ -112,6 +116,7 @@ Currently supported API request fields:
 | `source_lang_code` | `string \| null` | no | `null` | Required for models using `prompt_format: "translategemma_template"`. |
 | `target_lang_code` | `string \| null` | no | `null` | Required for models using `prompt_format: "translategemma_template"`. |
 | `stream` | `boolean` | no | `false` | `false` returns one JSON response; `true` returns SSE events. |
+| `allow_remote` | `boolean` | no | `false` | Required for requests to `openai_compatible` remote models. |
 | `decoding` | `object` | no | `{}` | Omitted subfields fall back to `engine.decoding` server defaults. |
 
 Currently supported decoding fields:
@@ -125,6 +130,8 @@ Currently supported decoding fields:
 | `repetition_penalty` | `float` | no | server default, usually `1.0` | used | used | used | Repetition penalty. |
 | `max_tokens` | `int` | no | server default, usually `256` | used | used | used | Maximum generated output tokens. |
 | `stop` | `list[string]` | no | server default extra stop list, often empty | used | used | used | Optional extra stop strings. Model-internal stop/eos tokens are handled by the pool/backend. |
+
+Remote OpenAI-compatible models map `temperature`, `top_p`, `max_tokens`, and `stop` to Chat Completions requests. They accept `beam_size`, `top_k`, and `repetition_penalty` for request schema compatibility, but log and ignore them.
 
 ## Local Overrides
 
@@ -186,6 +193,7 @@ Notes:
 - Request-level decoding values override `engine.decoding` defaults when provided.
 - ExLlamaV3 models also support `exllama_tp_backend`, `exllama_max_batch_size`, `exllama_max_chunk_size`, `exllama_max_q_size`, and `exllama_max_rq_tokens`.
 - GGUF models also support `gguf_n_gpu_layers`, `gguf_n_ctx`, `gguf_flash_attn`, `gguf_type_k`, and `gguf_type_v`.
+- OpenAI-compatible remote models support `remote_api_kind`, `remote_base_url`, `remote_api_key_env`, `remote_model`, `remote_timeout_s`, `remote_health_check`, `remote_max_retries`, and `remote_thinking`.
 - Requests to GGUF models using `prompt_format: "translategemma_template"` must include `source_lang_code` and `target_lang_code`; put only the source text in `input` and omit `instructions`.
 - The admin API may temporarily override backend-specific load settings at runtime without modifying `settings.json` or `local.json`.
 - The exact load override fields, allowed values, defaults, and recommended presets are documented in [runtime-admin-api.md](docs/runtime-admin-api.md).
@@ -206,6 +214,43 @@ TranslateGemma request example:
 Optional env vars:
 - `LLM_POOL_SETTINGS_PATH`: explicit base settings file path.
 - `LLM_POOL_LOCAL_SETTINGS_PATH`: explicit local override file path.
+
+## Remote Backends
+
+Remote models use the same public model contract as local models, but activate an upstream API route instead of loading model weights. For V1, the supported remote backend is `openai_compatible` with Chat Completions.
+
+Example:
+
+```json
+{
+  "engine": {
+    "models": {
+      "frontier-large": {
+        "backend": "openai_compatible",
+        "remote_api_kind": "chat_completions",
+        "remote_base_url": "https://api.example.com/v1",
+        "remote_api_key_env": "EXAMPLE_API_KEY",
+        "remote_model": "provider-model",
+        "remote_timeout_s": 120,
+        "remote_health_check": "config_only",
+        "remote_max_retries": 0,
+        "remote_thinking": "disabled",
+        "target_inflight": 1,
+        "enabled": false
+      }
+    }
+  }
+}
+```
+
+Remote backend notes:
+
+- `model_path` is not required for `openai_compatible` models.
+- The API key is read from the environment variable named by `remote_api_key_env`.
+- Callers must set `allow_remote: true`; otherwise the request is rejected before it enters the scheduler.
+- `target_inflight` controls local submission concurrency. It is not a guarantee that the upstream provider runs requests concurrently.
+- `remote_thinking` is an explicit provider extension for APIs that expose a Chat Completions `thinking` field. It currently accepts `"enabled"` or `"disabled"`.
+- Remote calls may incur provider costs. Phase 1 only provides the explicit `allow_remote` request gate; local budget enforcement and cost ledgers are still design-note work. See [remote-openai-compatible-backend-notes.md](docs/remote-openai-compatible-backend-notes.md).
 
 ## Replicas
 
