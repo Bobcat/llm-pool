@@ -25,6 +25,7 @@ class ResponseRequest(BaseModel):
     instructions: str | None = None
     source_lang_code: str | None = None
     target_lang_code: str | None = None
+    allow_remote: bool = False
     stream: bool = False
     decoding: DecodingParams = Field(default_factory=DecodingParams)
 

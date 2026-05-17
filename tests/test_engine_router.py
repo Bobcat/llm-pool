@@ -103,6 +103,52 @@ class ModelRouterEngineTests(unittest.TestCase):
 
         self.assertEqual(gguf_result.text, "gguf:gguf-model#1")
 
+    def test_dispatches_openai_compatible_backend_with_remote_admission(self) -> None:
+        settings = AppSettings(
+            service=ServiceSettings(),
+            engine=EngineSettings(
+                backend="ct2",
+                models={
+                    "remote-model": ModelSettings(
+                        model_path=None,
+                        backend="openai_compatible",
+                        remote_api_kind="chat_completions",
+                        remote_base_url="https://api.example.com/v1",
+                        remote_api_key_env="EXAMPLE_API_KEY",
+                        remote_model="provider-model",
+                        target_inflight=3,
+                    ),
+                },
+            ),
+        )
+
+        class FakeOpenAICompatibleEngine:
+            def __init__(self, scoped_settings):
+                self._models = {name: object() for name in scoped_settings.engine.models}
+                self._load_errors = {}
+
+            def complete(self, request: ResponseRequest) -> EngineResult:
+                return EngineResult(text=f"remote:{request.model}")
+
+        with mock.patch.object(engine_module, "OpenAICompatibleEngine", FakeOpenAICompatibleEngine):
+            engine = ModelRouterEngine(settings)
+
+            with self.assertRaises(engine_module.RequestAdmissionError) as exc_info:
+                engine.complete(ResponseRequest(model="remote-model", input="hello"))
+
+            remote_result = engine.complete(
+                ResponseRequest(
+                    model="remote-model",
+                    input="hello",
+                    allow_remote=True,
+                )
+            )
+
+        self.assertEqual(exc_info.exception.code, "remote_execution_disallowed")
+        self.assertEqual(remote_result.text, "remote:remote-model#1")
+        model = engine.admin_models_payload()["models"][0]
+        self.assertEqual(model["effective_target_inflight"], 3)
+
     def test_build_engine_uses_model_router_for_non_stub_backends(self) -> None:
         settings = AppSettings(
             service=ServiceSettings(),

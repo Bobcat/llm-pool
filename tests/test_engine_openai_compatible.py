@@ -1,0 +1,164 @@
+from __future__ import annotations
+
+import importlib.util
+import json
+import os
+import unittest
+from unittest import mock
+
+HAS_PYDANTIC = importlib.util.find_spec("pydantic") is not None
+
+if HAS_PYDANTIC:
+    from app.config import AppSettings
+    from app.config import DecodingDefaults
+    from app.config import EngineSettings
+    from app.config import ModelSettings
+    import app.engine.openai_compatible as openai_compatible_module
+    from app.schemas import DecodingParams
+    from app.schemas import ResponseRequest
+
+
+class FakeResponse:
+    def __init__(self, payload: dict[str, object]) -> None:
+        self._payload = payload
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc, tb) -> None:
+        del exc_type, exc, tb
+
+    def read(self) -> bytes:
+        return json.dumps(self._payload).encode("utf-8")
+
+
+@unittest.skipUnless(HAS_PYDANTIC, "pydantic not installed")
+class OpenAICompatibleEngineTests(unittest.TestCase):
+    def test_complete_posts_chat_completion_and_extracts_usage(self) -> None:
+        settings = AppSettings(
+            engine=EngineSettings(
+                decoding=DecodingDefaults(
+                    top_p=1.0,
+                    temperature=0.1,
+                    max_tokens=32,
+                    stop=[],
+                ),
+                models={
+                    "remote-model": ModelSettings(
+                        model_path=None,
+                        backend="openai_compatible",
+                        remote_api_kind="chat_completions",
+                        remote_base_url="https://api.example.com/v1/",
+                        remote_api_key_env="EXAMPLE_API_KEY",
+                        remote_model="provider-model",
+                        remote_timeout_s=12.5,
+                        remote_thinking="disabled",
+                    ),
+                },
+            ),
+        )
+        captured: dict[str, object] = {}
+
+        def fake_urlopen(request, *, timeout):
+            captured["url"] = request.full_url
+            captured["headers"] = dict(request.header_items())
+            captured["body"] = json.loads(request.data.decode("utf-8"))
+            captured["timeout"] = timeout
+            return FakeResponse(
+                {
+                    "choices": [
+                        {
+                            "message": {
+                                "content": "  done  ",
+                            }
+                        }
+                    ],
+                    "usage": {
+                        "prompt_tokens": 12,
+                        "completion_tokens": 5,
+                        "total_tokens": 17,
+                    },
+                }
+            )
+
+        previous = os.environ.get("EXAMPLE_API_KEY")
+        os.environ["EXAMPLE_API_KEY"] = "secret"
+        try:
+            with mock.patch.object(openai_compatible_module, "urlopen", side_effect=fake_urlopen):
+                engine = openai_compatible_module.OpenAICompatibleEngine(settings)
+                result = engine.complete(
+                    ResponseRequest(
+                        model="remote-model",
+                        input="Hello",
+                        instructions="Be brief.",
+                        allow_remote=True,
+                        decoding=DecodingParams(
+                            beam_size=2,
+                            top_k=7,
+                            top_p=0.8,
+                            temperature=0.2,
+                            repetition_penalty=1.2,
+                            max_tokens=9,
+                            stop=["DONE"],
+                        ),
+                    )
+                )
+        finally:
+            if previous is None:
+                os.environ.pop("EXAMPLE_API_KEY", None)
+            else:
+                os.environ["EXAMPLE_API_KEY"] = previous
+
+        self.assertEqual(result.text, "done")
+        self.assertEqual(result.metrics.engine_prompt_tokens, 12)
+        self.assertEqual(result.metrics.engine_output_tokens, 5)
+        self.assertIsNotNone(result.metrics.engine_tokens_per_second)
+        self.assertEqual(captured["url"], "https://api.example.com/v1/chat/completions")
+        self.assertEqual(captured["timeout"], 12.5)
+        self.assertEqual(captured["headers"]["Authorization"], "Bearer secret")
+        self.assertEqual(
+            captured["body"],
+            {
+                "model": "provider-model",
+                "messages": [
+                    {"role": "system", "content": "Be brief."},
+                    {"role": "user", "content": "Hello"},
+                ],
+                "temperature": 0.2,
+                "top_p": 0.8,
+                "max_tokens": 9,
+                "stop": ["DONE"],
+                "thinking": {"type": "disabled"},
+            },
+        )
+
+    def test_build_runtime_requires_api_key_environment_variable(self) -> None:
+        engine = openai_compatible_module.OpenAICompatibleEngine.__new__(
+            openai_compatible_module.OpenAICompatibleEngine
+        )
+        settings = ModelSettings(
+            model_path=None,
+            backend="openai_compatible",
+            remote_api_kind="chat_completions",
+            remote_base_url="https://api.example.com/v1",
+            remote_api_key_env="MISSING_API_KEY",
+            remote_model="provider-model",
+        )
+
+        previous = os.environ.get("MISSING_API_KEY")
+        os.environ.pop("MISSING_API_KEY", None)
+        try:
+            with self.assertRaises(RuntimeError) as exc_info:
+                engine._build_runtime(settings)
+        finally:
+            if previous is not None:
+                os.environ["MISSING_API_KEY"] = previous
+
+        self.assertEqual(
+            str(exc_info.exception),
+            "missing API key environment variable: MISSING_API_KEY",
+        )
+
+
+if __name__ == "__main__":
+    unittest.main()

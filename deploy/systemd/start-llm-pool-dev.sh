@@ -30,29 +30,52 @@ if [[ -z "${MAX_JOBS:-}" ]]; then
   export MAX_JOBS="1"
 fi
 
-# Strict mode: require a Blackwell-capable CUDA toolkit and disallow silent arch fallbacks.
-NVCC_BIN=""
-if [[ -n "${CUDA_HOME:-}" ]] && [[ -x "${CUDA_HOME}/bin/nvcc" ]]; then
-  NVCC_BIN="${CUDA_HOME}/bin/nvcc"
-elif command -v nvcc >/dev/null 2>&1; then
-  NVCC_BIN="$(command -v nvcc)"
-fi
-if [[ -z "$NVCC_BIN" ]]; then
-  echo "nvcc not found. Refusing to start in strict mode." >&2
-  exit 1
-fi
-NVCC_VERSION="$("$NVCC_BIN" --version 2>/dev/null | sed -n 's/.*release \([0-9]\+\.[0-9]\+\).*/\1/p' | head -n1)"
-if [[ -z "$NVCC_VERSION" ]]; then
-  echo "unable to determine nvcc version from: $NVCC_BIN" >&2
-  exit 1
-fi
-if ! awk -v v="$NVCC_VERSION" 'BEGIN { split(v, a, "."); exit !((a[1] > 12) || (a[1] == 12 && a[2] >= 8)) }'; then
-  echo "nvcc $NVCC_VERSION is too old for strict Blackwell mode (need >= 12.8)." >&2
-  exit 1
-fi
-if [[ -n "${TORCH_CUDA_ARCH_LIST:-}" ]] && [[ "$TORCH_CUDA_ARCH_LIST" == *"9.0"* ]]; then
-  echo "TORCH_CUDA_ARCH_LIST=$TORCH_CUDA_ARCH_LIST blocks native Blackwell kernels. Refusing to start." >&2
-  exit 1
+NEEDS_LOCAL_CUDA="$(
+  PYTHONPATH="$ROOT_DIR" "$PYTHON_BIN" - "$SETTINGS_PATH" <<'PY'
+from __future__ import annotations
+
+import sys
+
+from app.config import load_settings
+
+settings = load_settings(sys.argv[1])
+for model_settings in settings.engine.models.values():
+    if not model_settings.enabled:
+        continue
+    backend = model_settings.backend or settings.engine.backend
+    if backend.strip().lower() != "openai_compatible":
+        print("1")
+        break
+else:
+    print("0")
+PY
+)"
+
+if [[ "$NEEDS_LOCAL_CUDA" == "1" ]]; then
+  # Strict mode: require a Blackwell-capable CUDA toolkit and disallow silent arch fallbacks.
+  NVCC_BIN=""
+  if [[ -n "${CUDA_HOME:-}" ]] && [[ -x "${CUDA_HOME}/bin/nvcc" ]]; then
+    NVCC_BIN="${CUDA_HOME}/bin/nvcc"
+  elif command -v nvcc >/dev/null 2>&1; then
+    NVCC_BIN="$(command -v nvcc)"
+  fi
+  if [[ -z "$NVCC_BIN" ]]; then
+    echo "nvcc not found. Refusing to start in strict mode." >&2
+    exit 1
+  fi
+  NVCC_VERSION="$("$NVCC_BIN" --version 2>/dev/null | sed -n 's/.*release \([0-9][0-9]*\.[0-9][0-9]*\).*/\1/p' | head -n1)"
+  if [[ -z "$NVCC_VERSION" ]]; then
+    echo "unable to determine nvcc version from: $NVCC_BIN" >&2
+    exit 1
+  fi
+  if ! awk -v v="$NVCC_VERSION" 'BEGIN { split(v, a, "."); exit !((a[1] > 12) || (a[1] == 12 && a[2] >= 8)) }'; then
+    echo "nvcc $NVCC_VERSION is too old for strict Blackwell mode (need >= 12.8)." >&2
+    exit 1
+  fi
+  if [[ -n "${TORCH_CUDA_ARCH_LIST:-}" ]] && [[ "$TORCH_CUDA_ARCH_LIST" == *"9.0"* ]]; then
+    echo "TORCH_CUDA_ARCH_LIST=$TORCH_CUDA_ARCH_LIST blocks native Blackwell kernels. Refusing to start." >&2
+    exit 1
+  fi
 fi
 
 PORT="$DEFAULT_PORT"

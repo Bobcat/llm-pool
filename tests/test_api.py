@@ -76,6 +76,77 @@ class ApiTests(unittest.TestCase):
         self.assertIn("pool_total_wall_ms", payload["metrics"])
         self.assertIn("gpu_generate_total_ms", payload["metrics"])
 
+    def test_response_endpoint_maps_request_admission_errors(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            settings_path = Path(tmpdir) / "settings.json"
+            settings_path.write_text(
+                (
+                    "{\n"
+                    '  "engine": {\n'
+                    '    "backend": "stub",\n'
+                    '    "models": {\n'
+                    '      "remote-model": {"model_path": "/tmp/remote-model", "enabled": true}\n'
+                    "    }\n"
+                    "  }\n"
+                    "}\n"
+                ),
+                encoding="utf-8",
+            )
+            previous = os.environ.get("LLM_POOL_SETTINGS_PATH")
+            os.environ["LLM_POOL_SETTINGS_PATH"] = str(settings_path)
+            try:
+                sys.modules.pop("app.main", None)
+                main = importlib.import_module("app.main")
+
+                class FakeEngine:
+                    def admin_models_payload(self, settings) -> dict[str, object]:
+                        del settings
+                        return {"models": []}
+
+                    def admin_gpu_memory_payload(self, settings) -> dict[str, object]:
+                        del settings
+                        return {"gpus": [], "models": [], "error": None}
+
+                    def load_model(self, model_name: str, settings, load_request=None) -> dict[str, object]:
+                        del model_name, settings, load_request
+                        raise AssertionError("load_model should not be called in this test")
+
+                    def unload_model(self, model_name: str, settings) -> dict[str, object]:
+                        del model_name, settings
+                        raise AssertionError("unload_model should not be called in this test")
+
+                    def complete(self, request):
+                        del request
+                        raise main.RequestAdmissionError(
+                            code="remote_execution_disallowed",
+                            status_code=403,
+                            message="remote execution is not allowed for this request",
+                        )
+
+                with mock.patch.object(main, "build_engine", return_value=FakeEngine()):
+                    app = main.create_app(settings_path)
+            finally:
+                if previous is None:
+                    os.environ.pop("LLM_POOL_SETTINGS_PATH", None)
+                else:
+                    os.environ["LLM_POOL_SETTINGS_PATH"] = previous
+
+        client = TestClient(app)
+        response = client.post(
+            "/v1/responses",
+            json={"model": "remote-model", "input": "Hello", "stream": False},
+        )
+
+        self.assertEqual(response.status_code, 403)
+        self.assertEqual(
+            response.json()["detail"],
+            {
+                "code": "remote_execution_disallowed",
+                "model": "remote-model",
+                "message": "remote execution is not allowed for this request",
+            },
+        )
+
     def test_streaming_mode_returns_sse_events(self) -> None:
         client = self._create_client()
 

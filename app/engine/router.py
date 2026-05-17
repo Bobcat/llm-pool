@@ -27,6 +27,7 @@ from .common import _query_primary_gpu_used_mib
 from .common import _resolve_gguf_cache_type_constant
 from .common import ModelRuntimeState
 from .common import ModelStateError
+from .common import RequestAdmissionError
 from .common import UnknownModelError
 from .scheduler import ExecutorSnapshot
 from .scheduler import ReplicaRegistration
@@ -78,6 +79,12 @@ class ModelRouterEngine:
             state = self._model_states[request.model]
             if state.lifecycle != "loaded":
                 raise ModelStateError(request.model, self._lifecycle_error_code(state.lifecycle))
+            if state.resolved_backend == "openai_compatible" and not request.allow_remote:
+                raise RequestAdmissionError(
+                    code="remote_execution_disallowed",
+                    status_code=403,
+                    message="remote execution is not allowed for this request",
+                )
             executor = self._scheduler.get(request.model)
             if executor is None:
                 raise ModelStateError(request.model, "model_not_loaded")
@@ -400,7 +407,10 @@ class ModelRouterEngine:
         return _complete
 
     def _runtime_capability_for_model(self, model_name: str, backend_engine: object) -> int:
-        del model_name, backend_engine
+        del backend_engine
+        state = self._model_states[model_name]
+        if state.resolved_backend == "openai_compatible":
+            return self._configured_models[model_name].target_inflight
         return 1
 
     def _cleanup_runtime(self, runtime: object | None) -> None:
@@ -690,6 +700,8 @@ class ModelRouterEngine:
             return engine_module.ExLlamaV3Engine(settings)
         if backend == "gguf":
             return engine_module.LlamaCppEngine(settings)
+        if backend == "openai_compatible":
+            return engine_module.OpenAICompatibleEngine(settings)
         if backend == "stub":
             return engine_module.StubEngine(settings)
         raise ValueError(f"unsupported engine backend: {backend!r}")

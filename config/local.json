@@ -1,5 +1,9 @@
 {
     "engine": {
+        "decoding": {
+            "temperature": 0.6,
+            "top_p": 0.95
+        },
         "models": {
             "eurollm-9b-ct2-int8": {
                 "model_path": "/home/gunnar/models/EuroLLM-9B-Instruct-ct2-int8",
@@ -75,7 +79,7 @@
                 "enable_thinking": false,
                 "gguf_n_ctx": 16384,
                 "gguf_flash_attn": "auto",
-                "enabled": true
+                "enabled": false
             },
             "google_gemma-4-E4B-it-Q6_K-gguf": {
                 "model_path": "/home/gunnar/models/google_gemma-4-E4B-it-Q6_K/google_gemma-4-E4B-it-Q6_K.gguf",
@@ -133,7 +137,7 @@
                 "prompt_format": "translategemma_template",
                 "gguf_n_ctx": 2048,
                 "gguf_flash_attn": "auto",
-                "enabled": true
+                "enabled": false
             },
             "translategemma-12b-it-q6-k-h-gguf": {
                 "model_path": "/home/gunnar/models/translategemma-12b-it-MP-GGUF/translategemma-12b-it.Q6_K_H.gguf",
@@ -169,7 +173,7 @@
                 "prompt_format": "translategemma_template",
                 "gguf_n_ctx": 2048,
                 "gguf_flash_attn": "auto",
-                "enabled": true
+                "enabled": false
             },
             "translategemma-4b-it-q6-k-gguf": {
                 "model_path": "/home/gunnar/models/translategemma-4b-it-GGUF/translategemma-4b-it.Q6_K.gguf",
@@ -268,6 +272,19 @@
                 "compute_type": "default",
                 "prompt_format": "generic",
                 "enabled": false
+            },
+            "kimi-k2.6": {
+                "backend": "openai_compatible",
+                "remote_api_kind": "chat_completions",
+                "remote_base_url": "https://api.moonshot.ai/v1",
+                "remote_api_key_env": "MOONSHOT_API_KEY",
+                "remote_model": "kimi-k2.6",
+                "remote_timeout_s": 120,
+                "remote_health_check": "config_only",
+                "remote_max_retries": 0,
+                "remote_thinking": "disabled",
+                "target_inflight": 1,
+                "enabled": true
             }
         }
     }

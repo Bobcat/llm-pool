@@ -21,7 +21,7 @@ class ServiceSettings:
 
 @dataclass(frozen=True)
 class ModelSettings:
-    model_path: str
+    model_path: str | None
     backend: str | None = None
     device: str = "cuda"
     compute_type: str = "int8"
@@ -45,6 +45,14 @@ class ModelSettings:
     gguf_flash_attn: str = "auto"
     gguf_type_k: str | None = None
     gguf_type_v: str | None = None
+    remote_api_kind: str | None = None
+    remote_base_url: str | None = None
+    remote_api_key_env: str | None = None
+    remote_model: str | None = None
+    remote_timeout_s: float = 60.0
+    remote_health_check: str = "config_only"
+    remote_max_retries: int = 0
+    remote_thinking: str | None = None
 
 
 @dataclass(frozen=True)
@@ -99,11 +107,9 @@ def load_settings(path: str | Path | None = None) -> AppSettings:
         decoding_payload = {}
 
     models: dict[str, ModelSettings] = {}
+    default_backend = str(engine_payload.get("backend", "stub")).strip().lower()
     for model_name, model_payload in models_payload.items():
         if not isinstance(model_payload, dict):
-            continue
-        model_path = str(model_payload.get("model_path", "")).strip()
-        if not model_path:
             continue
         backend_value = model_payload.get("backend")
         backend = None
@@ -111,6 +117,10 @@ def load_settings(path: str | Path | None = None) -> AppSettings:
             parsed_backend = str(backend_value).strip().lower()
             if parsed_backend:
                 backend = parsed_backend
+        resolved_backend = backend or default_backend
+        model_path = _coerce_optional_str(model_payload.get("model_path"))
+        if model_path is None and resolved_backend != "openai_compatible":
+            continue
         cache_quant_value = model_payload.get("exllama_cache_quant")
         cache_quant = None
         if cache_quant_value is not None:
@@ -139,6 +149,15 @@ def load_settings(path: str | Path | None = None) -> AppSettings:
             parsed_gguf_type_v = str(gguf_type_v_value).strip()
             if parsed_gguf_type_v:
                 gguf_type_v = parsed_gguf_type_v
+        remote_api_kind = _coerce_optional_str(model_payload.get("remote_api_kind"))
+        if remote_api_kind is not None:
+            remote_api_kind = remote_api_kind.lower()
+        remote_health_check = str(model_payload.get("remote_health_check", "config_only")).strip().lower()
+        if remote_health_check == "":
+            remote_health_check = "config_only"
+        remote_thinking = _coerce_optional_str(model_payload.get("remote_thinking"))
+        if remote_thinking is not None:
+            remote_thinking = remote_thinking.lower()
         models[str(model_name)] = ModelSettings(
             model_path=model_path,
             backend=backend,
@@ -168,6 +187,14 @@ def load_settings(path: str | Path | None = None) -> AppSettings:
             gguf_flash_attn=_coerce_gguf_flash_attn_mode(model_payload.get("gguf_flash_attn", "auto")),
             gguf_type_k=gguf_type_k,
             gguf_type_v=gguf_type_v,
+            remote_api_kind=remote_api_kind,
+            remote_base_url=_coerce_optional_str(model_payload.get("remote_base_url")),
+            remote_api_key_env=_coerce_optional_str(model_payload.get("remote_api_key_env")),
+            remote_model=_coerce_optional_str(model_payload.get("remote_model")),
+            remote_timeout_s=float(model_payload.get("remote_timeout_s", 60.0)),
+            remote_health_check=remote_health_check,
+            remote_max_retries=int(model_payload.get("remote_max_retries", 0)),
+            remote_thinking=remote_thinking,
         )
         if models[str(model_name)].replicas > models[str(model_name)].replica_max:
             raise ValueError(
@@ -235,6 +262,15 @@ def _coerce_stop_tokens(value: object, *, default: list[str]) -> list[str]:
         if tokens:
             return tokens
     return list(default)
+
+
+def _coerce_optional_str(value: object) -> str | None:
+    if value is None:
+        return None
+    parsed = str(value).strip()
+    if parsed == "":
+        return None
+    return parsed
 
 
 def _coerce_gguf_flash_attn_mode(value: object, *, default: str = "auto") -> str:

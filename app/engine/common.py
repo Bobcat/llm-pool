@@ -59,6 +59,16 @@ _BACKEND_MODEL_DEFINITION_FIELDS = {
         "gguf_type_k",
         "gguf_type_v",
     ),
+    "openai_compatible": (
+        "remote_api_kind",
+        "remote_base_url",
+        "remote_api_key_env",
+        "remote_model",
+        "remote_timeout_s",
+        "remote_health_check",
+        "remote_max_retries",
+        "remote_thinking",
+    ),
 }
 
 
@@ -147,7 +157,9 @@ def _query_primary_gpu_used_mib() -> int | None:
     return None
 
 
-def _estimate_model_artifact_size_mib(model_path: str) -> int | None:
+def _estimate_model_artifact_size_mib(model_path: str | None) -> int | None:
+    if model_path is None:
+        return None
     path = Path(model_path)
     try:
         if path.is_file():
@@ -361,6 +373,22 @@ class ModelStateError(RuntimeError):
         super().__init__(model_name)
         self.model_name = model_name
         self.code = code
+
+
+class RequestAdmissionError(RuntimeError):
+    def __init__(self, *, code: str, status_code: int, message: str) -> None:
+        super().__init__(message)
+        self.code = code
+        self.status_code = status_code
+        self.message = message
+
+
+class BackendExecutionError(RuntimeError):
+    def __init__(self, *, code: str, status_code: int, message: str) -> None:
+        super().__init__(message)
+        self.code = code
+        self.status_code = status_code
+        self.message = message
 
 
 @dataclass

@@ -250,6 +250,50 @@ class ConfigTests(unittest.TestCase):
         self.assertEqual(model.gguf_type_k, "q8_0")
         self.assertEqual(model.gguf_type_v, "q4_0")
 
+    def test_load_settings_reads_openai_compatible_model_without_model_path(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = Path(tmpdir) / "settings.json"
+            path.write_text(
+                (
+                    "{\n"
+                    '  "engine": {\n'
+                    '    "backend": "stub",\n'
+                    '    "models": {\n'
+                    '      "frontier-large": {\n'
+                    '        "backend": "openai_compatible",\n'
+                    '        "remote_api_kind": "chat_completions",\n'
+                    '        "remote_base_url": "https://api.example.com/v1",\n'
+                    '        "remote_api_key_env": "EXAMPLE_API_KEY",\n'
+                    '        "remote_model": "provider-large-model",\n'
+                    '        "remote_timeout_s": 45.5,\n'
+                    '        "remote_health_check": "config_only",\n'
+                    '        "remote_thinking": "DISABLED",\n'
+                    '        "target_inflight": 3,\n'
+                    '        "enabled": false\n'
+                    "      }\n"
+                    "    }\n"
+                    "  }\n"
+                    "}\n"
+                ),
+                encoding="utf-8",
+            )
+
+            settings = load_settings(path)
+
+        model = settings.engine.models["frontier-large"]
+        self.assertIsNone(model.model_path)
+        self.assertEqual(model.backend, "openai_compatible")
+        self.assertEqual(model.remote_api_kind, "chat_completions")
+        self.assertEqual(model.remote_base_url, "https://api.example.com/v1")
+        self.assertEqual(model.remote_api_key_env, "EXAMPLE_API_KEY")
+        self.assertEqual(model.remote_model, "provider-large-model")
+        self.assertEqual(model.remote_timeout_s, 45.5)
+        self.assertEqual(model.remote_health_check, "config_only")
+        self.assertEqual(model.remote_max_retries, 0)
+        self.assertEqual(model.remote_thinking, "disabled")
+        self.assertEqual(model.target_inflight, 3)
+        self.assertFalse(model.enabled)
+
     def test_load_settings_defaults_target_inflight_to_one(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             path = Path(tmpdir) / "settings.json"

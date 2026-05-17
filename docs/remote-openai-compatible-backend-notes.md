@@ -4,7 +4,33 @@ This note captures a possible remote backend for `llm-pool`.
 
 It is a design note, not an implementation spec.
 
-Status: proposed.
+Status: phase 1 implemented; cost control remains proposed.
+
+## Implementation Status
+
+Implemented on 2026-05-16:
+
+- `openai_compatible` backend name
+- remote config fields for Chat Completions route activation
+- `model_path` no longer required for `openai_compatible` models
+- config-only load validation, including required remote fields and API key environment variable presence
+- non-streaming OpenAI-compatible Chat Completions adapter
+- request-level `allow_remote` admission before scheduler enqueue
+- scheduler registration through the existing public-model and replica path
+- remote runtime capability follows configured `target_inflight`
+- optional `remote_thinking` request extension for providers/models that expose an OpenAI-compatible `thinking` field
+
+`target_inflight` controls local submission concurrency to the remote route.
+It is not a claim that the upstream provider executes those requests concurrently or efficiently.
+
+Still out of scope after phase 1:
+
+- JSONL cost ledger and budget admission
+- retries above `0`
+- provider/model discovery
+- arbitrary provider-specific request extensions
+- true upstream token streaming
+- response/admin cost fields
 
 ## Purpose
 
@@ -129,6 +155,8 @@ Possible V1 fields:
   default `"config_only"`; validates config and API key env without making an upstream completion call
 - `remote_max_retries`
   default `0` for V1
+- `remote_thinking`
+  optional provider-specific Chat Completions extension; currently accepts `"enabled"` or `"disabled"` and sends `{"thinking": {"type": ...}}`
 - `remote_price_input_per_1m`
   configured input-token price per one million tokens
 - `remote_price_output_per_1m`

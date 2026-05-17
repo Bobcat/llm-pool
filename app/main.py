@@ -13,7 +13,9 @@ from fastapi.responses import StreamingResponse
 
 from app.config import load_settings
 from app.engine import build_engine
+from app.engine import BackendExecutionError
 from app.engine import ModelStateError
+from app.engine import RequestAdmissionError
 from app.engine import UnknownModelError
 from app.schemas import AdminModelEntry
 from app.schemas import AdminGpuMemoryEnvelope
@@ -207,6 +209,24 @@ def create_app(settings_path: str | Path | None = None) -> FastAPI:
             raise HTTPException(
                 status_code=409,
                 detail={"code": exc.code, "model": request.model},
+            ) from exc
+        except RequestAdmissionError as exc:
+            raise HTTPException(
+                status_code=exc.status_code,
+                detail={
+                    "code": exc.code,
+                    "model": request.model,
+                    "message": exc.message,
+                },
+            ) from exc
+        except BackendExecutionError as exc:
+            raise HTTPException(
+                status_code=exc.status_code,
+                detail={
+                    "code": exc.code,
+                    "model": request.model,
+                    "message": exc.message,
+                },
             ) from exc
         total_ms = max(0.0, (time.perf_counter() - started_at) * 1000.0)
         metrics_payload = (
