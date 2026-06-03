@@ -119,7 +119,7 @@
                 "enable_thinking": false,
                 "gguf_n_ctx": 16384,
                 "gguf_flash_attn": "auto",
-                "enabled": false
+                "enabled": true
             },
             "google_gemma-4-31B-it-gguf": {
                 "model_path": "/home/gunnar/models/gemma-4-31B-it-Q6_K_L/google_gemma-4-31B-it-Q6_K_L.gguf",
