@@ -4,3 +4,5 @@ __pycache__/
 .coverage
 .venv/
 config/llm-pool-dev.code-workspace
+llm-pool-dev.code-workspace
+config/local.json

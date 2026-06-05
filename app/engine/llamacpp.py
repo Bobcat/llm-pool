@@ -15,6 +15,7 @@ from app.schemas import ResponseMetrics
 from .common import LOGGER
 from .common import _exception_message
 from .common import _merge_stop_strings
+from .common import _require_text_input
 from .common import _resolve_gguf_cache_type_constant
 from .common import ResolvedDecoding
 
@@ -53,6 +54,7 @@ class LlamaCppEngine:
         if runtime is None:
             raise ValueError(f"unknown model: {request.model!r}")
 
+        user_text = _require_text_input(request)
         system_prompt = request.instructions or "You are a helpful assistant. Return only the response."
         decoding = self._resolve_decoding(request.decoding)
         prompt_format = runtime.config.prompt_format
@@ -66,7 +68,7 @@ class LlamaCppEngine:
         if prompt_format == "gemma4_template":
             return self._complete_with_native_chat_template(
                 runtime=runtime,
-                user_text=request.input,
+                user_text=user_text,
                 system_prompt=system_prompt,
                 decoding=decoding,
                 stop_strings=stop_strings,
@@ -74,7 +76,7 @@ class LlamaCppEngine:
         if prompt_format == "translategemma_template":
             return self._complete_with_translategemma_template(
                 runtime=runtime,
-                user_text=request.input,
+                user_text=user_text,
                 source_lang_code=request.source_lang_code,
                 target_lang_code=request.target_lang_code,
                 decoding=decoding,
@@ -85,7 +87,7 @@ class LlamaCppEngine:
         prompt_text = self._render_prompt(
             prompt_format=prompt_format,
             system_prompt=system_prompt,
-            user_text=request.input,
+            user_text=user_text,
             enable_thinking=runtime.config.enable_thinking,
         )
         prompt_tokens = runtime.llm.tokenize(

@@ -4,7 +4,26 @@ This note captures a possible Gemma 4 MTP backend path for `llm-pool`.
 
 It is a design note, not an implementation spec.
 
-Status: proposed.
+Status: partially implemented.
+
+Current reality note:
+
+- The `backend: "vllm"` adapter described below now exists (`app/engine/vllm.py`).
+- It runs the vLLM Python engine in-process via `AsyncLLMEngine.from_engine_args`,
+  on a dedicated event-loop thread. It does not start `vllm serve` and does not
+  call vLLM over the OpenAI-compatible HTTP API, matching the design here.
+- The speculative-decoding config surface from the "Config Shape" section is
+  wired: `vllm_speculative_method`, `vllm_speculative_model`, and
+  `vllm_num_speculative_tokens` are passed through to vLLM's `speculative_config`.
+- Beyond this note's scope, the same backend also gained multimodal (image)
+  input support, used by the image-description / OCR-grounding work.
+- **Not yet done / verified:** actual Gemma 4 MTP has not been run end to end.
+  The speculative path is wired but untested against real Gemma 4 target and
+  assistant checkpoints, MTP-specific acceptance-rate metrics are not exposed,
+  and runtime subprocess isolation is not implemented.
+- Blackwell (SM 12.0) hosts with a CUDA toolkit < 12.9 need a small runtime
+  workaround that the backend applies automatically; see the README's vLLM
+  backend notes.
 
 ## Purpose
 

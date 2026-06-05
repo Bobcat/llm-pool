@@ -2,11 +2,17 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from dataclasses import field
+from typing import Annotated
 from typing import Any
 from typing import Literal
+from typing import Union
 
 from pydantic import BaseModel
 from pydantic import Field
+
+
+class ModalityUnsupportedError(ValueError):
+    """Raised when image content is passed to a text-only path."""
 
 
 class DecodingParams(BaseModel):
@@ -19,15 +25,60 @@ class DecodingParams(BaseModel):
     stop: list[str] | None = None
 
 
+class TextContent(BaseModel):
+    type: Literal["text"] = "text"
+    text: str
+
+
+class ImageUrlSpec(BaseModel):
+    url: str
+    detail: Literal["low", "high", "auto"] = "auto"
+
+
+class ImageContent(BaseModel):
+    type: Literal["image_url"] = "image_url"
+    image_url: ImageUrlSpec
+
+
+ContentItem = Annotated[
+    Union[TextContent, ImageContent],
+    Field(discriminator="type"),
+]
+
+
 class ResponseRequest(BaseModel):
     model: str
-    input: str
+    input: str | list[ContentItem]
     instructions: str | None = None
     source_lang_code: str | None = None
     target_lang_code: str | None = None
     allow_remote: bool = False
     stream: bool = False
     decoding: DecodingParams = Field(default_factory=DecodingParams)
+
+    @property
+    def has_image_content(self) -> bool:
+        if isinstance(self.input, str):
+            return False
+        return any(isinstance(item, ImageContent) for item in self.input)
+
+    def text_input_or_raise(self) -> str:
+        """Return the request input flattened to plain text.
+
+        For string input, returns it unchanged (backwards-compat).
+        For list input, joins all TextContent items. Raises
+        ``ModalityUnsupportedError`` if any ImageContent is present.
+        """
+        if isinstance(self.input, str):
+            return self.input
+        text_parts: list[str] = []
+        for item in self.input:
+            if isinstance(item, ImageContent):
+                raise ModalityUnsupportedError(
+                    "image content is not supported by this model"
+                )
+            text_parts.append(item.text)
+        return "".join(text_parts)
 
 
 class OutputText(BaseModel):
@@ -70,6 +121,14 @@ class AdminLoadRequest(BaseModel):
     exllama_cache_v_bits: int | None = Field(default=None, ge=2, le=8)
     exllama_cache_quant: str | None = None
     exllama_max_rq_tokens: int | None = Field(default=None, ge=1)
+    vllm_max_model_len: int | None = Field(default=None, ge=256)
+    vllm_kv_cache_dtype: str | None = None
+    vllm_kv_cache_memory_bytes: int | None = Field(default=None, ge=1)
+    vllm_max_pixels: int | None = Field(default=None, ge=1)
+
+
+class ModelCapabilities(BaseModel):
+    modalities: list[Literal["text", "image"]] = Field(default_factory=lambda: ["text"])
 
 
 class AdminModelEntry(BaseModel):
@@ -93,6 +152,7 @@ class AdminModelEntry(BaseModel):
     load_constraints: dict[str, Any] = Field(default_factory=dict)
     load_recommendations: dict[str, Any] = Field(default_factory=dict)
     load_override: dict[str, Any] = Field(default_factory=dict)
+    capabilities: ModelCapabilities = Field(default_factory=ModelCapabilities)
     definition: dict[str, Any] = Field(default_factory=dict)
 
 

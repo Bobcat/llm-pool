@@ -132,11 +132,12 @@ class OpenAICompatibleEngine:
         decoding: ResolvedDecoding,
     ) -> dict[str, object]:
         system_prompt = request.instructions or _DEFAULT_SYSTEM_PROMPT
+        user_content = self._user_message_content(request)
         payload: dict[str, object] = {
             "model": runtime.remote_model,
             "messages": [
                 {"role": "system", "content": system_prompt},
-                {"role": "user", "content": request.input},
+                {"role": "user", "content": user_content},
             ],
             "temperature": decoding.temperature,
             "top_p": decoding.top_p,
@@ -147,6 +148,12 @@ class OpenAICompatibleEngine:
         if runtime.config.remote_thinking is not None:
             payload["thinking"] = {"type": runtime.config.remote_thinking}
         return payload
+
+    @staticmethod
+    def _user_message_content(request: ResponseRequest) -> str | list[dict[str, object]]:
+        if isinstance(request.input, str):
+            return request.input
+        return [item.model_dump(mode="python") for item in request.input]
 
     def _post_json(
         self,

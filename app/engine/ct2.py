@@ -15,6 +15,7 @@ from app.schemas import ResponseMetrics
 from .common import LOGGER
 from .common import _exception_message
 from .common import _merge_stop_strings
+from .common import _require_text_input
 from .common import ResolvedDecoding
 
 
@@ -51,6 +52,7 @@ class Ct2Engine:
         if runtime is None:
             raise ValueError(f"unknown model: {request.model!r}")
 
+        user_input_text = _require_text_input(request)
         system_prompt = request.instructions or "You are a helpful assistant. Return only the response."
         decoding = self._resolve_decoding(request.decoding)
         stop_tokens = _merge_stop_strings(runtime.config.prompt_format, decoding.stop)
@@ -65,7 +67,7 @@ class Ct2Engine:
             prompt_tokens = self._render_qwen3_prompt_tokens(
                 runtime.tokenizer,
                 system_prompt=system_prompt,
-                user_text=request.input,
+                user_text=user_input_text,
                 enable_thinking=runtime.config.enable_thinking,
             )
             prompt_token_count = len(prompt_tokens)
@@ -94,7 +96,7 @@ class Ct2Engine:
             prompt_tokens = self._render_mistral_prompt_tokens(
                 runtime.tokenizer,
                 system_prompt=system_prompt,
-                user_text=request.input,
+                user_text=user_input_text,
             )
             prompt_token_count = len(prompt_tokens)
             tokenize_ms = (time.perf_counter() - tokenize_started) * 1000.0
@@ -118,7 +120,7 @@ class Ct2Engine:
                 **generate_kwargs,
             )
         else:
-            user_text = f"{request.input}<|im_end|>\n<|im_start|>assistant\n"
+            user_text = f"{user_input_text}<|im_end|>\n<|im_start|>assistant\n"
             request_tokens = self._tokenize(runtime.tokenizer, user_text, add_special_tokens=False)
             static_prompt_tokens = self._get_static_prompt_tokens(runtime, system_prompt)
             prompt_token_count = len(static_prompt_tokens) + len(request_tokens)

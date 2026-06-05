@@ -321,6 +321,7 @@ class ModelRouterEngine:
             "load_constraints": _load_constraints_for_backend(state.resolved_backend),
             "load_recommendations": _load_recommendations_for_backend(state.resolved_backend),
             "load_override": dict(state.load_override),
+            "capabilities": {"modalities": list(model_settings.modalities)},
             "definition": _model_definition_payload(
                 model_settings,
                 resolved_backend=state.resolved_backend,
@@ -690,6 +691,52 @@ class ModelRouterEngine:
 
             return replace(model_settings, **replacement_kwargs)
 
+        if resolved_backend == "vllm":
+            unsupported = sorted(
+                field_name
+                for field_name in load_override
+                if field_name
+                not in {
+                    "vllm_max_model_len",
+                    "vllm_kv_cache_dtype",
+                    "vllm_kv_cache_memory_bytes",
+                    "vllm_max_pixels",
+                }
+            )
+            if unsupported:
+                names = ", ".join(unsupported)
+                raise ValueError(f"unsupported load override for vllm backend: {names}")
+
+            replacement_kwargs: dict[str, object | None] = {"enabled": True}
+
+            if "vllm_max_model_len" in load_override:
+                max_model_len = load_override["vllm_max_model_len"]
+                if not isinstance(max_model_len, int) or max_model_len <= 0:
+                    raise ValueError("vllm_max_model_len load override must be a positive integer")
+                replacement_kwargs["vllm_max_model_len"] = max_model_len
+
+            if "vllm_kv_cache_dtype" in load_override:
+                kv_cache_dtype = load_override["vllm_kv_cache_dtype"]
+                if not isinstance(kv_cache_dtype, str) or kv_cache_dtype.strip() == "":
+                    raise ValueError("vllm_kv_cache_dtype load override must be a non-empty string")
+                replacement_kwargs["vllm_kv_cache_dtype"] = kv_cache_dtype.strip()
+
+            if "vllm_kv_cache_memory_bytes" in load_override:
+                kv_cache_bytes = load_override["vllm_kv_cache_memory_bytes"]
+                if not isinstance(kv_cache_bytes, int) or kv_cache_bytes <= 0:
+                    raise ValueError("vllm_kv_cache_memory_bytes load override must be a positive integer")
+                replacement_kwargs["vllm_kv_cache_memory_bytes"] = kv_cache_bytes
+
+            if "vllm_max_pixels" in load_override:
+                max_pixels = load_override["vllm_max_pixels"]
+                if not isinstance(max_pixels, int) or max_pixels <= 0:
+                    raise ValueError("vllm_max_pixels load override must be a positive integer")
+                mm_kwargs = {key: value for key, value in model_settings.vllm_mm_processor_kwargs}
+                mm_kwargs["max_pixels"] = max_pixels
+                replacement_kwargs["vllm_mm_processor_kwargs"] = tuple(mm_kwargs.items())
+
+            return replace(model_settings, **replacement_kwargs)
+
         raise ValueError(f"load overrides are not supported for backend: {resolved_backend!r}")
 
     def _build_backend_engine(self, backend: str, settings: AppSettings):
@@ -702,6 +749,8 @@ class ModelRouterEngine:
             return engine_module.LlamaCppEngine(settings)
         if backend == "openai_compatible":
             return engine_module.OpenAICompatibleEngine(settings)
+        if backend == "vllm":
+            return engine_module.VllmEngine(settings)
         if backend == "stub":
             return engine_module.StubEngine(settings)
         raise ValueError(f"unsupported engine backend: {backend!r}")

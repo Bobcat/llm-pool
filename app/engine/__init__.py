@@ -24,6 +24,8 @@ from .openai_compatible import OpenAICompatibleEngine
 from .openai_compatible import OpenAICompatibleModelRuntime
 from .router import ModelRouterEngine
 from .stub import StubEngine
+from .vllm import VllmEngine
+from .vllm import VllmModelRuntime
 
 
 def build_engine(settings):

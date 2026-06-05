@@ -16,6 +16,7 @@ from app.schemas import ResponseMetrics
 from .common import LOGGER
 from .common import _exception_message
 from .common import _merge_stop_strings
+from .common import _require_text_input
 from .common import ResolvedDecoding
 
 
@@ -56,6 +57,7 @@ class ExLlamaV3Engine:
         if runtime is None:
             raise ValueError(f"unknown model: {request.model!r}")
 
+        user_text = _require_text_input(request)
         system_prompt = request.instructions or "You are a helpful assistant. Return only the response."
         decoding = self._resolve_decoding(request.decoding)
         prompt_format = runtime.config.prompt_format
@@ -72,7 +74,7 @@ class ExLlamaV3Engine:
             runtime.tokenizer,
             prompt_format=prompt_format,
             system_prompt=system_prompt,
-            user_text=request.input,
+            user_text=user_text,
             enable_thinking=runtime.config.enable_thinking,
         )
         prompt_ids = prompt_ids.to(device="cpu")

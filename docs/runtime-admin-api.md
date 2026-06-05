@@ -192,6 +192,9 @@ Suggested response shape:
         }
       },
       "load_override": {},
+      "capabilities": {
+        "modalities": ["text"]
+      },
       "definition": {
         "model_path": "/home/gunnar/models/google_gemma-4-E2B-it-Q8_0/google_gemma-4-E2B-it-Q8_0.gguf",
         "backend": "gguf",
@@ -225,6 +228,7 @@ Notes:
 - `vram_estimate_mib` is an approximate per-model VRAM estimate
 - `vram_estimate_replica_count` is the replica count that the VRAM estimate was measured or derived for
 - `vram_estimate_source` is either `observed_load_delta`, `model_artifact_size`, or `unavailable`
+- `capabilities.modalities` lists which input modalities the model accepts (`["text"]` or `["text", "image"]`); a UI can use it to decide whether to allow image input for a model
 - `load_constraints` describes backend-specific live-load fields for UI controls
 - `load_recommendations` describes service-curated recommended presets and pairings for UI defaults
 - `load_override` reports the runtime-only override currently active on a loaded model
@@ -408,6 +412,37 @@ ExLlamaV3:
 }
 ```
 
+vLLM:
+
+```json
+{
+  "vllm_max_model_len": {
+    "kind": "integer",
+    "minimum": 256,
+    "step": 256
+  },
+  "vllm_kv_cache_dtype": {
+    "kind": "enum",
+    "default": "auto",
+    "allowed_values": ["auto", "fp8", "fp8_e4m3", "fp8_e5m2"],
+    "examples": ["auto", "fp8"]
+  },
+  "vllm_kv_cache_memory_bytes": {
+    "kind": "integer",
+    "minimum": 268435456,
+    "step": 268435456,
+    "unit": "bytes",
+    "display_unit": "gib"
+  },
+  "vllm_max_pixels": {
+    "kind": "integer",
+    "minimum": 200704,
+    "step": 200704,
+    "unit": "pixels"
+  }
+}
+```
+
 ExLlamaV3 recommended presets:
 
 ```json
@@ -511,6 +546,7 @@ Supported load override fields:
 - public model: `replicas`
 - GGUF: `gguf_n_ctx`, `gguf_flash_attn`, `gguf_type_k`, `gguf_type_v`
 - ExLlamaV3: `exllama_cache_size`, `exllama_cache_quant`, `exllama_cache_k_bits`, `exllama_cache_v_bits`, `exllama_max_rq_tokens`
+- vLLM: `vllm_max_model_len`, `vllm_kv_cache_dtype`, `vllm_kv_cache_memory_bytes`, `vllm_max_pixels`
 
 Example load bodies:
 
@@ -579,6 +615,22 @@ Example load bodies:
   "exllama_max_rq_tokens": 32768
 }
 ```
+
+```json
+{
+  "vllm_max_model_len": 16384,
+  "vllm_kv_cache_dtype": "fp8",
+  "vllm_kv_cache_memory_bytes": 2147483648,
+  "vllm_max_pixels": 4014080
+}
+```
+
+vLLM load override notes:
+
+- `vllm_max_model_len` is the per-load context length.
+- `vllm_kv_cache_dtype` quantizes the KV cache; allowed UI values are `auto`, `fp8`, `fp8_e4m3`, `fp8_e5m2`. The service accepts any dtype string vLLM supports.
+- `vllm_kv_cache_memory_bytes` sets an absolute KV cache size in bytes. It is machine-independent and overrides `vllm_gpu_memory_utilization` for KV sizing. The `load_constraints` entry carries `unit: "bytes"` and `display_unit: "gib"` so the UI can present it in GiB.
+- `vllm_max_pixels` caps the vision-token budget per image for vision-language models; it is merged into the model's `vllm_mm_processor_kwargs` as `max_pixels`.
 
 `exllama_cache_quant` format:
 

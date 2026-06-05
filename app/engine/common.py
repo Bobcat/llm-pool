@@ -24,6 +24,8 @@ _GGUF_FLASH_ATTN_ALLOWED_VALUES = ("on", "off", "auto")
 
 _EXLLAMA_CACHE_BIT_ALLOWED_VALUES = (2, 3, 4, 5, 6, 7, 8)
 
+_VLLM_KV_CACHE_DTYPE_ALLOWED_VALUES = ("auto", "fp8", "fp8_e4m3", "fp8_e5m2")
+
 _COMMON_MODEL_DEFINITION_FIELDS = (
     "model_path",
     "backend",
@@ -68,6 +70,22 @@ _BACKEND_MODEL_DEFINITION_FIELDS = {
         "remote_health_check",
         "remote_max_retries",
         "remote_thinking",
+    ),
+    "vllm": (
+        "vllm_model",
+        "vllm_dtype",
+        "vllm_gpu_memory_utilization",
+        "vllm_kv_cache_memory_bytes",
+        "vllm_kv_cache_dtype",
+        "vllm_max_model_len",
+        "vllm_tensor_parallel_size",
+        "vllm_trust_remote_code",
+        "vllm_enforce_eager",
+        "vllm_limit_mm_per_prompt",
+        "vllm_mm_processor_kwargs",
+        "vllm_speculative_method",
+        "vllm_speculative_model",
+        "vllm_num_speculative_tokens",
     ),
 }
 
@@ -260,6 +278,33 @@ def _load_constraints_for_backend(backend: str) -> dict[str, object]:
                 "format": "<bits>|<k_bits>,<v_bits>",
             },
         }
+    if normalized_backend == "vllm":
+        return {
+            "vllm_max_model_len": {
+                "kind": "integer",
+                "minimum": 256,
+                "step": 256,
+            },
+            "vllm_kv_cache_dtype": {
+                "kind": "enum",
+                "default": "auto",
+                "allowed_values": list(_VLLM_KV_CACHE_DTYPE_ALLOWED_VALUES),
+                "examples": ["auto", "fp8"],
+            },
+            "vllm_kv_cache_memory_bytes": {
+                "kind": "integer",
+                "minimum": 268435456,
+                "step": 268435456,
+                "unit": "bytes",
+                "display_unit": "gib",
+            },
+            "vllm_max_pixels": {
+                "kind": "integer",
+                "minimum": 200704,
+                "step": 200704,
+                "unit": "pixels",
+            },
+        }
     return {}
 
 
@@ -389,6 +434,25 @@ class BackendExecutionError(RuntimeError):
         self.code = code
         self.status_code = status_code
         self.message = message
+
+
+def _require_text_input(request) -> str:
+    """Extract text from a polymorphic ResponseRequest.input for text-only backends.
+
+    Returns the input as plain text. If image content is present, raises a
+    ``BackendExecutionError`` with code ``modality_unsupported`` so the API
+    layer can map it to a 400 response.
+    """
+    from app.schemas import ModalityUnsupportedError
+
+    try:
+        return request.text_input_or_raise()
+    except ModalityUnsupportedError as exc:
+        raise BackendExecutionError(
+            code="modality_unsupported",
+            status_code=400,
+            message=f"model {request.model!r} does not support image content",
+        ) from exc
 
 
 @dataclass

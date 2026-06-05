@@ -36,7 +36,9 @@ class StubEngine:
             from .common import ModelStateError
 
             raise ModelStateError(request.model, "model_not_loaded")
-        text = request.input
+        from .common import _require_text_input
+
+        text = _require_text_input(request)
         if request.instructions:
             text = f"[instructions={request.instructions}] {text}"
         return EngineResult(text=text)
@@ -73,6 +75,7 @@ class StubEngine:
                     "load_constraints": _load_constraints_for_backend(settings.engine.backend),
                     "load_recommendations": _load_recommendations_for_backend(settings.engine.backend),
                     "load_override": {},
+                    "capabilities": {"modalities": list(model_settings.modalities)},
                     "definition": _model_definition_payload(
                         model_settings,
                         resolved_backend=settings.engine.backend,

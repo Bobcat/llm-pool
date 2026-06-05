@@ -19,6 +19,9 @@ class ServiceSettings:
     log_level: str = "info"
 
 
+_ALLOWED_MODALITIES = ("text", "image")
+
+
 @dataclass(frozen=True)
 class ModelSettings:
     model_path: str | None
@@ -31,6 +34,7 @@ class ModelSettings:
     replicas: int = 1
     replica_max: int = 1
     target_inflight: int = 1
+    modalities: tuple[str, ...] = ("text",)
     exllama_cache_size: int = 8192
     exllama_cache_quant: str | None = None
     exllama_gpu_split: str | None = None
@@ -53,6 +57,20 @@ class ModelSettings:
     remote_health_check: str = "config_only"
     remote_max_retries: int = 0
     remote_thinking: str | None = None
+    vllm_model: str | None = None
+    vllm_dtype: str = "auto"
+    vllm_gpu_memory_utilization: float | None = None
+    vllm_kv_cache_memory_bytes: int | None = None
+    vllm_kv_cache_dtype: str = "auto"
+    vllm_max_model_len: int | None = None
+    vllm_tensor_parallel_size: int = 1
+    vllm_trust_remote_code: bool = False
+    vllm_enforce_eager: bool = False
+    vllm_limit_mm_per_prompt: tuple[tuple[str, int], ...] = ()
+    vllm_mm_processor_kwargs: tuple[tuple[str, int], ...] = ()
+    vllm_speculative_method: str | None = None
+    vllm_speculative_model: str | None = None
+    vllm_num_speculative_tokens: int = 1
 
 
 @dataclass(frozen=True)
@@ -119,7 +137,7 @@ def load_settings(path: str | Path | None = None) -> AppSettings:
                 backend = parsed_backend
         resolved_backend = backend or default_backend
         model_path = _coerce_optional_str(model_payload.get("model_path"))
-        if model_path is None and resolved_backend != "openai_compatible":
+        if model_path is None and resolved_backend not in {"openai_compatible", "vllm"}:
             continue
         cache_quant_value = model_payload.get("exllama_cache_quant")
         cache_quant = None
@@ -173,6 +191,7 @@ def load_settings(path: str | Path | None = None) -> AppSettings:
             replicas=max(1, int(model_payload.get("replicas", 1))),
             replica_max=max(1, int(model_payload.get("replica_max", 1))),
             target_inflight=max(1, int(model_payload.get("target_inflight", 1))),
+            modalities=_coerce_modalities(model_payload.get("modalities")),
             exllama_cache_size=int(model_payload.get("exllama_cache_size", 8192)),
             exllama_cache_quant=cache_quant,
             exllama_gpu_split=gpu_split,
@@ -195,6 +214,20 @@ def load_settings(path: str | Path | None = None) -> AppSettings:
             remote_health_check=remote_health_check,
             remote_max_retries=int(model_payload.get("remote_max_retries", 0)),
             remote_thinking=remote_thinking,
+            vllm_model=_coerce_optional_str(model_payload.get("vllm_model")),
+            vllm_dtype=str(model_payload.get("vllm_dtype", "auto") or "auto").strip() or "auto",
+            vllm_gpu_memory_utilization=_coerce_optional_float(model_payload.get("vllm_gpu_memory_utilization")),
+            vllm_kv_cache_memory_bytes=_coerce_optional_positive_int(model_payload.get("vllm_kv_cache_memory_bytes")),
+            vllm_kv_cache_dtype=str(model_payload.get("vllm_kv_cache_dtype", "auto") or "auto").strip() or "auto",
+            vllm_max_model_len=_coerce_optional_positive_int(model_payload.get("vllm_max_model_len")),
+            vllm_tensor_parallel_size=max(1, int(model_payload.get("vllm_tensor_parallel_size", 1))),
+            vllm_trust_remote_code=bool(model_payload.get("vllm_trust_remote_code", False)),
+            vllm_enforce_eager=bool(model_payload.get("vllm_enforce_eager", False)),
+            vllm_limit_mm_per_prompt=_coerce_mm_limit(model_payload.get("vllm_limit_mm_per_prompt")),
+            vllm_mm_processor_kwargs=_coerce_int_str_map(model_payload.get("vllm_mm_processor_kwargs")),
+            vllm_speculative_method=_coerce_optional_str(model_payload.get("vllm_speculative_method")),
+            vllm_speculative_model=_coerce_optional_str(model_payload.get("vllm_speculative_model")),
+            vllm_num_speculative_tokens=max(1, int(model_payload.get("vllm_num_speculative_tokens", 1))),
         )
         if models[str(model_name)].replicas > models[str(model_name)].replica_max:
             raise ValueError(
@@ -271,6 +304,91 @@ def _coerce_optional_str(value: object) -> str | None:
     if parsed == "":
         return None
     return parsed
+
+
+def _coerce_optional_positive_int(value: object) -> int | None:
+    if value is None or value == "":
+        return None
+    parsed = int(value)
+    if parsed <= 0:
+        return None
+    return parsed
+
+
+def _coerce_optional_float(value: object) -> float | None:
+    if value is None or value == "":
+        return None
+    return float(value)
+
+
+def _coerce_mm_limit(value: object) -> tuple[tuple[str, int], ...]:
+    if value is None:
+        return ()
+    if not isinstance(value, dict):
+        raise ValueError("vllm_limit_mm_per_prompt must be an object of {modality: int}")
+    parsed: list[tuple[str, int]] = []
+    for key, raw in value.items():
+        modality = str(key).strip().lower()
+        if modality == "":
+            continue
+        try:
+            count = int(raw)
+        except (TypeError, ValueError) as exc:
+            raise ValueError(
+                f"vllm_limit_mm_per_prompt['{modality}'] must be an integer"
+            ) from exc
+        if count < 1:
+            raise ValueError(
+                f"vllm_limit_mm_per_prompt['{modality}'] must be >= 1"
+            )
+        parsed.append((modality, count))
+    return tuple(parsed)
+
+
+def _coerce_int_str_map(value: object) -> tuple[tuple[str, int], ...]:
+    if value is None:
+        return ()
+    if not isinstance(value, dict):
+        raise ValueError("vllm_mm_processor_kwargs must be an object of {key: int}")
+    parsed: list[tuple[str, int]] = []
+    for key, raw in value.items():
+        name = str(key).strip()
+        if name == "":
+            continue
+        try:
+            parsed.append((name, int(raw)))
+        except (TypeError, ValueError) as exc:
+            raise ValueError(
+                f"vllm_mm_processor_kwargs['{name}'] must be an integer"
+            ) from exc
+    return tuple(parsed)
+
+
+def _coerce_modalities(value: object) -> tuple[str, ...]:
+    if value is None:
+        return ("text",)
+    if isinstance(value, str):
+        candidates = [value]
+    elif isinstance(value, (list, tuple)):
+        candidates = [str(item) for item in value]
+    else:
+        raise ValueError("modalities must be a list of strings")
+    seen: set[str] = set()
+    parsed: list[str] = []
+    for raw in candidates:
+        normalized = str(raw).strip().lower()
+        if normalized == "" or normalized in seen:
+            continue
+        if normalized not in _ALLOWED_MODALITIES:
+            allowed = ", ".join(_ALLOWED_MODALITIES)
+            raise ValueError(f"modality must be one of: {allowed}")
+        seen.add(normalized)
+        parsed.append(normalized)
+    if not parsed:
+        return ("text",)
+    if "text" not in seen:
+        parsed.insert(0, "text")
+    return tuple(parsed)
 
 
 def _coerce_gguf_flash_attn_mode(value: object, *, default: str = "auto") -> str:

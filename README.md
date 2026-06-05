@@ -1,6 +1,6 @@
 # llm-pool
 
-FastAPI service that exposes one `POST /v1/responses` API across local CT2, ExLlamaV3, GGUF/`llama.cpp`, and OpenAI-compatible remote Chat Completions backends. It includes runtime metrics, per-model scheduling, replica routing, and admin endpoints for loading, unloading, and inspecting models.
+FastAPI service that exposes one `POST /v1/responses` API across local CT2, ExLlamaV3, GGUF/`llama.cpp`, in-process vLLM, and OpenAI-compatible remote Chat Completions backends. It supports text and image (multimodal) input, and includes runtime metrics, per-model scheduling, replica routing, and admin endpoints for loading, unloading, and inspecting models.
 
 ## Index
 
@@ -8,7 +8,9 @@ FastAPI service that exposes one `POST /v1/responses` API across local CT2, ExLl
 - [HTTP API](#http-api)
 - [Inference Example](#inference-example)
 - [Request Fields](#request-fields)
+- [Multimodal Input](#multimodal-input)
 - [Local Overrides](#local-overrides)
+- [vLLM Backend](#vllm-backend)
 - [Remote Backends](#remote-backends)
 - [Replicas](#replicas)
 - [Timing Metrics](#timing-metrics)
@@ -20,8 +22,9 @@ FastAPI service that exposes one `POST /v1/responses` API across local CT2, ExLl
 ## Overview
 
 - one inference API across local and remote model backends
-- local CT2, ExLlamaV3, and GGUF/`llama.cpp` runtime adapters
+- local CT2, ExLlamaV3, GGUF/`llama.cpp`, and in-process vLLM runtime adapters
 - OpenAI-compatible remote Chat Completions adapter
+- text and image (multimodal) input on backends that support it (vLLM, remote)
 - JSON responses and SSE streaming from the same endpoint
 - runtime metrics included in inference responses
 - admin endpoints for inspecting models and loading or unloading them at runtime
@@ -36,7 +39,7 @@ FastAPI service that exposes one `POST /v1/responses` API across local CT2, ExLl
 | --- | --- |
 | `POST /v1/responses` | Run inference. `stream: false` returns one JSON response; `stream: true` returns Server-Sent Events (SSE). |
 | `GET /v1/models` | List currently loaded model ids. |
-| `GET /v1/admin/models` | List configured model ids plus aggregate runtime, replica, queue, and load state. |
+| `GET /v1/admin/models` | List configured model ids plus aggregate runtime, replica, queue, load state, and `capabilities.modalities` (which input modalities each model accepts). |
 | `GET /v1/admin/gpu-memory` | Return current GPU memory usage plus per-model VRAM estimates. |
 | `POST /v1/admin/models/{model_name}/load` | Load one configured model at runtime with optional runtime-only backend-specific overrides. |
 | `POST /v1/admin/models/{model_name}/unload` | Gracefully unload one loaded model. |
@@ -111,7 +114,7 @@ Currently supported API request fields:
 | Field | Type | Required | Default if omitted | Notes |
 | --- | --- | --- | --- | --- |
 | `model` | `string` | yes | none | Must match a currently loaded model id. |
-| `input` | `string` | yes | none | Main input text. |
+| `input` | `string \| array` | yes | none | Main input. A plain string for text, or an array of content items for multimodal input. See [Multimodal Input](#multimodal-input). |
 | `instructions` | `string \| null` | no | `null` | Optional high-level guidance. If omitted, the pool falls back to an internal default instruction prompt. Ignored by `translategemma_template`; omit it there. |
 | `source_lang_code` | `string \| null` | no | `null` | Required for models using `prompt_format: "translategemma_template"`. |
 | `target_lang_code` | `string \| null` | no | `null` | Required for models using `prompt_format: "translategemma_template"`. |
@@ -132,6 +135,35 @@ Currently supported decoding fields:
 | `stop` | `list[string]` | no | server default extra stop list, often empty | used | used | used | Optional extra stop strings. Model-internal stop/eos tokens are handled by the pool/backend. |
 
 Remote OpenAI-compatible models map `temperature`, `top_p`, `max_tokens`, and `stop` to Chat Completions requests. They accept `beam_size`, `top_k`, and `repetition_penalty` for request schema compatibility, but log and ignore them.
+
+## Multimodal Input
+
+`input` is polymorphic. A plain string is text input and behaves exactly as before. An array of content items enables multimodal input using the OpenAI-compatible content shape:
+
+```json
+{
+  "model": "qwen2.5-vl-3b",
+  "instructions": "You describe images.",
+  "input": [
+    { "type": "text", "text": "What does this sign say? Answer in English." },
+    { "type": "image_url", "image_url": { "url": "data:image/png;base64,iVBORw0KGgo..." } }
+  ],
+  "stream": false,
+  "decoding": { "temperature": 0.2, "max_tokens": 256 }
+}
+```
+
+Content item types:
+
+- `{ "type": "text", "text": "..." }`
+- `{ "type": "image_url", "image_url": { "url": "...", "detail": "auto" } }`
+  The `url` may be a `data:image/...;base64,...` URL, a `file://` path, or an `http(s)://` URL.
+
+Notes:
+
+- Which models accept images is reported per model as `capabilities.modalities` on `GET /v1/admin/models`. A model declares image support with `"modalities": ["text", "image"]` in its config; the default is `["text"]`.
+- Text-only backends (CT2, ExLlamaV3, GGUF) reject image content with a `modality_unsupported` 400 error. Image input is currently served by the vLLM backend (local vision models) and by remote OpenAI-compatible vision models.
+- A text-only array (only `text` items) is accepted by any backend and is concatenated to a single prompt, so string and text-array input are equivalent.
 
 ## Local Overrides
 
@@ -194,6 +226,8 @@ Notes:
 - ExLlamaV3 models also support `exllama_tp_backend`, `exllama_max_batch_size`, `exllama_max_chunk_size`, `exllama_max_q_size`, and `exllama_max_rq_tokens`.
 - GGUF models also support `gguf_n_gpu_layers`, `gguf_n_ctx`, `gguf_flash_attn`, `gguf_type_k`, and `gguf_type_v`.
 - OpenAI-compatible remote models support `remote_api_kind`, `remote_base_url`, `remote_api_key_env`, `remote_model`, `remote_timeout_s`, `remote_health_check`, `remote_max_retries`, and `remote_thinking`.
+- vLLM models support `vllm_model`, `vllm_dtype`, `vllm_gpu_memory_utilization`, `vllm_max_model_len`, `vllm_tensor_parallel_size`, `vllm_trust_remote_code`, `vllm_enforce_eager`, `vllm_limit_mm_per_prompt`, `vllm_mm_processor_kwargs`, and the speculative-decoding fields `vllm_speculative_method`, `vllm_speculative_model`, and `vllm_num_speculative_tokens`. See [vLLM Backend](#vllm-backend).
+- `modalities` declares which input modalities a model accepts, e.g. `["text", "image"]`. It defaults to `["text"]` and is surfaced as `capabilities.modalities` on `GET /v1/admin/models`.
 - Requests to GGUF models using `prompt_format: "translategemma_template"` must include `source_lang_code` and `target_lang_code`; put only the source text in `input` and omit `instructions`.
 - The admin API may temporarily override backend-specific load settings at runtime without modifying `settings.json` or `local.json`.
 - The exact load override fields, allowed values, defaults, and recommended presets are documented in [runtime-admin-api.md](docs/runtime-admin-api.md).
@@ -214,6 +248,46 @@ TranslateGemma request example:
 Optional env vars:
 - `LLM_POOL_SETTINGS_PATH`: explicit base settings file path.
 - `LLM_POOL_LOCAL_SETTINGS_PATH`: explicit local override file path.
+
+## vLLM Backend
+
+The `vllm` backend runs the vLLM Python engine in-process via `AsyncLLMEngine`, on a dedicated event-loop thread. It does not start a separate `vllm serve` process. It supports text and image input, making it the local path for vision-language models.
+
+Example (local vision-language model):
+
+```json
+{
+  "engine": {
+    "models": {
+      "qwen2.5-vl-3b": {
+        "backend": "vllm",
+        "model_path": null,
+        "prompt_format": "generic",
+        "modalities": ["text", "image"],
+        "vllm_model": "Qwen/Qwen2.5-VL-3B-Instruct",
+        "vllm_dtype": "bfloat16",
+        "vllm_gpu_memory_utilization": 0.7,
+        "vllm_max_model_len": 16384,
+        "vllm_limit_mm_per_prompt": {"image": 4},
+        "vllm_mm_processor_kwargs": {"max_pixels": 4014080},
+        "enabled": true
+      }
+    }
+  }
+}
+```
+
+vLLM backend notes:
+
+- `model_path` is not required; the model is identified by `vllm_model` (a Hugging Face model id or local path).
+- `vllm_max_model_len` must be large enough for the text tokens plus the image tokens. A high-resolution image can expand to many thousands of vision tokens; cap it with `vllm_mm_processor_kwargs` (for Qwen2.5-VL, `max_pixels`) to bound vision tokens and avoid exceeding the context length. Lower `max_pixels` reduces tokens at the cost of fine-text legibility.
+- `vllm_limit_mm_per_prompt` caps the number of multimodal items of each kind per request, e.g. `{"image": 4}`.
+- The speculative-decoding fields (`vllm_speculative_method`, `vllm_speculative_model`, `vllm_num_speculative_tokens`) are wired through to vLLM's `speculative_config`. The Gemma 4 MTP path is not yet verified; see [gemma4-mtp-vllm-notes.md](docs/gemma4-mtp-vllm-notes.md).
+- vLLM dependencies are heavy (PyTorch, flashinfer, CUDA libraries) and are imported lazily, only when a vLLM model is loaded.
+
+Blackwell (SM 12.0) runtime note:
+
+- On Blackwell GPUs (RTX 50-series, RTX PRO 6000) with a CUDA toolkit older than 12.9, flashinfer's JIT sampler build targets `compute_120f`, which older `nvcc` rejects. The backend works around this automatically before importing vLLM by setting `VLLM_USE_FLASHINFER_SAMPLER=0` (falls back to the native PyTorch sampler) and adding the active venv's bin directory to `PATH` (so flashinfer's JIT can find `ninja`). Both are applied with `setdefault`, so you can override them. Installing CUDA toolkit 12.9+ removes the need for the sampler workaround.
 
 ## Remote Backends
 
@@ -318,6 +392,8 @@ The repo also includes design notes and trackers in various stages of completion
   Captures the proposed remote OpenAI-compatible backend shape, including cost-control notes.
 - [runtime-subprocess-notes.md](docs/runtime-subprocess-notes.md)
   Captures the intended process-isolation model for loaded runtimes and how that should fit behind the same scheduler/runtime adapter boundary.
+- [gemma4-mtp-vllm-notes.md](docs/gemma4-mtp-vllm-notes.md)
+  Captures the vLLM backend and Gemma 4 MTP speculative-decoding path; the in-process vLLM backend is implemented, the MTP path is wired but not yet verified.
 
 ## Acknowledgments
 
@@ -331,6 +407,7 @@ This pool builds on a number of excellent upstream projects:
 - ExLlamaV3
 - llama-cpp-python
 - llama.cpp
+- vLLM
 
 ## License
 

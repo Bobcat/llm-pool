@@ -261,6 +261,56 @@ This note assumes the scheduler note direction still holds:
 
 The scheduler note should therefore be read together with this replica-routing note.
 
+### Backend-native concurrency vs replicas
+
+Replicas are the current way to serve concurrent requests for a single public
+model: load the weights N times, one runtime per replica, each runtime
+serializing its own work. This is a quick, predictable workaround, not the
+end-state architecture. Its cost is linear in VRAM: K concurrent requests need
+K copies of the weights.
+
+The more efficient path is backend-native concurrency: one weight copy serving
+many in-flight requests through continuous batching. vLLM already works this
+way. llama.cpp can also do it, but the GGUF backend does not expose it yet — it
+constructs the runtime with `n_ctx` only and serializes generation with a lock,
+so it is effectively single-sequence today.
+
+#### The two axes
+
+Concurrency always involves the same three quantities: per-request length, a
+total KV cache pool, and how many requests run at once. vLLM and llama.cpp
+expose them inversely:
+
+| | per-request length | total KV pool | concurrency |
+| --- | --- | --- | --- |
+| vLLM | `max_model_len` (set directly) | `kv_cache_memory_bytes` (set directly) | derived = pool / per-request |
+| llama.cpp | derived = `n_ctx / n_parallel` | `n_ctx` (in tokens) | `n_parallel` (set directly) |
+
+So llama.cpp is not fundamentally single-axis. `n_ctx` is the total cache in
+tokens shared across `n_parallel` slots, and each slot gets `n_ctx / n_parallel`
+tokens of context.
+
+Example — 5 concurrent users, 32k context each, one weight copy:
+
+```text
+n_ctx      = 5 * 32768 = 163840
+n_parallel = 5
+-> each slot gets 163840 / 5 = 32768 tokens
+```
+
+#### Intended direction
+
+When GGUF concurrency is taken seriously, the backend should gain an
+`n_parallel` (slot count) knob, set `n_ctx = n_parallel * per_request_ctx`, and
+drop the per-runtime serialization lock so slots decode concurrently. That
+backend-native path is the proper replacement for the replica workaround for
+GGUF; replicas remain useful where a single weight copy cannot be shared (for
+example heterogeneous load profiles, or backends without batching support).
+
+This is a backend-internals concern and stays behind the same runtime adapter
+boundary; it does not change the public-model or replica contract described
+above.
+
 ### MVP boundary
 
 Included in MVP:
