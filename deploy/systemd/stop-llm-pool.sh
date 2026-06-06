@@ -10,10 +10,10 @@ set -euo pipefail
 # KillMode=control-group already tears down the whole cgroup.
 #
 # Usage:
-#   stop-llm-pool-dev.sh            # stop all llm-pool instances from this repo
-#   stop-llm-pool-dev.sh 8013       # stop only the instance on the given port
+#   stop-llm-pool.sh            # stop all llm-pool instances from this repo
+#   stop-llm-pool.sh 8013       # stop only the instance on the given port
 
-ROOT_DIR="/home/gunnar/projects/llm-pool-dev"
+ROOT_DIR="/home/gunnar/projects/llm-pool"
 PORT="${1:-}"
 TERM_WAIT_S=8
 

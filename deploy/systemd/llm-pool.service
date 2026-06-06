@@ -1,0 +1,17 @@
+[Unit]
+Description=llm-pool (conda-free, gguf + vllm)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/home/gunnar/projects/llm-pool
+Environment=LLM_POOL_SETTINGS_PATH=/home/gunnar/projects/llm-pool/config/settings.json
+EnvironmentFile=-%h/.config/llm-pool/env
+ExecStart=/home/gunnar/projects/llm-pool/.venv/bin/python -m uvicorn app.main:app --host 127.0.0.1 --port 8011
+Restart=always
+RestartSec=2
+KillMode=control-group
+
+[Install]
+WantedBy=default.target

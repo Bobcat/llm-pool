@@ -6,3 +6,4 @@ __pycache__/
 config/llm-pool-dev.code-workspace
 llm-pool-dev.code-workspace
 config/local.json
+*.egg-info/
