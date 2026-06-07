@@ -18,6 +18,8 @@ HAS_PYDANTIC = importlib.util.find_spec("pydantic") is not None
 HAS_PIL = importlib.util.find_spec("PIL") is not None
 
 if HAS_PYDANTIC:
+    from app.config import AppSettings
+    from app.config import EngineSettings
     from app.config import ModelSettings
     from app.engine import BackendExecutionError
     from app.engine.vllm import VllmEngine
@@ -190,6 +192,39 @@ class VllmPromptRenderingTests(unittest.TestCase):
                 has_images=False,
             )
         self.assertEqual(exc_info.exception.code, "chat_template_render_failed")
+
+
+@unittest.skipUnless(HAS_PYDANTIC, "pydantic not installed")
+class VllmInitFailureTests(unittest.TestCase):
+    def test_all_enabled_load_failures_include_model_error(self) -> None:
+        settings = AppSettings(
+            engine=EngineSettings(
+                backend="vllm",
+                models={"broken-model": _make_settings(enabled=True)},
+            ),
+        )
+
+        with mock.patch.object(
+            VllmEngine,
+            "_build_runtime",
+            side_effect=RuntimeError("cuda out of memory"),
+        ), mock.patch("app.engine.vllm.LOGGER.exception"):
+            with self.assertRaisesRegex(
+                ValueError,
+                "no vLLM models could be loaded: broken-model: cuda out of memory",
+            ):
+                VllmEngine(settings)
+
+    def test_no_enabled_models_keeps_existing_message(self) -> None:
+        settings = AppSettings(
+            engine=EngineSettings(
+                backend="vllm",
+                models={"disabled-model": _make_settings(enabled=False)},
+            ),
+        )
+
+        with self.assertRaisesRegex(ValueError, "^no enabled models could be loaded$"):
+            VllmEngine(settings)
 
 
 if __name__ == "__main__":

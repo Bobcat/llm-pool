@@ -71,7 +71,8 @@ class VllmModelRuntime:
             if engine is not None:
                 shutdown = getattr(engine, "shutdown", None)
                 if callable(shutdown):
-                    self._run_sync(shutdown() if asyncio.iscoroutinefunction(shutdown) else None)
+                    result = shutdown()
+                    self._run_sync(result if asyncio.iscoroutine(result) else None)
         except Exception:
             LOGGER.exception("Error while shutting down vLLM engine for model %s", self.config.model_path)
         try:
@@ -95,9 +96,11 @@ class VllmEngine:
         self.decoding_defaults = settings.engine.decoding
         self._models: dict[str, VllmModelRuntime] = {}
         self._load_errors: dict[str, str] = {}
+        enabled_model_names: list[str] = []
         for model_name, model_settings in settings.engine.models.items():
             if not model_settings.enabled:
                 continue
+            enabled_model_names.append(model_name)
             try:
                 self._models[model_name] = self._build_runtime(model_settings)
             except Exception as exc:
@@ -108,6 +111,13 @@ class VllmEngine:
                     model_settings.model_path,
                 )
         if not self._models:
+            if enabled_model_names and self._load_errors:
+                details = "; ".join(
+                    f"{model_name}: {self._load_errors[model_name]}"
+                    for model_name in enabled_model_names
+                    if model_name in self._load_errors
+                )
+                raise ValueError(f"no vLLM models could be loaded: {details}")
             raise ValueError("no enabled models could be loaded")
 
     def complete(self, request: ResponseRequest) -> EngineResult:
@@ -122,17 +132,26 @@ class VllmEngine:
         text_segments, images = self._extract_text_and_images(request)
 
         tokenize_started = time.perf_counter()
-        prompt_text = self._render_prompt(
+        user_text = "".join(text_segments)
+        engine_input = self._render_multimodal_engine_input(
             runtime=runtime,
             system_prompt=system_prompt,
-            user_text="".join(text_segments),
-            has_images=bool(images),
+            user_text=user_text,
+            images=images,
         )
+        if engine_input is None:
+            prompt_text = self._render_prompt(
+                runtime=runtime,
+                system_prompt=system_prompt,
+                user_text=user_text,
+                has_images=bool(images),
+            )
+            engine_input = {"prompt": prompt_text}
+            if images:
+                engine_input["multi_modal_data"] = {
+                    "image": images[0] if len(images) == 1 else images
+                }
         tokenize_ms = max(0.0, (time.perf_counter() - tokenize_started) * 1000.0)
-
-        engine_input: dict[str, Any] = {"prompt": prompt_text}
-        if images:
-            engine_input["multi_modal_data"] = {"image": images}
 
         sampling_params = self._build_sampling_params(decoding, stop_strings)
 
@@ -414,6 +433,64 @@ class VllmEngine:
                 message=f"failed to render chat template: {_exception_message(exc)}",
             ) from exc
 
+    def _render_multimodal_engine_input(
+        self,
+        *,
+        runtime: VllmModelRuntime,
+        system_prompt: str,
+        user_text: str,
+        images: list[Any],
+    ) -> dict[str, Any] | None:
+        if not images:
+            return None
+        input_processor = getattr(runtime.engine, "input_processor", None)
+        renderer = getattr(input_processor, "renderer", None)
+        render_chat = getattr(renderer, "render_chat", None)
+        if not callable(render_chat):
+            return None
+
+        from vllm.renderers.params import ChatParams
+
+        image_content = [{"type": "image_pil", "image_pil": image} for image in images]
+        messages = [
+            {"role": "system", "content": system_prompt},
+            {
+                "role": "user",
+                "content": [
+                    *image_content,
+                    {"type": "text", "text": user_text},
+                ],
+            },
+        ]
+        mm_processor_kwargs = (
+            dict(runtime.config.vllm_mm_processor_kwargs)
+            if runtime.config.vllm_mm_processor_kwargs
+            else None
+        )
+        try:
+            _, engine_inputs = render_chat(
+                [messages],
+                ChatParams(
+                    chat_template_kwargs={
+                        "add_generation_prompt": True,
+                        "tokenize": False,
+                    },
+                    mm_processor_kwargs=mm_processor_kwargs,
+                ),
+                prompt_extras=(
+                    {"mm_processor_kwargs": mm_processor_kwargs}
+                    if mm_processor_kwargs is not None
+                    else None
+                ),
+            )
+        except Exception as exc:
+            raise BackendExecutionError(
+                code="chat_template_render_failed",
+                status_code=500,
+                message=f"failed to render multimodal chat template: {_exception_message(exc)}",
+            ) from exc
+        return engine_inputs[0]
+
     async def _run_generation(
         self,
         *,
@@ -444,5 +521,3 @@ class VllmEngine:
                 output_text = completion.text
                 output_tokens = len(completion.token_ids)
         return output_text, output_tokens, prompt_token_count
-
-
