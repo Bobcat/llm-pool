@@ -226,7 +226,7 @@ Notes:
 - ExLlamaV3 models also support `exllama_tp_backend`, `exllama_max_batch_size`, `exllama_max_chunk_size`, `exllama_max_q_size`, and `exllama_max_rq_tokens`.
 - GGUF models also support `gguf_n_gpu_layers`, `gguf_n_ctx`, `gguf_flash_attn`, `gguf_type_k`, and `gguf_type_v`.
 - OpenAI-compatible remote models support `remote_api_kind`, `remote_base_url`, `remote_api_key_env`, `remote_model`, `remote_timeout_s`, `remote_health_check`, `remote_max_retries`, and `remote_thinking`.
-- vLLM models support `vllm_model`, `vllm_dtype`, `vllm_gpu_memory_utilization`, `vllm_max_model_len`, `vllm_tensor_parallel_size`, `vllm_trust_remote_code`, `vllm_enforce_eager`, `vllm_limit_mm_per_prompt`, `vllm_mm_processor_kwargs`, and the speculative-decoding fields `vllm_speculative_method`, `vllm_speculative_model`, and `vllm_num_speculative_tokens`. See [vLLM Backend](#vllm-backend).
+- vLLM models support `vllm_model`, `vllm_dtype`, `vllm_gpu_memory_utilization`, `vllm_max_model_len`, `vllm_kv_cache_memory_bytes`, `vllm_kv_cache_dtype`, `vllm_tensor_parallel_size`, `vllm_trust_remote_code`, `vllm_enforce_eager`, `vllm_limit_mm_per_prompt`, `vllm_mm_processor_kwargs`, and the speculative-decoding fields `vllm_speculative_method`, `vllm_speculative_model`, and `vllm_num_speculative_tokens`. See [vLLM Backend](#vllm-backend).
 - `modalities` declares which input modalities a model accepts, e.g. `["text", "image"]`. It defaults to `["text"]` and is surfaced as `capabilities.modalities` on `GET /v1/admin/models`.
 - Requests to GGUF models using `prompt_format: "translategemma_template"` must include `source_lang_code` and `target_lang_code`; put only the source text in `input` and omit `instructions`.
 - The admin API may temporarily override backend-specific load settings at runtime without modifying `settings.json` or `local.json`.
@@ -281,6 +281,7 @@ vLLM backend notes:
 
 - `model_path` is not required; the model is identified by `vllm_model` (a Hugging Face model id or local path).
 - `vllm_max_model_len` must be large enough for the text tokens plus the image tokens. A high-resolution image can expand to many thousands of vision tokens; cap it with `vllm_mm_processor_kwargs` (for Qwen2.5-VL, `max_pixels`) to bound vision tokens and avoid exceeding the context length. Lower `max_pixels` reduces tokens at the cost of fine-text legibility.
+- `vllm_kv_cache_memory_bytes` sets the KV cache size in bytes. The runtime admin metadata advertises this as MiB for UI display, but config and API payloads keep bytes as the wire unit.
 - `vllm_limit_mm_per_prompt` caps the number of multimodal items of each kind per request, e.g. `{"image": 4}`.
 - The speculative-decoding fields (`vllm_speculative_method`, `vllm_speculative_model`, `vllm_num_speculative_tokens`) are wired through to vLLM's `speculative_config`. The Gemma 4 MTP path is not yet verified; see [gemma4-mtp-vllm-notes.md](docs/gemma4-mtp-vllm-notes.md).
 - vLLM dependencies are heavy (PyTorch, flashinfer, CUDA libraries) and are imported lazily, only when a vLLM model is loaded.

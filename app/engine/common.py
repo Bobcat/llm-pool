@@ -296,7 +296,7 @@ def _load_constraints_for_backend(backend: str) -> dict[str, object]:
                 "minimum": 268435456,
                 "step": 268435456,
                 "unit": "bytes",
-                "display_unit": "gib",
+                "display_unit": "mib",
             },
             "vllm_max_pixels": {
                 "kind": "integer",

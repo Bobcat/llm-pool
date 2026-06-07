@@ -42,7 +42,7 @@ class VllmLoadConstraintsTests(unittest.TestCase):
         )
         self.assertEqual(constraints["vllm_kv_cache_dtype"]["kind"], "enum")
         self.assertIn("fp8", constraints["vllm_kv_cache_dtype"]["allowed_values"])
-        self.assertEqual(constraints["vllm_kv_cache_memory_bytes"]["display_unit"], "gib")
+        self.assertEqual(constraints["vllm_kv_cache_memory_bytes"]["display_unit"], "mib")
 
 
 @unittest.skipUnless(HAS_PYDANTIC, "pydantic not installed")

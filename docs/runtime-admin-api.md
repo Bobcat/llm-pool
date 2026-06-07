@@ -432,7 +432,7 @@ vLLM:
     "minimum": 268435456,
     "step": 268435456,
     "unit": "bytes",
-    "display_unit": "gib"
+    "display_unit": "mib"
   },
   "vllm_max_pixels": {
     "kind": "integer",
@@ -629,7 +629,7 @@ vLLM load override notes:
 
 - `vllm_max_model_len` is the per-load context length.
 - `vllm_kv_cache_dtype` quantizes the KV cache; allowed UI values are `auto`, `fp8`, `fp8_e4m3`, `fp8_e5m2`. The service accepts any dtype string vLLM supports.
-- `vllm_kv_cache_memory_bytes` sets an absolute KV cache size in bytes. It is machine-independent and overrides `vllm_gpu_memory_utilization` for KV sizing. The `load_constraints` entry carries `unit: "bytes"` and `display_unit: "gib"` so the UI can present it in GiB.
+- `vllm_kv_cache_memory_bytes` sets an absolute KV cache size in bytes. It is machine-independent and overrides `vllm_gpu_memory_utilization` for KV sizing. The `load_constraints` entry carries `unit: "bytes"` and `display_unit: "mib"` so the UI can present it in MiB.
 - `vllm_max_pixels` caps the vision-token budget per image for vision-language models; it is merged into the model's `vllm_mm_processor_kwargs` as `max_pixels`.
 
 `exllama_cache_quant` format:
