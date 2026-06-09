@@ -281,7 +281,8 @@ vLLM backend notes:
 
 - `model_path` is not required; the model is identified by `vllm_model` (a Hugging Face model id or local path).
 - `vllm_max_model_len` must be large enough for the text tokens plus the image tokens. A high-resolution image can expand to many thousands of vision tokens; cap it with `vllm_mm_processor_kwargs` (for Qwen2.5-VL, `max_pixels`) to bound vision tokens and avoid exceeding the context length. Lower `max_pixels` reduces tokens at the cost of fine-text legibility.
-- `vllm_kv_cache_memory_bytes` sets the KV cache size in bytes. The runtime admin metadata advertises this as MiB for UI display, but config and API payloads keep bytes as the wire unit.
+- `vllm_kv_cache_memory_bytes` sets the KV cache size in bytes. The runtime admin metadata advertises this as MiB for UI display, but config and API payloads keep bytes as the wire unit. When set, it takes manual control of KV cache sizing instead of deriving it from `vllm_gpu_memory_utilization`.
+- At full context, vLLM's reported maximum concurrency is roughly the GPU KV token capacity divided by `vllm_max_model_len`; shorter prompts and image-token budgets can change the practical result.
 - `vllm_limit_mm_per_prompt` caps the number of multimodal items of each kind per request, e.g. `{"image": 4}`.
 - The speculative-decoding fields (`vllm_speculative_method`, `vllm_speculative_model`, `vllm_num_speculative_tokens`) are wired through to vLLM's `speculative_config`. The Gemma 4 MTP path is not yet verified; see [gemma4-mtp-vllm-notes.md](docs/gemma4-mtp-vllm-notes.md).
 - vLLM dependencies are heavy (PyTorch, flashinfer, CUDA libraries) and are imported lazily, only when a vLLM model is loaded.

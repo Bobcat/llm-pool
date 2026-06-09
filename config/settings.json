@@ -254,6 +254,52 @@
         },
         "enabled": false
       },
+      "gemma-4-26b-a4b-it-nvfp4-vllm": {
+        "backend": "vllm",
+        "model_path": null,
+        "prompt_format": "gemma4_template",
+        "enable_thinking": false,
+        "modalities": [
+          "text",
+          "image"
+        ],
+        "vllm_model": "/home/gunnar/models/RedHatAI/gemma-4-26B-A4B-it-NVFP4",
+        "vllm_dtype": "auto",
+        "vllm_gpu_memory_utilization": 0.01,
+        "vllm_kv_cache_memory_bytes": 2147483648,
+        "vllm_max_model_len": 8192,
+        "vllm_trust_remote_code": true,
+        "vllm_limit_mm_per_prompt": {
+          "image": 1
+        },
+        "vllm_mm_processor_kwargs": {
+          "max_soft_tokens": 560
+        },
+        "enabled": false
+      },
+      "gemma-4-26b-a4b-it-nvidia-nvfp4-vllm": {
+        "backend": "vllm",
+        "model_path": null,
+        "prompt_format": "gemma4_template",
+        "enable_thinking": false,
+        "modalities": [
+          "text",
+          "image"
+        ],
+        "vllm_model": "/home/gunnar/models/nvidia/Gemma-4-26B-A4B-NVFP4",
+        "vllm_dtype": "auto",
+        "vllm_gpu_memory_utilization": 0.01,
+        "vllm_kv_cache_memory_bytes": 2147483648,
+        "vllm_max_model_len": 8192,
+        "vllm_trust_remote_code": true,
+        "vllm_limit_mm_per_prompt": {
+          "image": 1
+        },
+        "vllm_mm_processor_kwargs": {
+          "max_soft_tokens": 560
+        },
+        "enabled": false
+      },
       "translategemma-12b-it-q5-k-m-gguf": {
         "model_path": "/home/gunnar/models/translategemma-12b-it-GGUF/translategemma-12b-it-Q5_K_M.gguf",
         "backend": "gguf",
