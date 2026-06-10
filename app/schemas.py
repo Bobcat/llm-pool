@@ -9,6 +9,7 @@ from typing import Union
 
 from pydantic import BaseModel
 from pydantic import Field
+from pydantic import model_validator
 
 
 class ModalityUnsupportedError(ValueError):
@@ -46,9 +47,22 @@ ContentItem = Annotated[
 ]
 
 
+class Message(BaseModel):
+    """A single turn in a multi-turn conversation.
+
+    The system prompt is carried by ``ResponseRequest.instructions``, so only
+    dialogue roles appear here. ``content`` mirrors ``input``: plain text or a
+    list of text/image content items.
+    """
+
+    role: Literal["user", "assistant"]
+    content: str | list[ContentItem]
+
+
 class ResponseRequest(BaseModel):
     model: str
-    input: str | list[ContentItem]
+    input: str | list[ContentItem] | None = None
+    messages: list[Message] | None = None
     instructions: str | None = None
     source_lang_code: str | None = None
     target_lang_code: str | None = None
@@ -56,9 +70,20 @@ class ResponseRequest(BaseModel):
     stream: bool = False
     decoding: DecodingParams = Field(default_factory=DecodingParams)
 
+    @model_validator(mode="after")
+    def _require_input_or_messages(self) -> "ResponseRequest":
+        if self.messages is not None:
+            if len(self.messages) == 0:
+                raise ValueError("messages must not be empty")
+            if self.messages[-1].role != "user":
+                raise ValueError("the last message must have role 'user'")
+        elif self.input is None:
+            raise ValueError("provide either 'input' or 'messages'")
+        return self
+
     @property
     def has_image_content(self) -> bool:
-        if isinstance(self.input, str):
+        if self.input is None or isinstance(self.input, str):
             return False
         return any(isinstance(item, ImageContent) for item in self.input)
 
@@ -69,6 +94,10 @@ class ResponseRequest(BaseModel):
         For list input, joins all TextContent items. Raises
         ``ModalityUnsupportedError`` if any ImageContent is present.
         """
+        if self.input is None:
+            raise ModalityUnsupportedError(
+                "this backend requires 'input'; multi-turn 'messages' is not supported"
+            )
         if isinstance(self.input, str):
             return self.input
         text_parts: list[str] = []
@@ -129,6 +158,7 @@ class AdminLoadRequest(BaseModel):
 
 class ModelCapabilities(BaseModel):
     modalities: list[Literal["text", "image"]] = Field(default_factory=lambda: ["text"])
+    multi_turn: bool = False
 
 
 class AdminModelEntry(BaseModel):

@@ -5,6 +5,7 @@ from app.schemas import AdminLoadRequest
 from app.schemas import EngineResult
 from app.schemas import ResponseRequest
 
+from .common import _backend_supports_multi_turn
 from .common import _estimate_model_artifact_size_mib
 from .common import _load_constraints_for_backend
 from .common import _load_recommendations_for_backend
@@ -75,7 +76,10 @@ class StubEngine:
                     "load_constraints": _load_constraints_for_backend(settings.engine.backend),
                     "load_recommendations": _load_recommendations_for_backend(settings.engine.backend),
                     "load_override": {},
-                    "capabilities": {"modalities": list(model_settings.modalities)},
+                    "capabilities": {
+                        "modalities": list(model_settings.modalities),
+                        "multi_turn": _backend_supports_multi_turn(settings.engine.backend),
+                    },
                     "definition": _model_definition_payload(
                         model_settings,
                         resolved_backend=settings.engine.backend,

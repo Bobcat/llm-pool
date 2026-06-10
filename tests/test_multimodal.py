@@ -340,7 +340,9 @@ class AdminCapabilitiesExposureTests(unittest.TestCase):
         engine = StubEngine(settings)
         payload = engine.admin_models_payload(settings)
         entry = payload["models"][0]
-        self.assertEqual(entry["capabilities"], {"modalities": ["text"]})
+        self.assertEqual(
+            entry["capabilities"], {"modalities": ["text"], "multi_turn": False}
+        )
 
     def test_stub_admin_payload_reports_image_capability_when_configured(self) -> None:
         settings = AppSettings(
@@ -358,7 +360,10 @@ class AdminCapabilitiesExposureTests(unittest.TestCase):
         engine = StubEngine(settings)
         payload = engine.admin_models_payload(settings)
         entry = payload["models"][0]
-        self.assertEqual(entry["capabilities"], {"modalities": ["text", "image"]})
+        self.assertEqual(
+            entry["capabilities"],
+            {"modalities": ["text", "image"], "multi_turn": False},
+        )
 
 
 if __name__ == "__main__":

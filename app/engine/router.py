@@ -15,6 +15,7 @@ from app.schemas import ResponseRequest
 
 from .common import LOGGER
 from .common import _empty_cuda_allocator_cache
+from .common import _backend_supports_multi_turn
 from .common import _estimate_model_artifact_size_mib
 from .common import _exception_message
 from .common import _load_constraints_for_backend
@@ -321,7 +322,10 @@ class ModelRouterEngine:
             "load_constraints": _load_constraints_for_backend(state.resolved_backend),
             "load_recommendations": _load_recommendations_for_backend(state.resolved_backend),
             "load_override": dict(state.load_override),
-            "capabilities": {"modalities": list(model_settings.modalities)},
+            "capabilities": {
+                "modalities": list(model_settings.modalities),
+                "multi_turn": _backend_supports_multi_turn(state.resolved_backend),
+            },
             "definition": _model_definition_payload(
                 model_settings,
                 resolved_backend=state.resolved_backend,

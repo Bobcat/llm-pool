@@ -26,6 +26,7 @@ if HAS_PYDANTIC:
     from app.engine.vllm import VllmModelRuntime
     from app.schemas import ImageContent
     from app.schemas import ImageUrlSpec
+    from app.schemas import Message
     from app.schemas import ResponseRequest
     from app.schemas import TextContent
 
@@ -192,6 +193,82 @@ class VllmPromptRenderingTests(unittest.TestCase):
                 has_images=False,
             )
         self.assertEqual(exc_info.exception.code, "chat_template_render_failed")
+
+
+@unittest.skipUnless(HAS_PYDANTIC, "pydantic not installed")
+class VllmConversationRenderingTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.engine = VllmEngine.__new__(VllmEngine)
+
+    def _make_runtime(self, captured: dict) -> "VllmModelRuntime":
+        class FakeTokenizer:
+            def apply_chat_template(self, messages, **kwargs):
+                captured["messages"] = messages
+                captured["kwargs"] = kwargs
+                return "<rendered conversation>"
+
+        return VllmModelRuntime(
+            config=_make_settings(),
+            engine=object(),
+            tokenizer=FakeTokenizer(),
+            loop=asyncio.new_event_loop(),
+            loop_thread=threading.Thread(target=lambda: None),
+        )
+
+    def test_multi_turn_prepends_system_and_preserves_history(self) -> None:
+        captured: dict = {}
+        runtime = self._make_runtime(captured)
+        result = self.engine._render_conversation_prompt(
+            runtime=runtime,
+            system_prompt="You are X.",
+            messages=[
+                Message(role="user", content="Hi"),
+                Message(role="assistant", content="Hello!"),
+                Message(role="user", content="And now?"),
+            ],
+        )
+        self.assertEqual(result, "<rendered conversation>")
+        self.assertEqual(
+            [(m["role"], m["content"]) for m in captured["messages"]],
+            [
+                ("system", "You are X."),
+                ("user", "Hi"),
+                ("assistant", "Hello!"),
+                ("user", "And now?"),
+            ],
+        )
+        self.assertTrue(captured["kwargs"]["add_generation_prompt"])
+        self.assertFalse(captured["kwargs"]["tokenize"])
+
+    def test_text_content_list_is_flattened(self) -> None:
+        captured: dict = {}
+        runtime = self._make_runtime(captured)
+        self.engine._render_conversation_prompt(
+            runtime=runtime,
+            system_prompt="X",
+            messages=[
+                Message(
+                    role="user",
+                    content=[TextContent(text="foo "), TextContent(text="bar")],
+                )
+            ],
+        )
+        self.assertEqual(captured["messages"][1]["content"], "foo bar")
+
+    def test_image_in_history_is_rejected(self) -> None:
+        captured: dict = {}
+        runtime = self._make_runtime(captured)
+        message = Message(
+            role="user",
+            content=[ImageContent(image_url=ImageUrlSpec(url="data:image/png;base64,AA"))],
+        )
+        with self.assertRaises(BackendExecutionError) as exc_info:
+            self.engine._render_conversation_prompt(
+                runtime=runtime,
+                system_prompt="X",
+                messages=[message],
+            )
+        self.assertEqual(exc_info.exception.code, "multi_turn_image_unsupported")
 
 
 @unittest.skipUnless(HAS_PYDANTIC, "pydantic not installed")

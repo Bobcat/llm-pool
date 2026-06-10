@@ -20,6 +20,7 @@ from app.config import ModelSettings
 from app.schemas import DecodingParams
 from app.schemas import EngineResult
 from app.schemas import ImageContent
+from app.schemas import Message
 from app.schemas import ResponseMetrics
 from app.schemas import ResponseRequest
 from app.schemas import TextContent
@@ -129,29 +130,39 @@ class VllmEngine:
         stop_strings = _merge_stop_strings(runtime.config.prompt_format, decoding.stop)
         system_prompt = request.instructions or _DEFAULT_SYSTEM_PROMPT
 
-        text_segments, images = self._extract_text_and_images(request)
+        if request.messages is not None:
+            tokenize_started = time.perf_counter()
+            prompt_text = self._render_conversation_prompt(
+                runtime=runtime,
+                system_prompt=system_prompt,
+                messages=request.messages,
+            )
+            engine_input = {"prompt": prompt_text}
+            tokenize_ms = max(0.0, (time.perf_counter() - tokenize_started) * 1000.0)
+        else:
+            text_segments, images = self._extract_text_and_images(request)
 
-        tokenize_started = time.perf_counter()
-        user_text = "".join(text_segments)
-        engine_input = self._render_multimodal_engine_input(
-            runtime=runtime,
-            system_prompt=system_prompt,
-            user_text=user_text,
-            images=images,
-        )
-        if engine_input is None:
-            prompt_text = self._render_prompt(
+            tokenize_started = time.perf_counter()
+            user_text = "".join(text_segments)
+            engine_input = self._render_multimodal_engine_input(
                 runtime=runtime,
                 system_prompt=system_prompt,
                 user_text=user_text,
-                has_images=bool(images),
+                images=images,
             )
-            engine_input = {"prompt": prompt_text}
-            if images:
-                engine_input["multi_modal_data"] = {
-                    "image": images[0] if len(images) == 1 else images
-                }
-        tokenize_ms = max(0.0, (time.perf_counter() - tokenize_started) * 1000.0)
+            if engine_input is None:
+                prompt_text = self._render_prompt(
+                    runtime=runtime,
+                    system_prompt=system_prompt,
+                    user_text=user_text,
+                    has_images=bool(images),
+                )
+                engine_input = {"prompt": prompt_text}
+                if images:
+                    engine_input["multi_modal_data"] = {
+                        "image": images[0] if len(images) == 1 else images
+                    }
+            tokenize_ms = max(0.0, (time.perf_counter() - tokenize_started) * 1000.0)
 
         sampling_params = self._build_sampling_params(decoding, stop_strings)
 
@@ -432,6 +443,51 @@ class VllmEngine:
                 status_code=500,
                 message=f"failed to render chat template: {_exception_message(exc)}",
             ) from exc
+
+    def _render_conversation_prompt(
+        self,
+        *,
+        runtime: VllmModelRuntime,
+        system_prompt: str,
+        messages: list[Message],
+    ) -> str:
+        chat_messages: list[dict[str, Any]] = [
+            {"role": "system", "content": system_prompt}
+        ]
+        for message in messages:
+            chat_messages.append(
+                {
+                    "role": message.role,
+                    "content": self._conversation_text_content(message),
+                }
+            )
+        try:
+            return runtime.tokenizer.apply_chat_template(
+                chat_messages,
+                add_generation_prompt=True,
+                tokenize=False,
+            )
+        except Exception as exc:
+            raise BackendExecutionError(
+                code="chat_template_render_failed",
+                status_code=500,
+                message=f"failed to render chat template: {_exception_message(exc)}",
+            ) from exc
+
+    @staticmethod
+    def _conversation_text_content(message: Message) -> str:
+        if isinstance(message.content, str):
+            return message.content
+        parts: list[str] = []
+        for item in message.content:
+            if isinstance(item, ImageContent):
+                raise BackendExecutionError(
+                    code="multi_turn_image_unsupported",
+                    status_code=400,
+                    message="multi-turn image input is not yet supported",
+                )
+            parts.append(item.text)
+        return "".join(parts)
 
     def _render_multimodal_engine_input(
         self,

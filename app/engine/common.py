@@ -89,6 +89,14 @@ _BACKEND_MODEL_DEFINITION_FIELDS = {
     ),
 }
 
+# Backends that support multi-turn ``messages`` input. Other backends receive a
+# single ``input`` turn; extend this set as multi-turn lands in more backends.
+_MULTI_TURN_BACKENDS = frozenset({"vllm"})
+
+
+def _backend_supports_multi_turn(backend: str) -> bool:
+    return backend in _MULTI_TURN_BACKENDS
+
 
 def _native_stop_strings(prompt_format: str) -> list[str]:
     if prompt_format in {"generic", "qwen3_template"}:
