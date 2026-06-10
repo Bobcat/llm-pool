@@ -255,7 +255,9 @@ class VllmConversationRenderingTests(unittest.TestCase):
         )
         self.assertEqual(captured["messages"][1]["content"], "foo bar")
 
-    def test_image_in_history_is_rejected(self) -> None:
+    def test_text_renderer_rejects_image_turns(self) -> None:
+        # Image-bearing conversations are routed to the multimodal path; the
+        # text renderer guards defensively if called directly with an image.
         captured: dict = {}
         runtime = self._make_runtime(captured)
         message = Message(
@@ -269,6 +271,23 @@ class VllmConversationRenderingTests(unittest.TestCase):
                 messages=[message],
             )
         self.assertEqual(exc_info.exception.code, "multi_turn_image_unsupported")
+
+    def test_conversation_has_images_detects_image_turns(self) -> None:
+        text_only = [
+            Message(role="user", content="hi"),
+            Message(role="assistant", content=[TextContent(text="hello")]),
+        ]
+        with_image = text_only + [
+            Message(
+                role="user",
+                content=[
+                    TextContent(text="and this?"),
+                    ImageContent(image_url=ImageUrlSpec(url="data:image/png;base64,AA")),
+                ],
+            )
+        ]
+        self.assertFalse(self.engine._conversation_has_images(text_only))
+        self.assertTrue(self.engine._conversation_has_images(with_image))
 
 
 @unittest.skipUnless(HAS_PYDANTIC, "pydantic not installed")

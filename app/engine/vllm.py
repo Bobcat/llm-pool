@@ -132,12 +132,11 @@ class VllmEngine:
 
         if request.messages is not None:
             tokenize_started = time.perf_counter()
-            prompt_text = self._render_conversation_prompt(
+            engine_input = self._render_conversation_engine_input(
                 runtime=runtime,
                 system_prompt=system_prompt,
                 messages=request.messages,
             )
-            engine_input = {"prompt": prompt_text}
             tokenize_ms = max(0.0, (time.perf_counter() - tokenize_started) * 1000.0)
         else:
             text_segments, images = self._extract_text_and_images(request)
@@ -488,6 +487,106 @@ class VllmEngine:
                 )
             parts.append(item.text)
         return "".join(parts)
+
+    def _render_conversation_engine_input(
+        self,
+        *,
+        runtime: VllmModelRuntime,
+        system_prompt: str,
+        messages: list[Message],
+    ) -> dict[str, Any]:
+        if self._conversation_has_images(messages):
+            return self._render_conversation_multimodal_input(
+                runtime=runtime,
+                system_prompt=system_prompt,
+                messages=messages,
+            )
+        prompt_text = self._render_conversation_prompt(
+            runtime=runtime,
+            system_prompt=system_prompt,
+            messages=messages,
+        )
+        return {"prompt": prompt_text}
+
+    @staticmethod
+    def _conversation_has_images(messages: list[Message]) -> bool:
+        for message in messages:
+            if isinstance(message.content, list) and any(
+                isinstance(item, ImageContent) for item in message.content
+            ):
+                return True
+        return False
+
+    def _render_conversation_multimodal_input(
+        self,
+        *,
+        runtime: VllmModelRuntime,
+        system_prompt: str,
+        messages: list[Message],
+    ) -> dict[str, Any]:
+        input_processor = getattr(runtime.engine, "input_processor", None)
+        renderer = getattr(input_processor, "renderer", None)
+        render_chat = getattr(renderer, "render_chat", None)
+        if not callable(render_chat):
+            raise BackendExecutionError(
+                code="multimodal_render_unavailable",
+                status_code=500,
+                message="this vllm runtime does not support multimodal chat rendering",
+            )
+
+        from vllm.renderers.params import ChatParams
+
+        chat_messages: list[dict[str, Any]] = [
+            {"role": "system", "content": system_prompt}
+        ]
+        for message in messages:
+            chat_messages.append(
+                {
+                    "role": message.role,
+                    "content": self._conversation_multimodal_content(message),
+                }
+            )
+        mm_processor_kwargs = (
+            dict(runtime.config.vllm_mm_processor_kwargs)
+            if runtime.config.vllm_mm_processor_kwargs
+            else None
+        )
+        try:
+            _, engine_inputs = render_chat(
+                [chat_messages],
+                ChatParams(
+                    chat_template_kwargs={
+                        "add_generation_prompt": True,
+                        "tokenize": False,
+                    },
+                    mm_processor_kwargs=mm_processor_kwargs,
+                ),
+                prompt_extras=(
+                    {"mm_processor_kwargs": mm_processor_kwargs}
+                    if mm_processor_kwargs is not None
+                    else None
+                ),
+            )
+        except Exception as exc:
+            raise BackendExecutionError(
+                code="chat_template_render_failed",
+                status_code=500,
+                message=f"failed to render multimodal chat template: {_exception_message(exc)}",
+            ) from exc
+        return engine_inputs[0]
+
+    def _conversation_multimodal_content(self, message: Message) -> Any:
+        if isinstance(message.content, str):
+            return message.content
+        content: list[dict[str, Any]] = []
+        for item in message.content:
+            if isinstance(item, ImageContent):
+                content.append(
+                    {"type": "image_pil", "image_pil": self._load_image(item)}
+                )
+            else:
+                content.append({"type": "text", "text": item.text})
+        return content
 
     def _render_multimodal_engine_input(
         self,
