@@ -9,6 +9,7 @@ FastAPI service that exposes one `POST /v1/responses` API across local CT2, ExLl
 - [Inference Example](#inference-example)
 - [Request Fields](#request-fields)
 - [Multimodal Input](#multimodal-input)
+- [Multi-turn Conversations](#multi-turn-conversations)
 - [Local Overrides](#local-overrides)
 - [vLLM Backend](#vllm-backend)
 - [Remote Backends](#remote-backends)
@@ -114,8 +115,9 @@ Currently supported API request fields:
 | Field | Type | Required | Default if omitted | Notes |
 | --- | --- | --- | --- | --- |
 | `model` | `string` | yes | none | Must match a currently loaded model id. |
-| `input` | `string \| array` | yes | none | Main input. A plain string for text, or an array of content items for multimodal input. See [Multimodal Input](#multimodal-input). |
-| `instructions` | `string \| null` | no | `null` | Optional high-level guidance. If omitted, the pool falls back to an internal default instruction prompt. Ignored by `translategemma_template`; omit it there. |
+| `input` | `string \| array` | conditional | none | Single-turn input: a plain string for text, or an array of content items for multimodal input. Provide either `input` or `messages`. See [Multimodal Input](#multimodal-input). |
+| `messages` | `array \| null` | conditional | `null` | Multi-turn conversation history. Array of `{ "role": "user" \| "assistant", "content": <string \| content-item array> }`. Provide either `input` or `messages`; the last message must be a user turn. Supported by the vLLM backend (`capabilities.multi_turn`). See [Multi-turn Conversations](#multi-turn-conversations). |
+| `instructions` | `string \| null` | no | `null` | Optional high-level guidance; used as the system prompt, including for `messages`. If omitted, the pool falls back to an internal default instruction prompt. Ignored by `translategemma_template`; omit it there. |
 | `source_lang_code` | `string \| null` | no | `null` | Required for models using `prompt_format: "translategemma_template"`. |
 | `target_lang_code` | `string \| null` | no | `null` | Required for models using `prompt_format: "translategemma_template"`. |
 | `stream` | `boolean` | no | `false` | `false` returns one JSON response; `true` returns SSE events. |
@@ -164,6 +166,37 @@ Notes:
 - Which models accept images is reported per model as `capabilities.modalities` on `GET /v1/admin/models`. A model declares image support with `"modalities": ["text", "image"]` in its config; the default is `["text"]`.
 - Text-only backends (CT2, ExLlamaV3, GGUF) reject image content with a `modality_unsupported` 400 error. Image input is currently served by the vLLM backend (local vision models) and by remote OpenAI-compatible vision models.
 - A text-only array (only `text` items) is accepted by any backend and is concatenated to a single prompt, so string and text-array input are equivalent.
+
+## Multi-turn Conversations
+
+Instead of a single `input`, a request can carry a `messages` array of prior
+turns. The pool renders the full history through the model's chat template, so
+the model sees real `user`/`assistant` turns rather than one flattened prompt:
+
+```json
+{
+  "model": "qwen2.5-vl-3b",
+  "instructions": "You are a concise assistant.",
+  "messages": [
+    { "role": "user", "content": "My favorite color is teal." },
+    { "role": "assistant", "content": "Got it." },
+    { "role": "user", "content": "What is my favorite color?" }
+  ],
+  "stream": false,
+  "decoding": { "temperature": 0.0, "max_tokens": 32 }
+}
+```
+
+Notes:
+
+- The system prompt comes from `instructions`; `messages` carries only `user`
+  and `assistant` turns, and the last turn must be `user`.
+- A turn's `content` mirrors `input`: a plain string, or a content-item array
+  for multimodal turns (text + `image_url`) on a vision model.
+- Multi-turn is reported per model as `capabilities.multi_turn` on
+  `GET /v1/admin/models`, and is currently served by the vLLM backend. Other
+  backends only accept single-turn `input`; a client should flatten history
+  into one prompt for those.
 
 ## Local Overrides
 
