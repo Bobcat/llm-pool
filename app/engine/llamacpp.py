@@ -4,22 +4,30 @@ from dataclasses import dataclass
 from dataclasses import field
 import threading
 import time
+from typing import Any
 
 from app.config import AppSettings
 from app.config import ModelSettings
 from app.schemas import DecodingParams
 from app.schemas import EngineResult
+from app.schemas import ImageContent
+from app.schemas import Message
 from app.schemas import ResponseRequest
 from app.schemas import ResponseMetrics
 
+from .common import BackendExecutionError
 from .common import LOGGER
 from .common import _exception_message
 from .common import _merge_stop_strings
+from .common import _model_thinking_modes
+from .common import _model_supports_multi_turn
 from .common import _require_text_input
 from .common import _resolve_gguf_cache_type_constant
+from .common import _resolve_request_enable_thinking
 from .common import ResolvedDecoding
 
 _LLAMA_CPP_FLASH_ATTN_MODE_LOCK = threading.Lock()
+_DEFAULT_SYSTEM_PROMPT = "You are a helpful assistant. Return only the response."
 
 
 @dataclass
@@ -54,8 +62,7 @@ class LlamaCppEngine:
         if runtime is None:
             raise ValueError(f"unknown model: {request.model!r}")
 
-        user_text = _require_text_input(request)
-        system_prompt = request.instructions or "You are a helpful assistant. Return only the response."
+        system_prompt = request.instructions or _DEFAULT_SYSTEM_PROMPT
         decoding = self._resolve_decoding(request.decoding)
         prompt_format = runtime.config.prompt_format
         stop_strings = self._resolve_stop_strings(prompt_format, decoding.stop)
@@ -65,6 +72,25 @@ class LlamaCppEngine:
                 request.decoding.beam_size,
                 request.model,
             )
+        if request.messages is not None:
+            if not _model_supports_multi_turn("gguf", prompt_format):
+                raise BackendExecutionError(
+                    code="multi_turn_unsupported",
+                    status_code=400,
+                    message=f"GGUF prompt_format {prompt_format!r} does not support multi-turn chat",
+                )
+            return self._complete_with_chat_messages(
+                runtime=runtime,
+                messages=self._conversation_chat_messages(
+                    system_prompt=system_prompt,
+                    messages=request.messages,
+                ),
+                decoding=decoding,
+                stop_strings=stop_strings,
+                enable_thinking=self._request_enable_thinking(runtime, request),
+            )
+
+        user_text = _require_text_input(request)
         if prompt_format == "gemma4_template":
             return self._complete_with_native_chat_template(
                 runtime=runtime,
@@ -72,6 +98,7 @@ class LlamaCppEngine:
                 system_prompt=system_prompt,
                 decoding=decoding,
                 stop_strings=stop_strings,
+                enable_thinking=self._request_enable_thinking(runtime, request),
             )
         if prompt_format == "translategemma_template":
             return self._complete_with_translategemma_template(
@@ -88,7 +115,10 @@ class LlamaCppEngine:
             prompt_format=prompt_format,
             system_prompt=system_prompt,
             user_text=user_text,
-            enable_thinking=runtime.config.enable_thinking,
+            enable_thinking=_resolve_request_enable_thinking(
+                request,
+                runtime.config.enable_thinking,
+            ),
         )
         prompt_tokens = runtime.llm.tokenize(
             prompt_text.encode("utf-8"),
@@ -159,21 +189,47 @@ class LlamaCppEngine:
         system_prompt: str,
         decoding: ResolvedDecoding,
         stop_strings: list[str],
+        enable_thinking: bool | None,
+    ) -> EngineResult:
+        return self._complete_with_chat_messages(
+            runtime=runtime,
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_text},
+            ],
+            decoding=decoding,
+            stop_strings=stop_strings,
+            enable_thinking=enable_thinking,
+        )
+
+    def _complete_with_chat_messages(
+        self,
+        *,
+        runtime: LlamaCppModelRuntime,
+        messages: list[dict[str, Any]],
+        decoding: ResolvedDecoding,
+        stop_strings: list[str],
+        enable_thinking: bool | None = None,
     ) -> EngineResult:
         generate_started = time.perf_counter()
         with runtime.generation_lock:
-            response = runtime.llm.create_chat_completion(
-                messages=[
-                    {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": user_text},
-                ],
-                temperature=decoding.temperature,
-                top_p=decoding.top_p,
-                top_k=decoding.top_k,
-                max_tokens=decoding.max_tokens,
-                repeat_penalty=decoding.repetition_penalty,
-                stop=stop_strings,
-            )
+            completion_kwargs = {
+                "messages": messages,
+                "temperature": decoding.temperature,
+                "top_p": decoding.top_p,
+                "top_k": decoding.top_k,
+                "max_tokens": decoding.max_tokens,
+                "repeat_penalty": decoding.repetition_penalty,
+                "stop": stop_strings,
+            }
+            if enable_thinking is None:
+                response = runtime.llm.create_chat_completion(**completion_kwargs)
+            else:
+                response = self._chat_completion_with_template_kwargs(
+                    runtime.llm,
+                    completion_kwargs,
+                    {"enable_thinking": enable_thinking},
+                )
         generate_total_ms = (time.perf_counter() - generate_started) * 1000.0
         usage = response.get("usage") or {}
         prompt_token_count = usage.get("prompt_tokens")
@@ -191,6 +247,85 @@ class LlamaCppEngine:
                 engine_tokens_per_second=engine_tokens_per_second,
             ),
         )
+
+    def _chat_completion_with_template_kwargs(
+        self,
+        llm: object,
+        completion_kwargs: dict[str, Any],
+        template_kwargs: dict[str, Any],
+    ):
+        handler = self._chat_completion_handler(llm)
+        return handler(
+            llama=llm,
+            **completion_kwargs,
+            **template_kwargs,
+        )
+
+    @staticmethod
+    def _chat_completion_handler(llm: object):
+        handler = getattr(llm, "chat_handler", None)
+        if callable(handler):
+            return handler
+        chat_format = getattr(llm, "chat_format", None)
+        handlers = getattr(llm, "_chat_handlers", None)
+        if isinstance(handlers, dict):
+            handler = handlers.get(chat_format)
+            if callable(handler):
+                return handler
+        try:
+            from llama_cpp import llama_chat_format
+        except ImportError as exc:  # pragma: no cover - depends on local environment
+            raise RuntimeError("llama-cpp-python chat formatting is unavailable") from exc
+        return llama_chat_format.get_chat_completion_handler(chat_format)
+
+    def _request_enable_thinking(
+        self,
+        runtime: LlamaCppModelRuntime,
+        request: ResponseRequest,
+    ) -> bool | None:
+        thinking_modes = _model_thinking_modes("gguf", runtime.config.prompt_format)
+        if request.thinking != "default" and request.thinking not in thinking_modes:
+            raise BackendExecutionError(
+                code="thinking_unsupported",
+                status_code=400,
+                message=f"model {request.model!r} does not support request-level thinking",
+            )
+        if thinking_modes == ["default"]:
+            return None
+        return _resolve_request_enable_thinking(request, runtime.config.enable_thinking)
+
+    def _conversation_chat_messages(
+        self,
+        *,
+        system_prompt: str,
+        messages: list[Message],
+    ) -> list[dict[str, Any]]:
+        chat_messages: list[dict[str, Any]] = [
+            {"role": "system", "content": system_prompt}
+        ]
+        for message in messages:
+            chat_messages.append(
+                {
+                    "role": message.role,
+                    "content": self._conversation_text_content(message),
+                }
+            )
+        return chat_messages
+
+    @staticmethod
+    def _conversation_text_content(message: Message) -> str:
+        if isinstance(message.content, str):
+            return message.content
+        parts: list[str] = []
+        for item in message.content:
+            if isinstance(item, ImageContent):
+                raise BackendExecutionError(
+                    code="modality_unsupported",
+                    status_code=400,
+                    message="GGUF multi-turn chat does not support image content",
+                )
+            parts.append(item.text)
+        return "".join(parts)
 
     def _complete_with_translategemma_template(
         self,

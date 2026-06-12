@@ -29,6 +29,8 @@ from .common import LOGGER
 from .common import BackendExecutionError
 from .common import _exception_message
 from .common import _merge_stop_strings
+from .common import _model_thinking_modes
+from .common import _resolve_request_enable_thinking
 from .common import ResolvedDecoding
 
 
@@ -129,6 +131,7 @@ class VllmEngine:
         decoding = self._resolve_decoding(request.decoding)
         stop_strings = _merge_stop_strings(runtime.config.prompt_format, decoding.stop)
         system_prompt = request.instructions or _DEFAULT_SYSTEM_PROMPT
+        enable_thinking = self._request_enable_thinking(runtime, request)
 
         if request.messages is not None:
             tokenize_started = time.perf_counter()
@@ -136,6 +139,7 @@ class VllmEngine:
                 runtime=runtime,
                 system_prompt=system_prompt,
                 messages=request.messages,
+                enable_thinking=enable_thinking,
             )
             tokenize_ms = max(0.0, (time.perf_counter() - tokenize_started) * 1000.0)
         else:
@@ -148,6 +152,7 @@ class VllmEngine:
                 system_prompt=system_prompt,
                 user_text=user_text,
                 images=images,
+                enable_thinking=enable_thinking,
             )
             if engine_input is None:
                 prompt_text = self._render_prompt(
@@ -155,6 +160,7 @@ class VllmEngine:
                     system_prompt=system_prompt,
                     user_text=user_text,
                     has_images=bool(images),
+                    enable_thinking=enable_thinking,
                 )
                 engine_input = {"prompt": prompt_text}
                 if images:
@@ -420,6 +426,7 @@ class VllmEngine:
         system_prompt: str,
         user_text: str,
         has_images: bool,
+        enable_thinking: bool | None = None,
     ) -> str:
         user_content: Any
         if has_images:
@@ -433,8 +440,7 @@ class VllmEngine:
         try:
             return runtime.tokenizer.apply_chat_template(
                 messages,
-                add_generation_prompt=True,
-                tokenize=False,
+                **self._chat_template_kwargs(enable_thinking),
             )
         except Exception as exc:
             raise BackendExecutionError(
@@ -449,6 +455,7 @@ class VllmEngine:
         runtime: VllmModelRuntime,
         system_prompt: str,
         messages: list[Message],
+        enable_thinking: bool | None = None,
     ) -> str:
         chat_messages: list[dict[str, Any]] = [
             {"role": "system", "content": system_prompt}
@@ -463,8 +470,7 @@ class VllmEngine:
         try:
             return runtime.tokenizer.apply_chat_template(
                 chat_messages,
-                add_generation_prompt=True,
-                tokenize=False,
+                **self._chat_template_kwargs(enable_thinking),
             )
         except Exception as exc:
             raise BackendExecutionError(
@@ -494,17 +500,20 @@ class VllmEngine:
         runtime: VllmModelRuntime,
         system_prompt: str,
         messages: list[Message],
+        enable_thinking: bool | None,
     ) -> dict[str, Any]:
         if self._conversation_has_images(messages):
             return self._render_conversation_multimodal_input(
                 runtime=runtime,
                 system_prompt=system_prompt,
                 messages=messages,
+                enable_thinking=enable_thinking,
             )
         prompt_text = self._render_conversation_prompt(
             runtime=runtime,
             system_prompt=system_prompt,
             messages=messages,
+            enable_thinking=enable_thinking,
         )
         return {"prompt": prompt_text}
 
@@ -523,6 +532,7 @@ class VllmEngine:
         runtime: VllmModelRuntime,
         system_prompt: str,
         messages: list[Message],
+        enable_thinking: bool | None,
     ) -> dict[str, Any]:
         input_processor = getattr(runtime.engine, "input_processor", None)
         renderer = getattr(input_processor, "renderer", None)
@@ -555,10 +565,7 @@ class VllmEngine:
             _, engine_inputs = render_chat(
                 [chat_messages],
                 ChatParams(
-                    chat_template_kwargs={
-                        "add_generation_prompt": True,
-                        "tokenize": False,
-                    },
+                    chat_template_kwargs=self._chat_template_kwargs(enable_thinking),
                     mm_processor_kwargs=mm_processor_kwargs,
                 ),
                 prompt_extras=(
@@ -595,6 +602,7 @@ class VllmEngine:
         system_prompt: str,
         user_text: str,
         images: list[Any],
+        enable_thinking: bool | None,
     ) -> dict[str, Any] | None:
         if not images:
             return None
@@ -626,10 +634,7 @@ class VllmEngine:
             _, engine_inputs = render_chat(
                 [messages],
                 ChatParams(
-                    chat_template_kwargs={
-                        "add_generation_prompt": True,
-                        "tokenize": False,
-                    },
+                    chat_template_kwargs=self._chat_template_kwargs(enable_thinking),
                     mm_processor_kwargs=mm_processor_kwargs,
                 ),
                 prompt_extras=(
@@ -645,6 +650,32 @@ class VllmEngine:
                 message=f"failed to render multimodal chat template: {_exception_message(exc)}",
             ) from exc
         return engine_inputs[0]
+
+    @staticmethod
+    def _chat_template_kwargs(enable_thinking: bool | None) -> dict[str, Any]:
+        kwargs: dict[str, Any] = {
+            "add_generation_prompt": True,
+            "tokenize": False,
+        }
+        if enable_thinking is not None:
+            kwargs["enable_thinking"] = enable_thinking
+        return kwargs
+
+    def _request_enable_thinking(
+        self,
+        runtime: VllmModelRuntime,
+        request: ResponseRequest,
+    ) -> bool | None:
+        thinking_modes = _model_thinking_modes("vllm", runtime.config.prompt_format)
+        if request.thinking != "default" and request.thinking not in thinking_modes:
+            raise BackendExecutionError(
+                code="thinking_unsupported",
+                status_code=400,
+                message=f"model {request.model!r} does not support request-level thinking",
+            )
+        if thinking_modes == ["default"]:
+            return None
+        return _resolve_request_enable_thinking(request, runtime.config.enable_thinking)
 
     async def _run_generation(
         self,

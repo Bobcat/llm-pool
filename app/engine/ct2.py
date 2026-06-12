@@ -16,6 +16,7 @@ from .common import LOGGER
 from .common import _exception_message
 from .common import _merge_stop_strings
 from .common import _require_text_input
+from .common import _resolve_request_enable_thinking
 from .common import ResolvedDecoding
 
 
@@ -59,8 +60,12 @@ class Ct2Engine:
         tokenize_started = time.perf_counter()
         prompt_token_count = 0
         if runtime.config.prompt_format == "qwen3_template":
+            enable_thinking = _resolve_request_enable_thinking(
+                request,
+                runtime.config.enable_thinking,
+            )
             suppress_sequences = None
-            if runtime.config.enable_thinking is not True:
+            if enable_thinking is not True:
                 think_open_tokens = self._tokenize(runtime.tokenizer, "<think>", add_special_tokens=False)
                 think_close_tokens = self._tokenize(runtime.tokenizer, "</think>", add_special_tokens=False)
                 suppress_sequences = [tokens for tokens in (think_open_tokens, think_close_tokens) if tokens]
@@ -68,7 +73,7 @@ class Ct2Engine:
                 runtime.tokenizer,
                 system_prompt=system_prompt,
                 user_text=user_input_text,
-                enable_thinking=runtime.config.enable_thinking,
+                enable_thinking=enable_thinking,
             )
             prompt_token_count = len(prompt_tokens)
             tokenize_ms = (time.perf_counter() - tokenize_started) * 1000.0

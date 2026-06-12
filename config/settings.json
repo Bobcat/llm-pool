@@ -254,6 +254,29 @@
         },
         "enabled": false
       },
+      "gemma-4-12b-it-qat-w4a16-ct-vllm": {
+        "backend": "vllm",
+        "model_path": null,
+        "prompt_format": "gemma4_template",
+        "enable_thinking": false,
+        "modalities": [
+          "text",
+          "image"
+        ],
+        "vllm_model": "/home/gunnar/models/google/gemma-4-12B-it-qat-w4a16-ct",
+        "vllm_dtype": "auto",
+        "vllm_gpu_memory_utilization": 0.01,
+        "vllm_kv_cache_memory_bytes": 2147483648,
+        "vllm_max_model_len": 8192,
+        "vllm_trust_remote_code": true,
+        "vllm_limit_mm_per_prompt": {
+          "image": 1
+        },
+        "vllm_mm_processor_kwargs": {
+          "max_soft_tokens": 560
+        },
+        "enabled": false
+      },
       "gemma-4-26b-a4b-it-nvfp4-vllm": {
         "backend": "vllm",
         "model_path": null,

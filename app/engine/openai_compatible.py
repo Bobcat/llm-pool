@@ -21,6 +21,7 @@ from .common import BackendExecutionError
 from .common import LOGGER
 from .common import ResolvedDecoding
 from .common import _exception_message
+from .common import _resolve_request_remote_thinking
 
 
 _DEFAULT_SYSTEM_PROMPT = "You are a helpful assistant. Return only the response."
@@ -145,8 +146,12 @@ class OpenAICompatibleEngine:
         }
         if decoding.stop:
             payload["stop"] = decoding.stop
-        if runtime.config.remote_thinking is not None:
-            payload["thinking"] = {"type": runtime.config.remote_thinking}
+        remote_thinking = _resolve_request_remote_thinking(
+            request,
+            runtime.config.remote_thinking,
+        )
+        if remote_thinking is not None:
+            payload["thinking"] = {"type": remote_thinking}
         return payload
 
     @staticmethod

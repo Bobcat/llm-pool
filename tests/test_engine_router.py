@@ -103,6 +103,42 @@ class ModelRouterEngineTests(unittest.TestCase):
 
         self.assertEqual(gguf_result.text, "gguf:gguf-model#1")
 
+    def test_rejects_thinking_override_when_model_has_no_thinking_capability(self) -> None:
+        settings = AppSettings(
+            service=ServiceSettings(),
+            engine=EngineSettings(
+                backend="ct2",
+                models={
+                    "gguf-model": ModelSettings(
+                        model_path="/models/test.gguf",
+                        backend="gguf",
+                        prompt_format="generic",
+                    ),
+                },
+            ),
+        )
+
+        class FakeLlamaCppEngine:
+            def __init__(self, scoped_settings):
+                self._models = {name: object() for name in scoped_settings.engine.models}
+
+            def complete(self, request: ResponseRequest) -> EngineResult:
+                return EngineResult(text=f"gguf:{request.model}")
+
+        with mock.patch.object(engine_module, "LlamaCppEngine", FakeLlamaCppEngine):
+            engine = ModelRouterEngine(settings)
+
+            with self.assertRaises(engine_module.RequestAdmissionError) as exc_info:
+                engine.complete(
+                    ResponseRequest(
+                        model="gguf-model",
+                        input="hello",
+                        thinking="enabled",
+                    )
+                )
+
+        self.assertEqual(exc_info.exception.code, "thinking_unsupported")
+
     def test_dispatches_openai_compatible_backend_with_remote_admission(self) -> None:
         settings = AppSettings(
             service=ServiceSettings(),

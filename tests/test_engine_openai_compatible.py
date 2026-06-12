@@ -13,6 +13,7 @@ if HAS_PYDANTIC:
     from app.config import DecodingDefaults
     from app.config import EngineSettings
     from app.config import ModelSettings
+    from app.engine.common import ResolvedDecoding
     import app.engine.openai_compatible as openai_compatible_module
     from app.schemas import DecodingParams
     from app.schemas import ResponseRequest
@@ -131,6 +132,42 @@ class OpenAICompatibleEngineTests(unittest.TestCase):
                 "thinking": {"type": "disabled"},
             },
         )
+
+    def test_remote_thinking_request_override_takes_precedence(self) -> None:
+        engine = openai_compatible_module.OpenAICompatibleEngine.__new__(
+            openai_compatible_module.OpenAICompatibleEngine
+        )
+        runtime = openai_compatible_module.OpenAICompatibleModelRuntime(
+            config=ModelSettings(
+                model_path=None,
+                backend="openai_compatible",
+                remote_thinking="disabled",
+            ),
+            base_url="https://api.example.com/v1",
+            api_key_env="EXAMPLE_API_KEY",
+            remote_model="provider-model",
+            timeout_s=1.0,
+        )
+
+        payload = engine._chat_completions_payload(
+            runtime=runtime,
+            request=ResponseRequest(
+                model="remote-model",
+                input="Hello",
+                thinking="enabled",
+            ),
+            decoding=ResolvedDecoding(
+                beam_size=1,
+                top_k=1,
+                top_p=0.8,
+                temperature=0.2,
+                repetition_penalty=1.0,
+                max_tokens=16,
+                stop=[],
+            ),
+        )
+
+        self.assertEqual(payload["thinking"], {"type": "enabled"})
 
     def test_build_runtime_requires_api_key_environment_variable(self) -> None:
         engine = openai_compatible_module.OpenAICompatibleEngine.__new__(

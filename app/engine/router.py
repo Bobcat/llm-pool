@@ -15,12 +15,13 @@ from app.schemas import ResponseRequest
 
 from .common import LOGGER
 from .common import _empty_cuda_allocator_cache
-from .common import _backend_supports_multi_turn
 from .common import _estimate_model_artifact_size_mib
 from .common import _exception_message
 from .common import _load_constraints_for_backend
 from .common import _load_recommendations_for_backend
 from .common import _model_definition_payload
+from .common import _model_supports_multi_turn
+from .common import _model_thinking_modes
 from .common import _normalize_gguf_cache_type_name
 from .common import _normalize_gguf_flash_attn_mode
 from .common import _query_gpu_memory
@@ -77,6 +78,7 @@ class ModelRouterEngine:
         with self._state_lock:
             if request.model not in self._configured_models:
                 raise UnknownModelError(request.model)
+            model_settings = self._configured_models[request.model]
             state = self._model_states[request.model]
             if state.lifecycle != "loaded":
                 raise ModelStateError(request.model, self._lifecycle_error_code(state.lifecycle))
@@ -85,6 +87,17 @@ class ModelRouterEngine:
                     code="remote_execution_disallowed",
                     status_code=403,
                     message="remote execution is not allowed for this request",
+                )
+            thinking_modes = _model_thinking_modes(
+                state.resolved_backend,
+                model_settings.prompt_format,
+                model_settings.remote_thinking,
+            )
+            if request.thinking != "default" and request.thinking not in thinking_modes:
+                raise RequestAdmissionError(
+                    code="thinking_unsupported",
+                    status_code=400,
+                    message=f"model {request.model!r} does not support request-level thinking",
                 )
             executor = self._scheduler.get(request.model)
             if executor is None:
@@ -100,6 +113,7 @@ class ModelRouterEngine:
                 else result.metrics.dict()
             )
             metrics_payload["engine_total_wall_ms"] = total_ms
+            metrics_payload["pool_total_wall_ms"] = total_ms
             backend_wall_ms = metrics_payload.get("backend_inference_wall_ms")
             if backend_wall_ms is not None:
                 metrics_payload["engine_outside_backend_wall_ms"] = max(0.0, total_ms - float(backend_wall_ms))
@@ -324,7 +338,15 @@ class ModelRouterEngine:
             "load_override": dict(state.load_override),
             "capabilities": {
                 "modalities": list(model_settings.modalities),
-                "multi_turn": _backend_supports_multi_turn(state.resolved_backend),
+                "multi_turn": _model_supports_multi_turn(
+                    state.resolved_backend,
+                    model_settings.prompt_format,
+                ),
+                "thinking_modes": _model_thinking_modes(
+                    state.resolved_backend,
+                    model_settings.prompt_format,
+                    model_settings.remote_thinking,
+                ),
             },
             "definition": _model_definition_payload(
                 model_settings,

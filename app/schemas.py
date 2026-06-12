@@ -45,6 +45,7 @@ ContentItem = Annotated[
     Union[TextContent, ImageContent],
     Field(discriminator="type"),
 ]
+ThinkingMode = Literal["default", "enabled", "disabled"]
 
 
 class Message(BaseModel):
@@ -68,6 +69,7 @@ class ResponseRequest(BaseModel):
     target_lang_code: str | None = None
     allow_remote: bool = False
     stream: bool = False
+    thinking: ThinkingMode = "default"
     decoding: DecodingParams = Field(default_factory=DecodingParams)
 
     @model_validator(mode="after")
@@ -159,6 +161,7 @@ class AdminLoadRequest(BaseModel):
 class ModelCapabilities(BaseModel):
     modalities: list[Literal["text", "image"]] = Field(default_factory=lambda: ["text"])
     multi_turn: bool = False
+    thinking_modes: list[ThinkingMode] = Field(default_factory=lambda: ["default"])
 
 
 class AdminModelEntry(BaseModel):

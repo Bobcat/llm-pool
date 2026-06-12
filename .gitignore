@@ -8,3 +8,4 @@ llm-pool-dev.code-workspace
 config/local.json
 *.egg-info/
 logs/
+docs/image-pool-remote-provider-bridge-notes.md

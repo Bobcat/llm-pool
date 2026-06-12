@@ -188,6 +188,48 @@ class Ct2EngineTests(unittest.TestCase):
         self.assertEqual(result.text, "done")
         self.assertIsNone(runtime.generator.kwargs["suppress_sequences"])
 
+    def test_qwen3_complete_request_can_disable_configured_thinking(self) -> None:
+        class FakeResult:
+            def __init__(self) -> None:
+                self.sequences = [[101, 102]]
+
+        class FakeGenerator:
+            def __init__(self) -> None:
+                self.kwargs = None
+
+            def generate_batch(self, prompt_batches, **kwargs):
+                self.kwargs = kwargs
+                return [FakeResult()]
+
+        runtime = Ct2ModelRuntime(
+            config=ModelSettings(
+                model_path="/models/qwen3",
+                prompt_format="qwen3_template",
+                enable_thinking=True,
+            ),
+            generator=FakeGenerator(),
+            tokenizer=FakeQwenCompleteTokenizer(),
+        )
+        engine = Ct2Engine.__new__(Ct2Engine)
+        engine.decoding_defaults = DecodingDefaults(
+            beam_size=1,
+            top_k=1,
+            top_p=1.0,
+            temperature=0.1,
+            repetition_penalty=1.0,
+            max_tokens=16,
+            stop=["</s>"],
+        )
+        engine._models = {"qwen3": runtime}
+
+        result = engine.complete(
+            ResponseRequest(model="qwen3", input="Hello", thinking="disabled")
+        )
+
+        self.assertEqual(result.text, "done")
+        self.assertIsNotNone(runtime.generator.kwargs["suppress_sequences"])
+        self.assertIn("/no_think\nHello", runtime.tokenizer.calls[-1]["text"])
+
     def test_resolve_decoding_prefers_payload_then_settings_then_defaults(self) -> None:
         engine = Ct2Engine.__new__(Ct2Engine)
         engine.decoding_defaults = DecodingDefaults(

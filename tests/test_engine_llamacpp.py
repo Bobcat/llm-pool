@@ -11,6 +11,7 @@ HAS_PYDANTIC = importlib.util.find_spec("pydantic") is not None
 if HAS_PYDANTIC:
     from app.config import DecodingDefaults
     from app.config import ModelSettings
+    from app.engine.common import BackendExecutionError
     import app.engine.llamacpp as llamacpp_module
     from app.schemas import DecodingParams
     from app.schemas import ResponseRequest
@@ -263,6 +264,212 @@ class LlamaCppEngineTests(unittest.TestCase):
         self.assertEqual(runtime.llm.chat_kwargs["max_tokens"], 9)
         self.assertIn("<end_of_turn>", runtime.llm.chat_kwargs["stop"])
         self.assertIn("</stop>", runtime.llm.chat_kwargs["stop"])
+
+    def test_complete_gemma4_can_pass_thinking_to_native_chat_handler(self) -> None:
+        class FakeLlama:
+            chat_handler = None
+            chat_format = "chat_template.default"
+
+            def __init__(self) -> None:
+                self._chat_handlers = {"chat_template.default": self.chat_handler_with_kwargs}
+
+            def create_chat_completion(self, **kwargs):
+                raise AssertionError("direct chat handler should be used")
+
+            def chat_handler_with_kwargs(self, **kwargs):
+                self.chat_kwargs = kwargs
+                return {
+                    "choices": [{"message": {"content": "OK"}}],
+                    "usage": {"prompt_tokens": 12, "completion_tokens": 1},
+                }
+
+        runtime = llamacpp_module.LlamaCppModelRuntime(
+            config=ModelSettings(
+                model_path="/models/gemma4.gguf",
+                backend="gguf",
+                prompt_format="gemma4_template",
+                enable_thinking=False,
+            ),
+            llm=FakeLlama(),
+        )
+        engine = llamacpp_module.LlamaCppEngine.__new__(llamacpp_module.LlamaCppEngine)
+        engine.decoding_defaults = DecodingDefaults(max_tokens=9)
+        engine._models = {"gemma4-gguf": runtime}
+
+        result = engine.complete(
+            ResponseRequest(
+                model="gemma4-gguf",
+                input="Reply with OK",
+                thinking="enabled",
+            )
+        )
+
+        self.assertEqual(result.text, "OK")
+        self.assertIs(runtime.llm.chat_kwargs["llama"], runtime.llm)
+        self.assertTrue(runtime.llm.chat_kwargs["enable_thinking"])
+        self.assertEqual(runtime.llm.chat_kwargs["messages"][1]["content"], "Reply with OK")
+
+    def test_complete_generic_multi_turn_uses_chat_completion_messages(self) -> None:
+        class FakeLlama:
+            def create_chat_completion(self, **kwargs):
+                self.chat_kwargs = kwargs
+                return {
+                    "choices": [{"message": {"content": "Teal."}}],
+                    "usage": {"prompt_tokens": 21, "completion_tokens": 2},
+                }
+
+        runtime = llamacpp_module.LlamaCppModelRuntime(
+            config=ModelSettings(
+                model_path="/models/generic.gguf",
+                backend="gguf",
+                prompt_format="generic",
+            ),
+            llm=FakeLlama(),
+        )
+        engine = llamacpp_module.LlamaCppEngine.__new__(llamacpp_module.LlamaCppEngine)
+        engine.decoding_defaults = DecodingDefaults(
+            top_k=3,
+            top_p=0.7,
+            temperature=0.2,
+            repetition_penalty=1.0,
+            max_tokens=16,
+            stop=[],
+        )
+        engine._models = {"generic-gguf": runtime}
+
+        result = engine.complete(
+            ResponseRequest(
+                model="generic-gguf",
+                instructions="Remember facts.",
+                messages=[
+                    {"role": "user", "content": "My favorite color is teal."},
+                    {"role": "assistant", "content": "Got it."},
+                    {"role": "user", "content": "What is my favorite color?"},
+                ],
+            )
+        )
+
+        self.assertEqual(result.text, "Teal.")
+        self.assertEqual(result.metrics.engine_prompt_tokens, 21)
+        self.assertEqual(result.metrics.engine_output_tokens, 2)
+        self.assertEqual(
+            runtime.llm.chat_kwargs["messages"],
+            [
+                {"role": "system", "content": "Remember facts."},
+                {"role": "user", "content": "My favorite color is teal."},
+                {"role": "assistant", "content": "Got it."},
+                {"role": "user", "content": "What is my favorite color?"},
+            ],
+        )
+        self.assertEqual(runtime.llm.chat_kwargs["top_k"], 3)
+        self.assertIn("<|im_end|>", runtime.llm.chat_kwargs["stop"])
+
+    def test_complete_multi_turn_text_content_list_is_joined(self) -> None:
+        class FakeLlama:
+            def create_chat_completion(self, **kwargs):
+                self.chat_kwargs = kwargs
+                return {
+                    "choices": [{"message": {"content": "OK"}}],
+                    "usage": {"prompt_tokens": 5, "completion_tokens": 1},
+                }
+
+        runtime = llamacpp_module.LlamaCppModelRuntime(
+            config=ModelSettings(
+                model_path="/models/gemma4.gguf",
+                backend="gguf",
+                prompt_format="gemma4_template",
+            ),
+            llm=FakeLlama(),
+        )
+        engine = llamacpp_module.LlamaCppEngine.__new__(llamacpp_module.LlamaCppEngine)
+        engine.decoding_defaults = DecodingDefaults()
+        engine._models = {"gemma4-gguf": runtime}
+
+        engine.complete(
+            ResponseRequest(
+                model="gemma4-gguf",
+                messages=[
+                    {
+                        "role": "user",
+                        "content": [
+                            {"type": "text", "text": "Hello "},
+                            {"type": "text", "text": "there"},
+                        ],
+                    }
+                ],
+            )
+        )
+
+        self.assertEqual(runtime.llm.chat_kwargs["messages"][1]["content"], "Hello there")
+
+    def test_complete_multi_turn_rejects_image_content_for_gguf(self) -> None:
+        class FakeLlama:
+            def create_chat_completion(self, **kwargs):
+                raise AssertionError("chat completion should not be called")
+
+        runtime = llamacpp_module.LlamaCppModelRuntime(
+            config=ModelSettings(
+                model_path="/models/generic.gguf",
+                backend="gguf",
+                prompt_format="generic",
+            ),
+            llm=FakeLlama(),
+        )
+        engine = llamacpp_module.LlamaCppEngine.__new__(llamacpp_module.LlamaCppEngine)
+        engine.decoding_defaults = DecodingDefaults()
+        engine._models = {"generic-gguf": runtime}
+
+        with self.assertRaises(BackendExecutionError) as exc_info:
+            engine.complete(
+                ResponseRequest(
+                    model="generic-gguf",
+                    messages=[
+                        {
+                            "role": "user",
+                            "content": [
+                                {"type": "text", "text": "Describe this."},
+                                {
+                                    "type": "image_url",
+                                    "image_url": {
+                                        "url": "data:image/png;base64,AAAA",
+                                    },
+                                },
+                            ],
+                        }
+                    ],
+                )
+            )
+
+        self.assertEqual(exc_info.exception.code, "modality_unsupported")
+        self.assertEqual(exc_info.exception.status_code, 400)
+
+    def test_complete_translategemma_rejects_multi_turn_messages(self) -> None:
+        class FakeLlama:
+            def create_chat_completion(self, **kwargs):
+                raise AssertionError("chat completion should not be called")
+
+        runtime = llamacpp_module.LlamaCppModelRuntime(
+            config=ModelSettings(
+                model_path="/models/translategemma.gguf",
+                backend="gguf",
+                prompt_format="translategemma_template",
+            ),
+            llm=FakeLlama(),
+        )
+        engine = llamacpp_module.LlamaCppEngine.__new__(llamacpp_module.LlamaCppEngine)
+        engine.decoding_defaults = DecodingDefaults()
+        engine._models = {"translategemma": runtime}
+
+        with self.assertRaises(BackendExecutionError) as exc_info:
+            engine.complete(
+                ResponseRequest(
+                    model="translategemma",
+                    messages=[{"role": "user", "content": "Hello"}],
+                )
+            )
+
+        self.assertEqual(exc_info.exception.code, "multi_turn_unsupported")
+        self.assertEqual(exc_info.exception.status_code, 400)
 
     def test_complete_translategemma_uses_structured_translation_content(self) -> None:
         class FakeLlama:

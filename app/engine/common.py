@@ -89,13 +89,69 @@ _BACKEND_MODEL_DEFINITION_FIELDS = {
     ),
 }
 
-# Backends that support multi-turn ``messages`` input. Other backends receive a
-# single ``input`` turn; extend this set as multi-turn lands in more backends.
-_MULTI_TURN_BACKENDS = frozenset({"vllm"})
+# GGUF multi-turn is text-only and depends on llama.cpp's chat-completion path.
+# TranslateGemma remains a structured translation flow rather than assistant chat.
+_GGUF_MULTI_TURN_PROMPT_FORMATS = frozenset(
+    {
+        "gemma4_template",
+        "generic",
+        "mistral_template",
+        "qwen3_template",
+    }
+)
+_THINKING_CONTROL_PROMPT_FORMATS = {
+    "ct2": frozenset({"qwen3_template"}),
+    "exllamav3": frozenset({"gemma4_template", "qwen3_template"}),
+    "gguf": frozenset({"gemma4_template"}),
+    "vllm": frozenset({"gemma4_template", "qwen3_template"}),
+}
+_DEFAULT_THINKING_MODES = ("default",)
+_OVERRIDE_THINKING_MODES = ("default", "enabled", "disabled")
 
 
-def _backend_supports_multi_turn(backend: str) -> bool:
-    return backend in _MULTI_TURN_BACKENDS
+def _model_supports_multi_turn(backend: str, prompt_format: str | None) -> bool:
+    normalized_backend = backend.strip().lower()
+    if normalized_backend == "vllm":
+        return True
+    if normalized_backend == "gguf":
+        normalized_prompt_format = (prompt_format or "").strip().lower()
+        return normalized_prompt_format in _GGUF_MULTI_TURN_PROMPT_FORMATS
+    return False
+
+
+def _model_thinking_modes(
+    backend: str,
+    prompt_format: str | None,
+    remote_thinking: str | None = None,
+) -> list[str]:
+    normalized_backend = backend.strip().lower()
+    if normalized_backend == "openai_compatible":
+        if remote_thinking is not None:
+            return list(_OVERRIDE_THINKING_MODES)
+        return list(_DEFAULT_THINKING_MODES)
+    prompt_formats = _THINKING_CONTROL_PROMPT_FORMATS.get(normalized_backend)
+    if prompt_formats is None:
+        return list(_DEFAULT_THINKING_MODES)
+    normalized_prompt_format = (prompt_format or "").strip().lower()
+    if normalized_prompt_format in prompt_formats:
+        return list(_OVERRIDE_THINKING_MODES)
+    return list(_DEFAULT_THINKING_MODES)
+
+
+def _resolve_request_enable_thinking(request, default: bool | None) -> bool | None:
+    if request.thinking == "enabled":
+        return True
+    if request.thinking == "disabled":
+        return False
+    return default
+
+
+def _resolve_request_remote_thinking(request, default: str | None) -> str | None:
+    if request.thinking == "enabled":
+        return "enabled"
+    if request.thinking == "disabled":
+        return "disabled"
+    return default
 
 
 def _native_stop_strings(prompt_format: str) -> list[str]:

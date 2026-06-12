@@ -57,8 +57,16 @@ class ResponseRequestSchemaTests(unittest.TestCase):
     def test_string_input_is_accepted_and_preserved(self) -> None:
         request = ResponseRequest(model="m", input="Hello world")
         self.assertEqual(request.input, "Hello world")
+        self.assertEqual(request.thinking, "default")
         self.assertFalse(request.has_image_content)
         self.assertEqual(request.text_input_or_raise(), "Hello world")
+
+    def test_request_accepts_thinking_override_modes(self) -> None:
+        request = ResponseRequest(model="m", input="Hello world", thinking="enabled")
+        self.assertEqual(request.thinking, "enabled")
+
+        with self.assertRaises(Exception):  # pydantic ValidationError
+            ResponseRequest(model="m", input="Hello world", thinking="maybe")
 
     def test_text_only_content_list_joins_to_plain_text(self) -> None:
         request = ResponseRequest(
@@ -341,7 +349,12 @@ class AdminCapabilitiesExposureTests(unittest.TestCase):
         payload = engine.admin_models_payload(settings)
         entry = payload["models"][0]
         self.assertEqual(
-            entry["capabilities"], {"modalities": ["text"], "multi_turn": False}
+            entry["capabilities"],
+            {
+                "modalities": ["text"],
+                "multi_turn": False,
+                "thinking_modes": ["default"],
+            },
         )
 
     def test_stub_admin_payload_reports_image_capability_when_configured(self) -> None:
@@ -362,7 +375,111 @@ class AdminCapabilitiesExposureTests(unittest.TestCase):
         entry = payload["models"][0]
         self.assertEqual(
             entry["capabilities"],
-            {"modalities": ["text", "image"], "multi_turn": False},
+            {
+                "modalities": ["text", "image"],
+                "multi_turn": False,
+                "thinking_modes": ["default"],
+            },
+        )
+
+    def test_stub_admin_payload_reports_gguf_chat_prompt_multi_turn_capability(self) -> None:
+        settings = AppSettings(
+            engine=EngineSettings(
+                backend="gguf",
+                models={
+                    "m": ModelSettings(
+                        model_path="/tmp/m.gguf",
+                        enabled=True,
+                        prompt_format="generic",
+                    ),
+                },
+            ),
+        )
+        engine = StubEngine(settings)
+        payload = engine.admin_models_payload(settings)
+        entry = payload["models"][0]
+        self.assertEqual(
+            entry["capabilities"],
+            {
+                "modalities": ["text"],
+                "multi_turn": True,
+                "thinking_modes": ["default"],
+            },
+        )
+
+    def test_stub_admin_payload_reports_vllm_thinking_modes_for_gemma4(self) -> None:
+        settings = AppSettings(
+            engine=EngineSettings(
+                backend="vllm",
+                models={
+                    "m": ModelSettings(
+                        model_path="/tmp/m",
+                        enabled=True,
+                        prompt_format="gemma4_template",
+                    ),
+                },
+            ),
+        )
+        engine = StubEngine(settings)
+        payload = engine.admin_models_payload(settings)
+        entry = payload["models"][0]
+        self.assertEqual(
+            entry["capabilities"],
+            {
+                "modalities": ["text"],
+                "multi_turn": True,
+                "thinking_modes": ["default", "enabled", "disabled"],
+            },
+        )
+
+    def test_stub_admin_payload_reports_gguf_thinking_modes_for_gemma4(self) -> None:
+        settings = AppSettings(
+            engine=EngineSettings(
+                backend="gguf",
+                models={
+                    "m": ModelSettings(
+                        model_path="/tmp/m.gguf",
+                        enabled=True,
+                        prompt_format="gemma4_template",
+                    ),
+                },
+            ),
+        )
+        engine = StubEngine(settings)
+        payload = engine.admin_models_payload(settings)
+        entry = payload["models"][0]
+        self.assertEqual(
+            entry["capabilities"],
+            {
+                "modalities": ["text"],
+                "multi_turn": True,
+                "thinking_modes": ["default", "enabled", "disabled"],
+            },
+        )
+
+    def test_stub_admin_payload_keeps_translategemma_single_turn(self) -> None:
+        settings = AppSettings(
+            engine=EngineSettings(
+                backend="gguf",
+                models={
+                    "m": ModelSettings(
+                        model_path="/tmp/m.gguf",
+                        enabled=True,
+                        prompt_format="translategemma_template",
+                    ),
+                },
+            ),
+        )
+        engine = StubEngine(settings)
+        payload = engine.admin_models_payload(settings)
+        entry = payload["models"][0]
+        self.assertEqual(
+            entry["capabilities"],
+            {
+                "modalities": ["text"],
+                "multi_turn": False,
+                "thinking_modes": ["default"],
+            },
         )
 
 

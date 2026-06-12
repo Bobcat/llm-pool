@@ -35,7 +35,7 @@ def _make_settings(**overrides) -> "ModelSettings":
     return ModelSettings(
         model_path=overrides.pop("model_path", "/tmp/fake-model"),
         backend="vllm",
-        prompt_format="generic",
+        prompt_format=overrides.pop("prompt_format", "generic"),
         modalities=overrides.pop("modalities", ("text", "image")),
         **overrides,
     )
@@ -126,7 +126,7 @@ class VllmPromptRenderingTests(unittest.TestCase):
     def setUp(self) -> None:
         self.engine = VllmEngine.__new__(VllmEngine)
 
-    def _make_runtime(self, captured: dict) -> "VllmModelRuntime":
+    def _make_runtime(self, captured: dict, **settings_overrides) -> "VllmModelRuntime":
         class FakeTokenizer:
             def apply_chat_template(self, messages, **kwargs):
                 captured["messages"] = messages
@@ -134,7 +134,7 @@ class VllmPromptRenderingTests(unittest.TestCase):
                 return "<rendered prompt>"
 
         return VllmModelRuntime(
-            config=_make_settings(),
+            config=_make_settings(**settings_overrides),
             engine=object(),
             tokenizer=FakeTokenizer(),
             loop=asyncio.new_event_loop(),
@@ -157,6 +157,45 @@ class VllmPromptRenderingTests(unittest.TestCase):
         self.assertEqual(captured["messages"][1]["content"], "Hello")
         self.assertTrue(captured["kwargs"]["add_generation_prompt"])
         self.assertFalse(captured["kwargs"]["tokenize"])
+
+    def test_text_only_can_pass_enable_thinking_to_chat_template(self) -> None:
+        captured: dict = {}
+        runtime = self._make_runtime(captured)
+        self.engine._render_prompt(
+            runtime=runtime,
+            system_prompt="You are X.",
+            user_text="Hello",
+            has_images=False,
+            enable_thinking=True,
+        )
+        self.assertTrue(captured["kwargs"]["enable_thinking"])
+
+    def test_request_enable_thinking_uses_gemma4_request_override(self) -> None:
+        captured: dict = {}
+        runtime = self._make_runtime(
+            captured,
+            prompt_format="gemma4_template",
+            enable_thinking=False,
+        )
+
+        enabled = self.engine._request_enable_thinking(
+            runtime,
+            ResponseRequest(model="m", input="Hello", thinking="enabled"),
+        )
+
+        self.assertTrue(enabled)
+
+    def test_request_enable_thinking_rejects_generic_override(self) -> None:
+        captured: dict = {}
+        runtime = self._make_runtime(captured)
+
+        with self.assertRaises(BackendExecutionError) as exc_info:
+            self.engine._request_enable_thinking(
+                runtime,
+                ResponseRequest(model="m", input="Hello", thinking="enabled"),
+            )
+
+        self.assertEqual(exc_info.exception.code, "thinking_unsupported")
 
     def test_with_image_uses_content_list_with_placeholder(self) -> None:
         captured: dict = {}

@@ -105,6 +105,13 @@ Suggested error codes:
 - `model_loading`
 - `model_unloading`
 - `model_failed`
+- `thinking_unsupported`
+
+Requests may optionally include `thinking: "default" | "enabled" | "disabled"`.
+`default` preserves the model configuration. `enabled` and `disabled` are
+accepted only when the selected model advertises those values in
+`capabilities.thinking_modes`; otherwise the request is rejected with
+`400 thinking_unsupported`.
 
 ## Endpoints
 
@@ -194,7 +201,8 @@ Suggested response shape:
       "load_override": {},
       "capabilities": {
         "modalities": ["text"],
-        "multi_turn": false
+        "multi_turn": true,
+        "thinking_modes": ["default"]
       },
       "definition": {
         "model_path": "/home/gunnar/models/google_gemma-4-E2B-it-Q8_0/google_gemma-4-E2B-it-Q8_0.gguf",
@@ -230,7 +238,8 @@ Notes:
 - `vram_estimate_replica_count` is the replica count that the VRAM estimate was measured or derived for
 - `vram_estimate_source` is either `observed_load_delta`, `model_artifact_size`, or `unavailable`
 - `capabilities.modalities` lists which input modalities the model accepts (`["text"]` or `["text", "image"]`); a UI can use it to decide whether to allow image input for a model
-- `capabilities.multi_turn` reports whether the backend accepts a multi-turn `messages` array on `POST /v1/responses` (currently `true` for the vLLM backend only); a UI can use it to decide whether to send real conversation history or fall back to a flattened single prompt
+- `capabilities.multi_turn` reports whether the model accepts a multi-turn `messages` array on `POST /v1/responses`; this is `true` for vLLM models and for supported text-only GGUF chat prompt formats (`generic`, `mistral_template`, `qwen3_template`, `gemma4_template`), but remains `false` for GGUF `translategemma_template`
+- `capabilities.thinking_modes` lists accepted values for request-level `thinking`; models without a safe per-request control report only `["default"]`, while supported vLLM Gemma4/Qwen3, GGUF Gemma4, ExLlamaV3 Gemma4/Qwen3, CT2 Qwen3, and configured remote models report `["default", "enabled", "disabled"]`
 - `load_constraints` describes backend-specific live-load fields for UI controls
 - `load_recommendations` describes service-curated recommended presets and pairings for UI defaults
 - `load_override` reports the runtime-only override currently active on a loaded model

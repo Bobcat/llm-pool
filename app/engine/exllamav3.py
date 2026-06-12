@@ -17,6 +17,7 @@ from .common import LOGGER
 from .common import _exception_message
 from .common import _merge_stop_strings
 from .common import _require_text_input
+from .common import _resolve_request_enable_thinking
 from .common import ResolvedDecoding
 
 
@@ -75,7 +76,10 @@ class ExLlamaV3Engine:
             prompt_format=prompt_format,
             system_prompt=system_prompt,
             user_text=user_text,
-            enable_thinking=runtime.config.enable_thinking,
+            enable_thinking=_resolve_request_enable_thinking(
+                request,
+                runtime.config.enable_thinking,
+            ),
         )
         prompt_ids = prompt_ids.to(device="cpu")
         prompt_token_count = int(prompt_ids.shape[-1])
