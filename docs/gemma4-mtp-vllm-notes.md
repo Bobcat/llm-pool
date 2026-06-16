@@ -17,6 +17,10 @@ Current reality note:
   `vllm_num_speculative_tokens` are passed through to vLLM's `speculative_config`.
 - Beyond this note's scope, the same backend also gained multimodal (image)
   input support, used by the image-description / OCR-grounding work.
+- A separate `backend: "llama_server"` now exists for GGUF models that need
+  native llama-server features such as `--mmproj` and MTP draft flags. That is
+  a separate local backend path and does not change this note's vLLM-specific
+  architecture.
 - **Not yet done / verified:** actual Gemma 4 MTP has not been run end to end.
   The speculative path is wired but untested against real Gemma 4 target and
   assistant checkpoints, MTP-specific acceptance-rate metrics are not exposed,

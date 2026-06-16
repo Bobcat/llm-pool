@@ -446,6 +446,13 @@ class ModelRouterEngine:
             gc.collect()
             return
 
+        close_runtime = getattr(runtime, "close", None)
+        if callable(close_runtime):
+            try:
+                close_runtime()
+            except Exception:
+                LOGGER.warning("Failed to close runtime during cleanup.", exc_info=True)
+
         generator = getattr(runtime, "generator", None)
         clear_queue = getattr(generator, "clear_queue", None)
         if callable(clear_queue):
@@ -763,6 +770,71 @@ class ModelRouterEngine:
 
             return replace(model_settings, **replacement_kwargs)
 
+        if resolved_backend == "llama_server":
+            unsupported = sorted(
+                field_name
+                for field_name in load_override
+                if field_name
+                not in {
+                    "llama_server_n_ctx",
+                    "llama_server_image_max_tokens",
+                    "llama_server_spec_type",
+                    "llama_server_spec_draft_n_max",
+                    "llama_server_spec_draft_p_min",
+                }
+            )
+            if unsupported:
+                names = ", ".join(unsupported)
+                raise ValueError(f"unsupported load override for llama_server backend: {names}")
+
+            replacement_kwargs: dict[str, object | None] = {"enabled": True}
+
+            if "llama_server_n_ctx" in load_override:
+                n_ctx = load_override["llama_server_n_ctx"]
+                if n_ctx is not None and (not isinstance(n_ctx, int) or n_ctx <= 0):
+                    raise ValueError("llama_server_n_ctx load override must be a positive integer or null")
+                replacement_kwargs["llama_server_n_ctx"] = n_ctx
+
+            if "llama_server_image_max_tokens" in load_override:
+                image_max_tokens = load_override["llama_server_image_max_tokens"]
+                if image_max_tokens is not None and (
+                    not isinstance(image_max_tokens, int) or image_max_tokens <= 0
+                ):
+                    raise ValueError("llama_server_image_max_tokens load override must be a positive integer or null")
+                replacement_kwargs["llama_server_image_max_tokens"] = image_max_tokens
+
+            if "llama_server_spec_type" in load_override:
+                spec_type = load_override["llama_server_spec_type"]
+                if spec_type is not None:
+                    if not isinstance(spec_type, str) or spec_type.strip() != "draft-mtp":
+                        raise ValueError("llama_server_spec_type load override must be 'draft-mtp' or null")
+                    spec_type = spec_type.strip()
+                replacement_kwargs["llama_server_spec_type"] = spec_type
+
+            if "llama_server_spec_draft_n_max" in load_override:
+                draft_n_max = load_override["llama_server_spec_draft_n_max"]
+                if draft_n_max is not None and (
+                    not isinstance(draft_n_max, int) or draft_n_max < 1 or draft_n_max > 6
+                ):
+                    raise ValueError(
+                        "llama_server_spec_draft_n_max load override must be an integer between 1 and 6 or null"
+                    )
+                replacement_kwargs["llama_server_spec_draft_n_max"] = draft_n_max
+
+            if "llama_server_spec_draft_p_min" in load_override:
+                draft_p_min = load_override["llama_server_spec_draft_p_min"]
+                if draft_p_min is not None and (
+                    not isinstance(draft_p_min, (float, int)) or draft_p_min < 0.0 or draft_p_min > 1.0
+                ):
+                    raise ValueError(
+                        "llama_server_spec_draft_p_min load override must be between 0.0 and 1.0 or null"
+                    )
+                replacement_kwargs["llama_server_spec_draft_p_min"] = (
+                    float(draft_p_min) if draft_p_min is not None else None
+                )
+
+            return replace(model_settings, **replacement_kwargs)
+
         raise ValueError(f"load overrides are not supported for backend: {resolved_backend!r}")
 
     def _build_backend_engine(self, backend: str, settings: AppSettings):
@@ -773,6 +845,8 @@ class ModelRouterEngine:
             return engine_module.ExLlamaV3Engine(settings)
         if backend == "gguf":
             return engine_module.LlamaCppEngine(settings)
+        if backend == "llama_server":
+            return engine_module.LlamaServerEngine(settings)
         if backend == "openai_compatible":
             return engine_module.OpenAICompatibleEngine(settings)
         if backend == "vllm":
@@ -799,3 +873,15 @@ class ModelRouterEngine:
 
     def close(self) -> None:
         self._scheduler.close()
+        with self._state_lock:
+            runtimes = list(self._models.values())
+            self._models.clear()
+            self._model_engines.clear()
+            self._loaded_replica_ids.clear()
+            for state in self._model_states.values():
+                if state.lifecycle in {"loaded", "loading", "unloading"}:
+                    state.lifecycle = "unloaded"
+                    state.inflight_requests = 0
+            self._state_changed.notify_all()
+        for runtime in runtimes:
+            self._cleanup_runtime(runtime)

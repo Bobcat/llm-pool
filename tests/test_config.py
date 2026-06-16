@@ -294,6 +294,72 @@ class ConfigTests(unittest.TestCase):
         self.assertEqual(model.target_inflight, 3)
         self.assertFalse(model.enabled)
 
+    def test_load_settings_reads_llama_server_model(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = Path(tmpdir) / "settings.json"
+            path.write_text(
+                (
+                    "{\n"
+                    '  "engine": {\n'
+                    '    "backend": "stub",\n'
+                    '    "models": {\n'
+                    '      "gemma4-gguf": {\n'
+                    '        "model_path": "/models/gemma.gguf",\n'
+                    '        "backend": "llama_server",\n'
+                    '        "llama_server_binary": "/opt/llama-server",\n'
+                    '        "llama_server_host": "127.0.0.1",\n'
+                    '        "llama_server_port": 18089,\n'
+                    '        "llama_server_model_alias": "gemma-local",\n'
+                    '        "llama_server_timeout_s": 33.5,\n'
+                    '        "llama_server_start_timeout_s": 44.5,\n'
+                    '        "llama_server_stop_timeout_s": 3.5,\n'
+                    '        "llama_server_library_path": ["/cuda/lib", "/extra/lib"],\n'
+                    '        "llama_server_api_key": "local-secret",\n'
+                    '        "llama_server_n_ctx": 4096,\n'
+                    '        "llama_server_n_gpu_layers": "999",\n'
+                    '        "llama_server_flash_attn": "ON",\n'
+                    '        "llama_server_mmproj_path": "/models/mmproj.gguf",\n'
+                    '        "llama_server_image_max_tokens": 512,\n'
+                    '        "llama_server_draft_model_path": "/models/mtp.gguf",\n'
+                    '        "llama_server_spec_type": "draft-mtp",\n'
+                    '        "llama_server_spec_draft_n_max": 4,\n'
+                    '        "llama_server_spec_draft_p_min": 0.25,\n'
+                    '        "llama_server_spec_draft_ngl": "999",\n'
+                    '        "llama_server_reasoning": "off",\n'
+                    '        "llama_server_extra_args": ["--jinja"]\n'
+                    "      }\n"
+                    "    }\n"
+                    "  }\n"
+                    "}\n"
+                ),
+                encoding="utf-8",
+            )
+
+            settings = load_settings(path)
+
+        model = settings.engine.models["gemma4-gguf"]
+        self.assertEqual(model.backend, "llama_server")
+        self.assertEqual(model.llama_server_binary, "/opt/llama-server")
+        self.assertEqual(model.llama_server_port, 18089)
+        self.assertEqual(model.llama_server_model_alias, "gemma-local")
+        self.assertEqual(model.llama_server_timeout_s, 33.5)
+        self.assertEqual(model.llama_server_start_timeout_s, 44.5)
+        self.assertEqual(model.llama_server_stop_timeout_s, 3.5)
+        self.assertEqual(model.llama_server_library_path, ("/cuda/lib", "/extra/lib"))
+        self.assertEqual(model.llama_server_api_key, "local-secret")
+        self.assertEqual(model.llama_server_n_ctx, 4096)
+        self.assertEqual(model.llama_server_n_gpu_layers, "999")
+        self.assertEqual(model.llama_server_flash_attn, "on")
+        self.assertEqual(model.llama_server_mmproj_path, "/models/mmproj.gguf")
+        self.assertEqual(model.llama_server_image_max_tokens, 512)
+        self.assertEqual(model.llama_server_draft_model_path, "/models/mtp.gguf")
+        self.assertEqual(model.llama_server_spec_type, "draft-mtp")
+        self.assertEqual(model.llama_server_spec_draft_n_max, 4)
+        self.assertEqual(model.llama_server_spec_draft_p_min, 0.25)
+        self.assertEqual(model.llama_server_spec_draft_ngl, "999")
+        self.assertEqual(model.llama_server_reasoning, "off")
+        self.assertEqual(model.llama_server_extra_args, ("--jinja",))
+
     def test_load_settings_defaults_target_inflight_to_one(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             path = Path(tmpdir) / "settings.json"

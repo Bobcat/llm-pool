@@ -12,6 +12,26 @@ It is intentionally a v1 design:
 - no force unload
 - no background job system for model loads
 
+Current reality note:
+
+- this admin API is implemented and is the live control plane used by the workbench
+- runtime-only load overrides are implemented for `gguf`, `exllamav3`, `vllm`, and `llama_server`
+- `llama_server` load/unload starts and stops a managed native `llama-server` subprocess; binary path, model path, library path, `mmproj`, draft model path, host, port, and extra native args stay in model config in v1
+- the live `load_constraints` payload remains the source of truth for UI controls when this note and implementation details drift
+
+## Contents
+
+- [Purpose](#purpose)
+- [Core Concepts](#core-concepts)
+- [State Semantics](#state-semantics)
+- [Request Behavior By Runtime State](#request-behavior-by-runtime-state)
+- [Endpoints](#endpoints)
+  - [`GET /v1/admin/models`](#get-v1adminmodels)
+  - [`GET /v1/admin/gpu-memory`](#get-v1admingpu-memory)
+  - [`POST /v1/admin/models/{model_name}/load`](#post-v1adminmodelsmodel_nameload)
+  - [`POST /v1/admin/models/{model_name}/unload`](#post-v1adminmodelsmodel_nameunload)
+- [Unload And In-Flight Requests](#unload-and-in-flight-requests)
+
 ## Purpose
 
 The current service merges `settings.json` and `local.json` into one effective config, then loads enabled models at startup.
@@ -238,7 +258,7 @@ Notes:
 - `vram_estimate_replica_count` is the replica count that the VRAM estimate was measured or derived for
 - `vram_estimate_source` is either `observed_load_delta`, `model_artifact_size`, or `unavailable`
 - `capabilities.modalities` lists which input modalities the model accepts (`["text"]` or `["text", "image"]`); a UI can use it to decide whether to allow image input for a model
-- `capabilities.multi_turn` reports whether the model accepts a multi-turn `messages` array on `POST /v1/responses`; this is `true` for vLLM models and for supported text-only GGUF chat prompt formats (`generic`, `mistral_template`, `qwen3_template`, `gemma4_template`), but remains `false` for GGUF `translategemma_template`
+- `capabilities.multi_turn` reports whether the model accepts a multi-turn `messages` array on `POST /v1/responses`; this is `true` for `llama_server` and vLLM models and for supported text-only GGUF chat prompt formats (`generic`, `mistral_template`, `qwen3_template`, `gemma4_template`), but remains `false` for GGUF `translategemma_template`
 - `capabilities.thinking_modes` lists accepted values for request-level `thinking`; models without a safe per-request control report only `["default"]`, while supported vLLM Gemma4/Qwen3, GGUF Gemma4, ExLlamaV3 Gemma4/Qwen3, CT2 Qwen3, and configured remote models report `["default", "enabled", "disabled"]`
 - `load_constraints` describes backend-specific live-load fields for UI controls
 - `load_recommendations` describes service-curated recommended presets and pairings for UI defaults
@@ -324,7 +344,7 @@ For ExLlamaV3, the UI may interpret the effective quant value as:
 The API does not currently return separate `k_bits` and `v_bits` fields.
 The UI should parse `exllama_cache_quant` itself when it wants to display separate K/V values.
 
-Current shapes:
+#### Current `load_constraints` Shapes
 
 GGUF:
 
@@ -454,6 +474,42 @@ vLLM:
 }
 ```
 
+llama-server:
+
+```json
+{
+  "llama_server_n_ctx": {
+    "kind": "integer",
+    "minimum": 1,
+    "step": 1
+  },
+  "llama_server_image_max_tokens": {
+    "kind": "integer",
+    "minimum": 1,
+    "step": 1
+  },
+  "llama_server_spec_type": {
+    "kind": "enum",
+    "default": "draft-mtp",
+    "allowed_values": ["draft-mtp"],
+    "examples": ["draft-mtp"]
+  },
+  "llama_server_spec_draft_n_max": {
+    "kind": "integer",
+    "minimum": 1,
+    "maximum": 6,
+    "step": 1,
+    "default": 2
+  },
+  "llama_server_spec_draft_p_min": {
+    "kind": "float",
+    "minimum": 0.0,
+    "maximum": 1.0,
+    "default": 0.0
+  }
+}
+```
+
 ExLlamaV3 recommended presets:
 
 ```json
@@ -482,7 +538,7 @@ ExLlamaV3 recommended presets:
 }
 ```
 
-CT2 and stub:
+CT2, `openai_compatible`, and stub:
 
 ```json
 {}
@@ -558,6 +614,7 @@ Supported load override fields:
 - GGUF: `gguf_n_ctx`, `gguf_flash_attn`, `gguf_type_k`, `gguf_type_v`
 - ExLlamaV3: `exllama_cache_size`, `exllama_cache_quant`, `exllama_cache_k_bits`, `exllama_cache_v_bits`, `exllama_max_rq_tokens`
 - vLLM: `vllm_max_model_len`, `vllm_kv_cache_dtype`, `vllm_kv_cache_memory_bytes`, `vllm_max_pixels`
+- llama-server: `llama_server_n_ctx`, `llama_server_image_max_tokens`, `llama_server_spec_type`, `llama_server_spec_draft_n_max`, `llama_server_spec_draft_p_min`
 
 Example load bodies:
 
@@ -636,12 +693,34 @@ Example load bodies:
 }
 ```
 
+```json
+{
+  "llama_server_n_ctx": 4096,
+  "llama_server_image_max_tokens": 512,
+  "llama_server_spec_type": "draft-mtp",
+  "llama_server_spec_draft_n_max": 4,
+  "llama_server_spec_draft_p_min": 0.25
+}
+```
+
+#### Backend-Specific Load Override Notes
+
 vLLM load override notes:
 
 - `vllm_max_model_len` is the per-load context length.
 - `vllm_kv_cache_dtype` quantizes the KV cache; allowed UI values are `auto`, `fp8`, `fp8_e4m3`, `fp8_e5m2`. The service accepts any dtype string vLLM supports.
 - `vllm_kv_cache_memory_bytes` sets an absolute KV cache size in bytes. It is machine-independent and overrides `vllm_gpu_memory_utilization` for KV sizing. The `load_constraints` entry carries `unit: "bytes"` and `display_unit: "mib"` so the UI can present it in MiB.
 - `vllm_max_pixels` caps the vision-token budget per image for vision-language models; it is merged into the model's `vllm_mm_processor_kwargs` as `max_pixels`.
+
+llama-server load override notes:
+
+- `llama_server_n_ctx` maps to the native `llama-server -c/--ctx-size` flag for this load.
+- `llama_server_image_max_tokens` maps to native `--image-max-tokens` and controls the per-image vision token budget.
+- `llama_server_spec_type` currently accepts only `"draft-mtp"` or `null`.
+- `llama_server_spec_draft_n_max` maps to native `--spec-draft-n-max`; v1 constrains it to `1..6`.
+- `llama_server_spec_draft_p_min` maps to native `--spec-draft-p-min`; v1 constrains it to `0.0..1.0`.
+- Model path, binary path, library path, `mmproj`, draft model path, GPU layers, flash attention, reasoning, host, port, API key, and extra native args are configured in the model definition, not overridden through the admin load body in v1.
+- Loading a `llama_server` model starts a local `llama-server` subprocess. Unloading terminates that subprocess, so VRAM is released by the native server process rather than by Python object cleanup alone.
 
 `exllama_cache_quant` format:
 
@@ -795,9 +874,15 @@ Validation behavior:
   combining `exllama_cache_quant` with `exllama_cache_k_bits`/`exllama_cache_v_bits`
   `exllama_cache_size: 8000`
   `exllama_cache_quant: "fp16"`
+  `llama_server_spec_type: "medusa"`
+  `llama_server_spec_draft_n_max: 7`
+  `llama_server_spec_draft_p_min: 1.5`
   sending ExLlamaV3-only fields to a GGUF model
+  sending llama-server-only fields to a vLLM model
   sending load overrides while the model is already loaded and not first unloading it
 - `409` still applies for runtime state conflicts such as loading or unloading transitions
+  Examples:
+  loading a model while it is already unloading
 
 ### `POST /v1/admin/models/{model_name}/unload`
 

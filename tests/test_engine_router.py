@@ -185,6 +185,44 @@ class ModelRouterEngineTests(unittest.TestCase):
         model = engine.admin_models_payload()["models"][0]
         self.assertEqual(model["effective_target_inflight"], 3)
 
+    def test_dispatches_llama_server_backend_as_local_runtime(self) -> None:
+        settings = AppSettings(
+            service=ServiceSettings(),
+            engine=EngineSettings(
+                backend="ct2",
+                models={
+                    "llama-model": ModelSettings(
+                        model_path="/models/model.gguf",
+                        backend="llama_server",
+                        target_inflight=3,
+                    ),
+                },
+            ),
+        )
+        runtime = types.SimpleNamespace(closed=False)
+
+        def close_runtime() -> None:
+            runtime.closed = True
+
+        runtime.close = close_runtime
+
+        class FakeLlamaServerEngine:
+            def __init__(self, scoped_settings):
+                self._models = {name: runtime for name in scoped_settings.engine.models}
+                self._load_errors = {}
+
+            def complete(self, request: ResponseRequest) -> EngineResult:
+                return EngineResult(text=f"llama-server:{request.model}")
+
+        with mock.patch.object(engine_module, "LlamaServerEngine", FakeLlamaServerEngine):
+            engine = ModelRouterEngine(settings)
+            result = engine.complete(ResponseRequest(model="llama-model", input="hello"))
+            entry = engine.unload_model("llama-model", settings)
+
+        self.assertEqual(result.text, "llama-server:llama-model#1")
+        self.assertEqual(entry["runtime_state"], "unloaded")
+        self.assertTrue(runtime.closed)
+
     def test_build_engine_uses_model_router_for_non_stub_backends(self) -> None:
         settings = AppSettings(
             service=ServiceSettings(),
@@ -961,6 +999,79 @@ class ModelRouterEngineTests(unittest.TestCase):
             },
         )
 
+    def test_load_model_applies_llama_server_load_overrides(self) -> None:
+        settings = AppSettings(
+            service=ServiceSettings(),
+            engine=EngineSettings(
+                backend="llama_server",
+                models={
+                    "llama-model": ModelSettings(
+                        model_path="/models/model.gguf",
+                        backend="llama_server",
+                        enabled=False,
+                        llama_server_n_ctx=4096,
+                        llama_server_image_max_tokens=256,
+                        llama_server_spec_type=None,
+                        llama_server_spec_draft_n_max=None,
+                        llama_server_spec_draft_p_min=None,
+                    ),
+                },
+            ),
+        )
+
+        captured: dict[str, object] = {}
+
+        class FakeBackend:
+            def __init__(self):
+                self._models = {}
+                self._load_errors = {}
+
+        engine = ModelRouterEngine(settings)
+
+        def fake_build_backend(backend: str, scoped_settings: AppSettings):
+            model_settings = next(iter(scoped_settings.engine.models.values()))
+            captured["backend"] = backend
+            captured["replica_ids"] = sorted(scoped_settings.engine.models.keys())
+            captured["llama_server_n_ctx"] = model_settings.llama_server_n_ctx
+            captured["llama_server_image_max_tokens"] = model_settings.llama_server_image_max_tokens
+            captured["llama_server_spec_type"] = model_settings.llama_server_spec_type
+            captured["llama_server_spec_draft_n_max"] = model_settings.llama_server_spec_draft_n_max
+            captured["llama_server_spec_draft_p_min"] = model_settings.llama_server_spec_draft_p_min
+            backend_instance = FakeBackend()
+            backend_instance._models = {name: object() for name in scoped_settings.engine.models}
+            return backend_instance
+
+        with mock.patch.object(engine, "_build_backend_engine", side_effect=fake_build_backend):
+            entry = engine.load_model(
+                "llama-model",
+                settings,
+                AdminLoadRequest(
+                    llama_server_n_ctx=8192,
+                    llama_server_image_max_tokens=512,
+                    llama_server_spec_type="draft-mtp",
+                    llama_server_spec_draft_n_max=4,
+                    llama_server_spec_draft_p_min=0.25,
+                ),
+            )
+
+        self.assertEqual(captured["backend"], "llama_server")
+        self.assertEqual(captured["replica_ids"], ["llama-model#1"])
+        self.assertEqual(captured["llama_server_n_ctx"], 8192)
+        self.assertEqual(captured["llama_server_image_max_tokens"], 512)
+        self.assertEqual(captured["llama_server_spec_type"], "draft-mtp")
+        self.assertEqual(captured["llama_server_spec_draft_n_max"], 4)
+        self.assertEqual(captured["llama_server_spec_draft_p_min"], 0.25)
+        self.assertEqual(
+            entry["load_override"],
+            {
+                "llama_server_n_ctx": 8192,
+                "llama_server_image_max_tokens": 512,
+                "llama_server_spec_type": "draft-mtp",
+                "llama_server_spec_draft_n_max": 4,
+                "llama_server_spec_draft_p_min": 0.25,
+            },
+        )
+
     def test_load_model_forces_enabled_on_scoped_settings(self) -> None:
         settings = AppSettings(
             service=ServiceSettings(),
@@ -1434,6 +1545,7 @@ class ModelRouterEngineTests(unittest.TestCase):
                 "_estimate_model_artifact_size_mib",
                 side_effect=[4096, 2048],
             ),
+            mock.patch.object(router_module, "_query_primary_gpu_used_mib", return_value=None),
         ):
             engine = ModelRouterEngine(settings)
             payload = engine.admin_gpu_memory_payload()

@@ -6,6 +6,14 @@ It is a design note, not an implementation spec.
 
 Status: phase 1 implemented; cost control remains proposed.
 
+Current reality note:
+
+- the implemented backend is still named `openai_compatible`
+- it is for remote/provider Chat Completions routes and keeps config-only load semantics
+- it is not the local lifecycle backend for managed `llama-server` or future `vllm serve` processes
+- local managed `llama-server` support now lives in the separate `llama_server` backend
+- a rename to `openai_remote` is not implemented in this repo at the time of this note
+
 ## Implementation Status
 
 Implemented on 2026-05-16:

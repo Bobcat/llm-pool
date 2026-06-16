@@ -57,6 +57,27 @@ class ModelSettings:
     remote_health_check: str = "config_only"
     remote_max_retries: int = 0
     remote_thinking: str | None = None
+    llama_server_binary: str = "llama-server"
+    llama_server_host: str = "127.0.0.1"
+    llama_server_port: int | None = None
+    llama_server_model_alias: str | None = None
+    llama_server_timeout_s: float = 120.0
+    llama_server_start_timeout_s: float = 180.0
+    llama_server_stop_timeout_s: float = 10.0
+    llama_server_library_path: tuple[str, ...] = ()
+    llama_server_api_key: str | None = None
+    llama_server_n_ctx: int | None = None
+    llama_server_n_gpu_layers: str | None = None
+    llama_server_flash_attn: str = "auto"
+    llama_server_mmproj_path: str | None = None
+    llama_server_image_max_tokens: int | None = None
+    llama_server_draft_model_path: str | None = None
+    llama_server_spec_type: str | None = None
+    llama_server_spec_draft_n_max: int | None = None
+    llama_server_spec_draft_p_min: float | None = None
+    llama_server_spec_draft_ngl: str | None = None
+    llama_server_reasoning: str | None = None
+    llama_server_extra_args: tuple[str, ...] = ()
     vllm_model: str | None = None
     vllm_dtype: str = "auto"
     vllm_gpu_memory_utilization: float | None = None
@@ -214,6 +235,45 @@ def load_settings(path: str | Path | None = None) -> AppSettings:
             remote_health_check=remote_health_check,
             remote_max_retries=int(model_payload.get("remote_max_retries", 0)),
             remote_thinking=remote_thinking,
+            llama_server_binary=(
+                str(model_payload.get("llama_server_binary", "llama-server") or "llama-server").strip()
+                or "llama-server"
+            ),
+            llama_server_host=(
+                str(model_payload.get("llama_server_host", "127.0.0.1") or "127.0.0.1").strip()
+                or "127.0.0.1"
+            ),
+            llama_server_port=_coerce_optional_positive_int(model_payload.get("llama_server_port")),
+            llama_server_model_alias=_coerce_optional_str(model_payload.get("llama_server_model_alias")),
+            llama_server_timeout_s=float(model_payload.get("llama_server_timeout_s", 120.0)),
+            llama_server_start_timeout_s=float(model_payload.get("llama_server_start_timeout_s", 180.0)),
+            llama_server_stop_timeout_s=float(model_payload.get("llama_server_stop_timeout_s", 10.0)),
+            llama_server_library_path=_coerce_path_tuple(
+                model_payload.get("llama_server_library_path"),
+                "llama_server_library_path",
+            ),
+            llama_server_api_key=_coerce_optional_str(model_payload.get("llama_server_api_key")),
+            llama_server_n_ctx=_coerce_optional_positive_int(model_payload.get("llama_server_n_ctx")),
+            llama_server_n_gpu_layers=_coerce_optional_str(model_payload.get("llama_server_n_gpu_layers")),
+            llama_server_flash_attn=_coerce_gguf_flash_attn_mode(
+                model_payload.get("llama_server_flash_attn", "auto")
+            ),
+            llama_server_mmproj_path=_coerce_optional_str(model_payload.get("llama_server_mmproj_path")),
+            llama_server_image_max_tokens=_coerce_optional_positive_int(
+                model_payload.get("llama_server_image_max_tokens")
+            ),
+            llama_server_draft_model_path=_coerce_optional_str(model_payload.get("llama_server_draft_model_path")),
+            llama_server_spec_type=_coerce_optional_str(model_payload.get("llama_server_spec_type")),
+            llama_server_spec_draft_n_max=_coerce_optional_positive_int(
+                model_payload.get("llama_server_spec_draft_n_max")
+            ),
+            llama_server_spec_draft_p_min=_coerce_optional_float(model_payload.get("llama_server_spec_draft_p_min")),
+            llama_server_spec_draft_ngl=_coerce_optional_str(model_payload.get("llama_server_spec_draft_ngl")),
+            llama_server_reasoning=_coerce_optional_str(model_payload.get("llama_server_reasoning")),
+            llama_server_extra_args=_coerce_str_tuple(
+                model_payload.get("llama_server_extra_args"),
+                "llama_server_extra_args",
+            ),
             vllm_model=_coerce_optional_str(model_payload.get("vllm_model")),
             vllm_dtype=str(model_payload.get("vllm_dtype", "auto") or "auto").strip() or "auto",
             vllm_gpu_memory_utilization=_coerce_optional_float(model_payload.get("vllm_gpu_memory_utilization")),
@@ -319,6 +379,26 @@ def _coerce_optional_float(value: object) -> float | None:
     if value is None or value == "":
         return None
     return float(value)
+
+
+def _coerce_str_tuple(value: object, field_name: str) -> tuple[str, ...]:
+    if value is None:
+        return ()
+    if not isinstance(value, (list, tuple)):
+        raise ValueError(f"{field_name} must be a list of strings")
+    return tuple(str(item) for item in value)
+
+
+def _coerce_path_tuple(value: object, field_name: str) -> tuple[str, ...]:
+    if value is None or value == "":
+        return ()
+    if isinstance(value, str):
+        raw_items = value.split(os.pathsep)
+    elif isinstance(value, (list, tuple)):
+        raw_items = value
+    else:
+        raise ValueError(f"{field_name} must be a list of paths or a path-separated string")
+    return tuple(item for item in (str(raw_item).strip() for raw_item in raw_items) if item)
 
 
 def _coerce_mm_limit(value: object) -> tuple[tuple[str, int], ...]:

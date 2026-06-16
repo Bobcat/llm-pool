@@ -61,6 +61,29 @@ _BACKEND_MODEL_DEFINITION_FIELDS = {
         "gguf_type_k",
         "gguf_type_v",
     ),
+    "llama_server": (
+        "llama_server_binary",
+        "llama_server_host",
+        "llama_server_port",
+        "llama_server_model_alias",
+        "llama_server_timeout_s",
+        "llama_server_start_timeout_s",
+        "llama_server_stop_timeout_s",
+        "llama_server_library_path",
+        "llama_server_api_key",
+        "llama_server_n_ctx",
+        "llama_server_n_gpu_layers",
+        "llama_server_flash_attn",
+        "llama_server_mmproj_path",
+        "llama_server_image_max_tokens",
+        "llama_server_draft_model_path",
+        "llama_server_spec_type",
+        "llama_server_spec_draft_n_max",
+        "llama_server_spec_draft_p_min",
+        "llama_server_spec_draft_ngl",
+        "llama_server_reasoning",
+        "llama_server_extra_args",
+    ),
     "openai_compatible": (
         "remote_api_kind",
         "remote_base_url",
@@ -111,7 +134,7 @@ _OVERRIDE_THINKING_MODES = ("default", "enabled", "disabled")
 
 def _model_supports_multi_turn(backend: str, prompt_format: str | None) -> bool:
     normalized_backend = backend.strip().lower()
-    if normalized_backend == "vllm":
+    if normalized_backend in {"llama_server", "vllm"}:
         return True
     if normalized_backend == "gguf":
         normalized_prompt_format = (prompt_format or "").strip().lower()
@@ -307,6 +330,38 @@ def _load_constraints_for_backend(backend: str) -> dict[str, object]:
                 "default": "f16",
                 "allowed_values": list(_GGUF_CACHE_TYPE_ALLOWED_VALUES),
                 "examples": ["f16", "q8_0", "q4_0"],
+            },
+        }
+    if normalized_backend == "llama_server":
+        return {
+            "llama_server_n_ctx": {
+                "kind": "integer",
+                "minimum": 1,
+                "step": 1,
+            },
+            "llama_server_image_max_tokens": {
+                "kind": "integer",
+                "minimum": 1,
+                "step": 1,
+            },
+            "llama_server_spec_type": {
+                "kind": "enum",
+                "default": "draft-mtp",
+                "allowed_values": ["draft-mtp"],
+                "examples": ["draft-mtp"],
+            },
+            "llama_server_spec_draft_n_max": {
+                "kind": "integer",
+                "minimum": 1,
+                "maximum": 6,
+                "step": 1,
+                "default": 2,
+            },
+            "llama_server_spec_draft_p_min": {
+                "kind": "float",
+                "minimum": 0.0,
+                "maximum": 1.0,
+                "default": 0.0,
             },
         }
     if normalized_backend == "exllamav3":

@@ -6,6 +6,13 @@ It is a design note, not an implementation spec.
 
 It exists to preserve the architectural decisions behind a future subprocess-based runtime model, so those decisions do not need to be reconstructed later.
 
+Current reality note:
+
+- the general subprocess-isolated runtime architecture described here is not implemented
+- `llm-pool` does now have a `llama_server` backend that starts a native `llama-server` subprocess for one loaded model runtime
+- that `llama_server` subprocess is backend-owned lifecycle plumbing, not a general parent/child runtime transport shared by all backends
+- the first in-process scheduler/executor layer and runtime admin API already exist, so references below to an upcoming scheduler should be read as historical design context
+
 ## Purpose
 
 The service already has:
@@ -13,7 +20,7 @@ The service already has:
 - one API process
 - one model router
 - multiple backend-specific runtime implementations
-- an upcoming scheduler layer described in `runtime-scheduler-notes.md`
+- a first scheduler layer described in `runtime-scheduler-notes.md`
 
 Today all loaded runtimes live in the same Python process as the API and router.
 
@@ -64,7 +71,10 @@ See `runtime-scheduler-notes.md`.
 
 ## Why Subprocess Isolation Is Worth Considering
 
-The main reason is fault isolation and lifecycle safety for native runtimes.
+The main reasons are:
+
+- fault isolation and lifecycle safety for native runtimes
+- dependency, ABI, and shared-library isolation between runtime stacks
 
 Examples of issues a subprocess boundary helps contain:
 
@@ -73,6 +83,20 @@ Examples of issues a subprocess boundary helps contain:
 - unstable upstream backend upgrades in native inference stacks
 - incomplete memory release during unload
 - runtime-specific global state or allocator state that is safer to discard by process exit
+
+It also allows different loaded runtimes to use different upstream stacks.
+
+Examples:
+
+- two versions of the same upstream project, such as separate llama.cpp or vLLM builds
+- a pinned upstream release for one model and a newer upstream release for another
+- a temporary fork for one backend without forcing the whole service onto that fork
+- different CUDA, cuBLAS, cuDNN, NCCL, or other shared-library versions where the runtime can make that work safely
+- different `LD_LIBRARY_PATH`, Python virtualenv, or native plugin search paths per runtime
+
+In-process runtimes have to share one Python process, one imported module graph, one dynamic linker state, and one effective CUDA/shared-library environment.
+
+That forces `llm-pool` toward the greatest common denominator of all loaded backend dependencies. A subprocess boundary lets each runtime carry the dependency stack it actually needs while the parent keeps the stable control-plane contract.
 
 This matters more once the service also owns:
 

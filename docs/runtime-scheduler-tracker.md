@@ -5,6 +5,13 @@ This document is the working companion to [runtime-scheduler-notes.md](runtime-s
 The design note should stay architecture-focused.
 This tracker is where we record implementation scope, accepted MVP cuts, work phases, and addenda as the scheduler work evolves.
 
+Current reality note:
+
+- the first in-process scheduler/executor layer is implemented
+- public-model replica routing is implemented at aggregate admin/API level
+- local runtime capability is still effectively `1` in-flight request per replica except for `openai_compatible`, which can use configured `target_inflight`
+- `llama_server` uses the same scheduler/executor path; its native `llama-server` subprocess lifecycle is backend-owned, not the general runtime-subprocess design from `runtime-subprocess-notes.md`
+
 ## Status Labels
 
 - `proposed`

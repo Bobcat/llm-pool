@@ -9,6 +9,8 @@ Current reality note:
 - the first aggregate public-model replica MVP is now implemented
 - one public model may load multiple identical replicas
 - admin remains aggregate per public model
+- local runtime capability is still clamped to one in-flight request per replica except where a backend explicitly reports more capacity
+- `llama_server` participates as another backend behind the same aggregate public-model semantics; native llama-server multi-inflight behavior is not exposed as a scheduler capacity yet
 - live resizing, per-replica admin rows, and per-replica unload remain out of scope
 
 This is separate from `runtime-scheduler-notes.md` because replicas affect more than scheduler internals:

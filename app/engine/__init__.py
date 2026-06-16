@@ -20,6 +20,8 @@ from .exllamav3 import ExLlamaV3Engine
 from .exllamav3 import ExLlamaV3ModelRuntime
 from .llamacpp import LlamaCppEngine
 from .llamacpp import LlamaCppModelRuntime
+from .llama_server import LlamaServerEngine
+from .llama_server import LlamaServerModelRuntime
 from .openai_compatible import OpenAICompatibleEngine
 from .openai_compatible import OpenAICompatibleModelRuntime
 from .router import ModelRouterEngine

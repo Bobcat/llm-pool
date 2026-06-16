@@ -156,6 +156,11 @@ class AdminLoadRequest(BaseModel):
     vllm_kv_cache_dtype: str | None = None
     vllm_kv_cache_memory_bytes: int | None = Field(default=None, ge=1)
     vllm_max_pixels: int | None = Field(default=None, ge=1)
+    llama_server_n_ctx: int | None = Field(default=None, ge=1)
+    llama_server_image_max_tokens: int | None = Field(default=None, ge=1)
+    llama_server_spec_type: str | None = None
+    llama_server_spec_draft_n_max: int | None = Field(default=None, ge=1, le=6)
+    llama_server_spec_draft_p_min: float | None = Field(default=None, ge=0.0, le=1.0)
 
 
 class ModelCapabilities(BaseModel):

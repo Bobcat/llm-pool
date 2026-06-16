@@ -2,7 +2,7 @@
 
 Companion working tracker: [runtime-scheduler-tracker.md](runtime-scheduler-tracker.md)
 
-This note captures the current discussion around CT2, ExLlamaV3, and a possible future queue/scheduler layer for `llm-pool-dev`.
+This note captures the scheduler design discussion around CT2, ExLlamaV3, and other `llm-pool` backends.
 
 It is intentionally a design note, not an implementation spec.
 
@@ -10,6 +10,8 @@ Current reality note:
 
 - `llm-pool` already has a first in-process scheduler/executor layer
 - requests are already queue-backed per public model
+- the runtime admin API already uses the scheduler boundary for load/unload semantics
+- `llama_server` now runs through the same scheduler path, while its native subprocess lifecycle remains backend-owned
 - this note now describes the broader scheduler design space beyond that first implemented cut
 
 ## Why This Is Worth Doing
@@ -337,7 +339,7 @@ That gives a practical operating point instead of a theoretical maximum.
 
 ## Interaction With Runtime Unload
 
-If we later add a separate runtime admin API with `load` and `unload`, that should stay aligned with the scheduler boundary described above.
+The runtime admin API now exists and should stay aligned with the scheduler boundary described above.
 
 The clean split is:
 
@@ -353,7 +355,7 @@ That means unload should behave like this:
 
 So "unload" should not mean "immediately kill whatever the backend is doing".
 
-For a future scheduler-aware implementation, the intended rule is:
+The implemented scheduler-aware rule is:
 
 - queued work: cancel
 - runtime-submitted work: drain
