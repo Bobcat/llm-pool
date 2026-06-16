@@ -92,6 +92,17 @@ class ModelSettings:
     vllm_speculative_method: str | None = None
     vllm_speculative_model: str | None = None
     vllm_num_speculative_tokens: int = 1
+    vllm_serve_binary: str = "vllm"
+    vllm_serve_host: str = "127.0.0.1"
+    vllm_serve_port: int | None = None
+    vllm_serve_model_alias: str | None = None
+    vllm_serve_timeout_s: float = 120.0
+    vllm_serve_start_timeout_s: float = 300.0
+    vllm_serve_stop_timeout_s: float = 10.0
+    vllm_serve_library_path: tuple[str, ...] = ()
+    vllm_serve_env: tuple[tuple[str, str], ...] = ()
+    vllm_serve_api_key: str | None = None
+    vllm_serve_extra_args: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -158,7 +169,7 @@ def load_settings(path: str | Path | None = None) -> AppSettings:
                 backend = parsed_backend
         resolved_backend = backend or default_backend
         model_path = _coerce_optional_str(model_payload.get("model_path"))
-        if model_path is None and resolved_backend not in {"openai_compatible", "vllm"}:
+        if model_path is None and resolved_backend not in {"openai_compatible", "vllm", "vllm_serve"}:
             continue
         cache_quant_value = model_payload.get("exllama_cache_quant")
         cache_quant = None
@@ -288,6 +299,32 @@ def load_settings(path: str | Path | None = None) -> AppSettings:
             vllm_speculative_method=_coerce_optional_str(model_payload.get("vllm_speculative_method")),
             vllm_speculative_model=_coerce_optional_str(model_payload.get("vllm_speculative_model")),
             vllm_num_speculative_tokens=max(1, int(model_payload.get("vllm_num_speculative_tokens", 1))),
+            vllm_serve_binary=(
+                str(model_payload.get("vllm_serve_binary", "vllm") or "vllm").strip()
+                or "vllm"
+            ),
+            vllm_serve_host=(
+                str(model_payload.get("vllm_serve_host", "127.0.0.1") or "127.0.0.1").strip()
+                or "127.0.0.1"
+            ),
+            vllm_serve_port=_coerce_optional_positive_int(model_payload.get("vllm_serve_port")),
+            vllm_serve_model_alias=_coerce_optional_str(model_payload.get("vllm_serve_model_alias")),
+            vllm_serve_timeout_s=float(model_payload.get("vllm_serve_timeout_s", 120.0)),
+            vllm_serve_start_timeout_s=float(model_payload.get("vllm_serve_start_timeout_s", 300.0)),
+            vllm_serve_stop_timeout_s=float(model_payload.get("vllm_serve_stop_timeout_s", 10.0)),
+            vllm_serve_library_path=_coerce_path_tuple(
+                model_payload.get("vllm_serve_library_path"),
+                "vllm_serve_library_path",
+            ),
+            vllm_serve_env=_coerce_str_str_map(
+                model_payload.get("vllm_serve_env"),
+                "vllm_serve_env",
+            ),
+            vllm_serve_api_key=_coerce_optional_str(model_payload.get("vllm_serve_api_key")),
+            vllm_serve_extra_args=_coerce_str_tuple(
+                model_payload.get("vllm_serve_extra_args"),
+                "vllm_serve_extra_args",
+            ),
         )
         if models[str(model_name)].replicas > models[str(model_name)].replica_max:
             raise ValueError(
@@ -399,6 +436,20 @@ def _coerce_path_tuple(value: object, field_name: str) -> tuple[str, ...]:
     else:
         raise ValueError(f"{field_name} must be a list of paths or a path-separated string")
     return tuple(item for item in (str(raw_item).strip() for raw_item in raw_items) if item)
+
+
+def _coerce_str_str_map(value: object, field_name: str) -> tuple[tuple[str, str], ...]:
+    if value is None:
+        return ()
+    if not isinstance(value, dict):
+        raise ValueError(f"{field_name} must be an object of {{key: string}}")
+    parsed: list[tuple[str, str]] = []
+    for raw_key, raw_value in value.items():
+        key = str(raw_key).strip()
+        if key == "":
+            continue
+        parsed.append((key, str(raw_value)))
+    return tuple(parsed)
 
 
 def _coerce_mm_limit(value: object) -> tuple[tuple[str, int], ...]:

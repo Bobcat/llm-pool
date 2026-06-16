@@ -17,6 +17,7 @@ FastAPI service that exposes a single `POST /v1/responses` API across local and 
 - [Configuration](#configuration)
 - [llama-server Backend](#llama-server-backend)
 - [vLLM Backend](#vllm-backend)
+- [vLLM Serve Backend](#vllm-serve-backend)
 - [Remote Backends](#remote-backends)
 - [Replicas](#replicas)
 - [Timing Metrics](#timing-metrics)
@@ -31,7 +32,7 @@ FastAPI service that exposes a single `POST /v1/responses` API across local and 
 ## What It Does
 
 - exposes one inference API for multiple model runtimes
-- supports local CT2, ExLlamaV3, GGUF/`llama-cpp-python`, managed native `llama-server`, and in-process vLLM backends
+- supports local CT2, ExLlamaV3, GGUF/`llama-cpp-python`, managed native `llama-server`, in-process vLLM, and managed `vllm serve` backends
 - supports OpenAI-compatible remote Chat Completions backends behind an explicit `allow_remote` request gate
 - accepts text input everywhere, and image input on backends/models that advertise image support
 - supports single-turn `input` requests and backend-dependent multi-turn `messages` requests
@@ -77,6 +78,7 @@ The names above describe the local project family. This repo should remain usabl
 | `app/engine/llamacpp.py` | In-process `llama-cpp-python` GGUF adapter. |
 | `app/engine/llama_server.py` | Managed native `llama-server` subprocess adapter. |
 | `app/engine/vllm.py` | In-process vLLM adapter. |
+| `app/engine/vllm_serve.py` | Managed `vllm serve` subprocess adapter. |
 | `app/engine/openai_compatible.py` | Remote OpenAI-compatible Chat Completions adapter. |
 | `config/settings.json` | Shared model and service defaults. |
 | `config/local.json` | Optional ignored machine-local overrides. |
@@ -99,10 +101,10 @@ At runtime:
 Backends currently run in three different shapes:
 
 - in-process Python runtimes: CT2, ExLlamaV3, GGUF/`llama-cpp-python`, vLLM
-- managed native subprocess runtime: `llama_server`
+- managed local subprocess runtimes: `llama_server`, `vllm_serve`
 - remote upstream API runtime: `openai_compatible`
 
-The `llama_server` backend is the first implemented subprocess-backed local runtime. It is useful when native upstream dependencies, CUDA libraries, or `llama.cpp` build variants should be isolated from the Python process. The broader subprocess architecture is still design-note work; see [runtime-subprocess-notes.md](docs/runtime-subprocess-notes.md).
+The managed subprocess backends are useful when native upstream dependencies, CUDA libraries, or backend build variants should be isolated from the main Python API process. The broader uniform subprocess architecture is still design-note work; see [runtime-subprocess-notes.md](docs/runtime-subprocess-notes.md).
 
 ## API Surface
 
@@ -238,7 +240,7 @@ Important behavior:
 - `capabilities.modalities` on `GET /v1/admin/models` is the source of truth for each model.
 - A model declares image support with `"modalities": ["text", "image"]`; the default is `["text"]`.
 - Text-only models reject image content with `modality_unsupported`.
-- `llama_server`, vLLM, and remote OpenAI-compatible vision models are the current intended vision paths.
+- `llama_server`, vLLM, `vllm_serve`, and remote OpenAI-compatible vision models are the current intended vision paths.
 - In-process GGUF via `llama-cpp-python` remains text-only.
 - A text-only content array is accepted by text backends and concatenated into one prompt.
 
@@ -275,6 +277,7 @@ Current support:
 
 - `llama_server`: multi-turn text and image, depending on model capabilities.
 - `vllm`: multi-turn text and image, depending on model capabilities.
+- `vllm_serve`: multi-turn text and image, depending on model capabilities.
 - `gguf`: text-only multi-turn for selected prompt formats: `generic`, `mistral_template`, `qwen3_template`, and `gemma4_template`.
 - CT2 and ExLlamaV3: single-turn `input` only.
 
@@ -315,6 +318,7 @@ Backends add their own fields:
 - GGUF in-process: `gguf_n_gpu_layers`, `gguf_n_ctx`, `gguf_flash_attn`, `gguf_type_k`, `gguf_type_v`
 - `llama_server`: binary, host, port, library path, context, GPU layers, flash attention, `mmproj`, image token budget, MTP/speculative decoding, reasoning, and extra native args
 - vLLM: model id/path, dtype, KV cache, model length, tensor parallelism, multimodal limits, processor kwargs, speculative decoding
+- `vllm_serve`: the same vLLM model/runtime fields plus binary path, host, port, library path, environment, API key, timeout, and extra CLI args
 - remote OpenAI-compatible: base URL, API key env var, upstream model name, timeout, retry and thinking settings
 
 Minimal local override example:
@@ -417,10 +421,11 @@ Example:
         "modalities": ["text", "image"],
         "vllm_model": "Qwen/Qwen2.5-VL-3B-Instruct",
         "vllm_dtype": "bfloat16",
-        "vllm_gpu_memory_utilization": 0.7,
-        "vllm_max_model_len": 16384,
+        "vllm_gpu_memory_utilization": 0.01,
+        "vllm_kv_cache_memory_bytes": 1073741824,
+        "vllm_max_model_len": 12288,
         "vllm_limit_mm_per_prompt": {
-          "image": 4
+          "image": 1
         },
         "vllm_mm_processor_kwargs": {
           "max_pixels": 4014080
@@ -437,6 +442,7 @@ Notes:
 - `vllm_model` is the Hugging Face model id or local path used by vLLM.
 - `model_path` is not required for vLLM.
 - `vllm_max_model_len` must cover text tokens plus image tokens.
+- Prefer a very low `vllm_gpu_memory_utilization` and set `vllm_kv_cache_memory_bytes` explicitly, so vLLM does not reserve most free VRAM just because it is available.
 - `vllm_kv_cache_memory_bytes`, when set, manually controls KV cache size and takes precedence over sizing derived from `vllm_gpu_memory_utilization`.
 - `vllm_limit_mm_per_prompt` caps multimodal items per request.
 - `vllm_mm_processor_kwargs` is passed through to the model processor. For some vision models this is where image token budgets are bounded.
@@ -446,6 +452,71 @@ Notes:
 Blackwell runtime note:
 
 - On Blackwell GPUs with an older CUDA toolkit, flashinfer's JIT sampler may target an unsupported architecture. The backend sets `VLLM_USE_FLASHINFER_SAMPLER=0` by default before importing vLLM, unless the environment already sets it.
+
+## vLLM Serve Backend
+
+The `vllm_serve` backend starts a local `vllm serve` subprocess for a configured model, waits for `/v1/models`, and forwards requests through vLLM's OpenAI-compatible chat endpoint. Unloading the model terminates that subprocess, so VRAM is released by process exit rather than by Python object cleanup alone.
+
+Use this backend when the model works well through upstream `vllm serve`, or when its vLLM/PyTorch/CUDA dependency stack should be isolated from the `llm-pool` process.
+
+Example:
+
+```json
+{
+  "engine": {
+    "models": {
+      "gemma4-nvfp4-vllm-serve": {
+        "backend": "vllm_serve",
+        "model_path": null,
+        "prompt_format": "generic",
+        "modalities": ["text", "image"],
+        "vllm_model": "/models/nvidia/Gemma-4-26B-A4B-NVFP4",
+        "vllm_dtype": "auto",
+        "vllm_gpu_memory_utilization": 0.01,
+        "vllm_kv_cache_memory_bytes": 2147483648,
+        "vllm_max_model_len": 8192,
+        "vllm_limit_mm_per_prompt": {
+          "image": 1
+        },
+        "vllm_mm_processor_kwargs": {
+          "max_pixels": 4014080
+        },
+        "vllm_speculative_method": "mtp",
+        "vllm_speculative_model": "google/gemma-4-26B-A4B-it-assistant",
+        "vllm_num_speculative_tokens": 8,
+        "vllm_serve_binary": "/opt/vllm/bin/vllm",
+        "vllm_serve_library_path": [
+          "/opt/cuda/lib64"
+        ],
+        "vllm_serve_env": {
+          "VLLM_USE_FLASHINFER_SAMPLER": "0"
+        },
+        "vllm_serve_extra_args": [
+          "--max-num-seqs",
+          "1"
+        ],
+        "enabled": false
+      }
+    }
+  }
+}
+```
+
+Notes:
+
+- `vllm_model` is the Hugging Face model id or local target-model path passed to `vllm serve`.
+- `model_path` is not required for `vllm_serve`.
+- `vllm_*` fields map to vLLM engine arguments; `vllm_serve_*` fields control the subprocess, HTTP route, environment, and CLI extras.
+- Prefer a very low `vllm_gpu_memory_utilization` and set `vllm_kv_cache_memory_bytes` explicitly, so `vllm serve` does not reserve most free VRAM just because it is available.
+- `vllm_speculative_method`, `vllm_speculative_model`, and `vllm_num_speculative_tokens` are serialized into `--speculative-config`.
+- For Gemma 4 MTP, `vllm_speculative_method: "mtp"` means `vllm_speculative_model` is the Gemma 4 assistant checkpoint passed through vLLM's `model` key; it is not generic `method: "draft_model"` speculation.
+- Do not mix the vLLM speculative methods: `draft_model`, `mlp_speculator`, and `mtp` are separate paths with different compatible checkpoints and different performance behavior.
+- `vllm_num_speculative_tokens` is the MTP speculative depth. It is conceptually close to a draft-token count, but it should be tuned separately from llama.cpp `--spec-draft-n-max`; vLLM's documented safe starting point is `1`, while this local Gemma 4 NVFP4 vision benchmark currently uses `8`.
+- `vllm_serve_library_path` is prepended to `LD_LIBRARY_PATH` for the subprocess.
+- `vllm_serve_extra_args` is an escape hatch for upstream CLI flags that are model-specific but should still live in config.
+- For single-user Workbench models, keep `--max-num-seqs` small. vLLM can otherwise infer broad CUDA graph capture sizes that reserve much more VRAM than the explicit KV-cache budget suggests.
+- Live admin overrides currently include `vllm_max_model_len`, `vllm_kv_cache_dtype`, `vllm_kv_cache_memory_bytes`, `vllm_max_pixels`, `vllm_speculative_method`, `vllm_speculative_model`, and `vllm_num_speculative_tokens`.
+- vLLM sleep mode is intentionally not used in v1; load/unload uses subprocess start/termination.
 
 ## Remote Backends
 
@@ -531,10 +602,31 @@ Hardware:
 
 On repeated image caption/OCR-style prompts with Gemma 4 26B A4B:
 
-- NVIDIA NVFP4 vLLM version: about 175 tok/s observed
+- NVIDIA NVFP4 in-process vLLM version before MTP tuning: about 175 tok/s observed
 - Unsloth UD-Q5_K_S GGUF through managed `llama_server` with MTP tuning: 400+ tok/s observed after warmup
+- NVIDIA NVFP4 through managed `vllm_serve` with Gemma 4 assistant MTP: 430+ tok/s observed after warmup on the document-structure OCR prompt below
 
-This result is why the `llama_server` path is treated as a first-class local vision runtime rather than only as a compatibility fallback.
+These results are why both managed local vision subprocess paths are treated as first-class runtimes: `llama_server` for GGUF and fast loading, `vllm_serve` for high warm throughput when its heavier load cost is acceptable.
+
+Local `vllm_serve` MTP sweep for `gemma-4-26b-a4b-it-nvidia-nvfp4-vllm-serve`:
+
+| `vllm_num_speculative_tokens` | Warm repeated-prompt observation |
+| --- | --- |
+| `1` | about 220 tok/s |
+| `2` | about 290 tok/s |
+| `4` | about 377 tok/s |
+| `6` | about 420-425 tok/s |
+| `8` | usually 430+ tok/s, with spikes around 439 tok/s |
+| `9` | about 420-451 tok/s, with larger variation |
+
+The configured local default for this `vllm_serve` model is `8`: it keeps most of the measured gain while avoiding the larger variance observed at `9`.
+
+Document-structure OCR benchmark prompt:
+
+- prompt file: [docs/document-structure-ocr-benchmark-prompt.txt](docs/document-structure-ocr-benchmark-prompt.txt)
+- use a fixed image across runs
+- compare first-run and warm-cache timings separately
+- suggested decoding: `temperature: 0`, `top_k: 1`, `max_tokens: 2048`
 
 ## Development
 
@@ -554,6 +646,7 @@ Heavy backend dependencies are loaded lazily. Install the dependencies for the b
 - `llama-cpp-python` for in-process `gguf`
 - a native `llama-server` binary for `llama_server`
 - vLLM and its CUDA/PyTorch stack for `vllm`
+- a `vllm` executable and matching CUDA/PyTorch environment for `vllm_serve`
 
 ## Tests
 
@@ -566,7 +659,7 @@ python3 -m unittest discover -s tests
 Useful targeted checks while editing runtime loading:
 
 ```bash
-python3 -m unittest tests.test_config tests.test_engine_router tests.test_engine_llama_server
+python3 -m unittest tests.test_config tests.test_engine_router tests.test_engine_llama_server tests.test_engine_vllm_serve
 ```
 
 ## Deployment Notes

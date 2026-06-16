@@ -724,7 +724,7 @@ class ModelRouterEngine:
 
             return replace(model_settings, **replacement_kwargs)
 
-        if resolved_backend == "vllm":
+        if resolved_backend in {"vllm", "vllm_serve"}:
             unsupported = sorted(
                 field_name
                 for field_name in load_override
@@ -734,11 +734,14 @@ class ModelRouterEngine:
                     "vllm_kv_cache_dtype",
                     "vllm_kv_cache_memory_bytes",
                     "vllm_max_pixels",
+                    "vllm_speculative_method",
+                    "vllm_speculative_model",
+                    "vllm_num_speculative_tokens",
                 }
             )
             if unsupported:
                 names = ", ".join(unsupported)
-                raise ValueError(f"unsupported load override for vllm backend: {names}")
+                raise ValueError(f"unsupported load override for {resolved_backend} backend: {names}")
 
             replacement_kwargs: dict[str, object | None] = {"enabled": True}
 
@@ -767,6 +770,32 @@ class ModelRouterEngine:
                 mm_kwargs = {key: value for key, value in model_settings.vllm_mm_processor_kwargs}
                 mm_kwargs["max_pixels"] = max_pixels
                 replacement_kwargs["vllm_mm_processor_kwargs"] = tuple(mm_kwargs.items())
+
+            if "vllm_speculative_method" in load_override:
+                speculative_method = load_override["vllm_speculative_method"]
+                if speculative_method is not None and not isinstance(speculative_method, str):
+                    raise ValueError("vllm_speculative_method load override must be a string or null")
+                if isinstance(speculative_method, str):
+                    speculative_method = speculative_method.strip()
+                    if speculative_method == "":
+                        raise ValueError("vllm_speculative_method load override must be a non-empty string or null")
+                replacement_kwargs["vllm_speculative_method"] = speculative_method
+
+            if "vllm_speculative_model" in load_override:
+                speculative_model = load_override["vllm_speculative_model"]
+                if speculative_model is not None and not isinstance(speculative_model, str):
+                    raise ValueError("vllm_speculative_model load override must be a string or null")
+                if isinstance(speculative_model, str):
+                    speculative_model = speculative_model.strip()
+                    if speculative_model == "":
+                        raise ValueError("vllm_speculative_model load override must be a non-empty string or null")
+                replacement_kwargs["vllm_speculative_model"] = speculative_model
+
+            if "vllm_num_speculative_tokens" in load_override:
+                num_speculative_tokens = load_override["vllm_num_speculative_tokens"]
+                if not isinstance(num_speculative_tokens, int) or num_speculative_tokens <= 0:
+                    raise ValueError("vllm_num_speculative_tokens load override must be a positive integer")
+                replacement_kwargs["vllm_num_speculative_tokens"] = num_speculative_tokens
 
             return replace(model_settings, **replacement_kwargs)
 
@@ -851,6 +880,8 @@ class ModelRouterEngine:
             return engine_module.OpenAICompatibleEngine(settings)
         if backend == "vllm":
             return engine_module.VllmEngine(settings)
+        if backend == "vllm_serve":
+            return engine_module.VllmServeEngine(settings)
         if backend == "stub":
             return engine_module.StubEngine(settings)
         raise ValueError(f"unsupported engine backend: {backend!r}")

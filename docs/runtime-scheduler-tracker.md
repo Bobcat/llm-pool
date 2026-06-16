@@ -10,7 +10,8 @@ Current reality note:
 - the first in-process scheduler/executor layer is implemented
 - public-model replica routing is implemented at aggregate admin/API level
 - local runtime capability is still effectively `1` in-flight request per replica except for `openai_compatible`, which can use configured `target_inflight`
-- `llama_server` uses the same scheduler/executor path; its native `llama-server` subprocess lifecycle is backend-owned, not the general runtime-subprocess design from `runtime-subprocess-notes.md`
+- `llama_server` and `vllm_serve` use the same scheduler/executor path; their native subprocess lifecycles are backend-owned, not the general runtime-subprocess design from `runtime-subprocess-notes.md`
+- `vllm_serve` high-throughput tuning is currently expressed through model config and upstream flags, not through scheduler-native adaptive concurrency
 
 ## Status Labels
 

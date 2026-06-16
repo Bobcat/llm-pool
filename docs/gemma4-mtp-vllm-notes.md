@@ -4,7 +4,7 @@ This note captures a possible Gemma 4 MTP backend path for `llm-pool`.
 
 It is a design note, not an implementation spec.
 
-Status: partially implemented.
+Status: implemented for the managed `vllm_serve` path; partially implemented for the in-process `vllm` path.
 
 Current reality note:
 
@@ -12,19 +12,34 @@ Current reality note:
 - It runs the vLLM Python engine in-process via `AsyncLLMEngine.from_engine_args`,
   on a dedicated event-loop thread. It does not start `vllm serve` and does not
   call vLLM over the OpenAI-compatible HTTP API, matching the design here.
+- A separate `backend: "vllm_serve"` now exists for models that should run
+  through upstream `vllm serve` as a managed local subprocess. It reuses the
+  same `vllm_*` config fields for target model, multimodal settings, and
+  speculative/MTP config, while `vllm_serve_*` fields control the subprocess.
 - The speculative-decoding config surface from the "Config Shape" section is
   wired: `vllm_speculative_method`, `vllm_speculative_model`, and
-  `vllm_num_speculative_tokens` are passed through to vLLM's `speculative_config`.
+  `vllm_num_speculative_tokens` are passed through to vLLM's `speculative_config`
+  for the in-process backend and to `--speculative-config` for `vllm_serve`.
+- Gemma 4 26B A4B NVFP4 plus the official Gemma 4 assistant checkpoint has
+  been run end to end through `vllm_serve` with image input. The local
+  document-structure OCR benchmark currently uses
+  `vllm_num_speculative_tokens: 8`; the README records the observed sweep.
+- The `vllm_serve` Gemma 4 NVFP4 model also uses `vllm_serve_extra_args`
+  with `--max-num-seqs 1` for single-user Workbench use, because vLLM's
+  broader default scheduler/CUDA-graph capture sizes can reserve much more
+  VRAM than the explicit KV-cache budget suggests.
 - Beyond this note's scope, the same backend also gained multimodal (image)
   input support, used by the image-description / OCR-grounding work.
 - A separate `backend: "llama_server"` now exists for GGUF models that need
   native llama-server features such as `--mmproj` and MTP draft flags. That is
   a separate local backend path and does not change this note's vLLM-specific
   architecture.
-- **Not yet done / verified:** actual Gemma 4 MTP has not been run end to end.
-  The speculative path is wired but untested against real Gemma 4 target and
-  assistant checkpoints, MTP-specific acceptance-rate metrics are not exposed,
-  and runtime subprocess isolation is not implemented.
+- **Not yet done / verified:** actual Gemma 4 MTP has not been run end to end
+  through the in-process `vllm` backend. The speculative path is wired but
+  untested there against real Gemma 4 target and assistant checkpoints.
+  `llm-pool` does not yet expose MTP-specific acceptance-rate metrics in its
+  own response/admin payloads, and the generic `llm-pool` runtime subprocess
+  architecture is not implemented.
 - Blackwell (SM 12.0) hosts with a CUDA toolkit < 12.9 need a small runtime
   workaround that the backend applies automatically; see the README's vLLM
   backend notes.
@@ -108,9 +123,9 @@ Example:
     "models": {
       "gemma4-e2b-mtp": {
         "backend": "vllm",
-        "model_path": "google/gemma-4-E2B-it",
+        "model_path": null,
         "prompt_format": "gemma4_template",
-        "vllm_served_model_name": "gemma4-e2b-mtp",
+        "vllm_model": "google/gemma-4-E2B-it",
         "vllm_tensor_parallel_size": 1,
         "vllm_max_model_len": 8192,
         "vllm_speculative_method": "mtp",
@@ -123,7 +138,7 @@ Example:
 }
 ```
 
-`model_path` can remain the target model id for consistency with existing local backends, but for vLLM it may be a Hugging Face model id rather than a filesystem path.
+`vllm_model` is the target model id or local path. `model_path` is not required for vLLM models and may be `null`.
 
 The assistant model should not be hidden in a generic `small_model` field. It is part of the backend's speculative decoding configuration.
 
@@ -170,11 +185,12 @@ Those metrics are useful but not required for first functionality.
 
 ## Non-Goals
 
-This design does not introduce:
+This in-process `backend: "vllm"` design does not introduce:
 
 - a hand-written MTP decode loop inside `llm-pool`
 - router-level coordination between two normal model calls
-- a `vllm serve` subprocess managed by this backend
+- a `vllm serve` subprocess managed by this backend; that now lives in the
+  separate `backend: "vllm_serve"` path
 - calls to vLLM through the OpenAI-compatible HTTP API
 - support for an already-running external vLLM server in this backend
 - generic request-time selection of arbitrary assistant models
@@ -184,9 +200,8 @@ This design does not introduce:
 
 ## Open Questions
 
-- Should `model_path` be reused for vLLM model ids, or should vLLM get a dedicated `vllm_model` field?
 - Should the backend use `AsyncLLMEngine` or the newer `AsyncLLM` alias directly?
-- Which vLLM runtime settings should be first-class config fields versus opaque extra args?
+- Which additional vLLM runtime settings should be first-class config fields versus opaque extra args?
 - Should MTP-specific metrics be pulled from vLLM logs, vLLM metrics, or omitted in V1?
 
 ## References

@@ -360,6 +360,80 @@ class ConfigTests(unittest.TestCase):
         self.assertEqual(model.llama_server_reasoning, "off")
         self.assertEqual(model.llama_server_extra_args, ("--jinja",))
 
+    def test_load_settings_reads_vllm_serve_model_without_model_path(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = Path(tmpdir) / "settings.json"
+            path.write_text(
+                (
+                    "{\n"
+                    '  "engine": {\n'
+                    '    "backend": "stub",\n'
+                    '    "models": {\n'
+                    '      "gemma4-vllm": {\n'
+                    '        "backend": "vllm_serve",\n'
+                    '        "vllm_model": "/models/nvidia/Gemma-4-26B-A4B-NVFP4",\n'
+                    '        "vllm_dtype": "auto",\n'
+                    '        "vllm_gpu_memory_utilization": 0.55,\n'
+                    '        "vllm_kv_cache_memory_bytes": 2147483648,\n'
+                    '        "vllm_kv_cache_dtype": "fp8",\n'
+                    '        "vllm_max_model_len": 8192,\n'
+                    '        "vllm_tensor_parallel_size": 2,\n'
+                    '        "vllm_trust_remote_code": true,\n'
+                    '        "vllm_enforce_eager": true,\n'
+                    '        "vllm_limit_mm_per_prompt": {"image": 1},\n'
+                    '        "vllm_mm_processor_kwargs": {"max_soft_tokens": 560},\n'
+                    '        "vllm_speculative_method": "mtp",\n'
+                    '        "vllm_speculative_model": "google/gemma-4-26B-A4B-it-assistant",\n'
+                    '        "vllm_num_speculative_tokens": 4,\n'
+                    '        "vllm_serve_binary": "/opt/vllm/bin/vllm",\n'
+                    '        "vllm_serve_host": "127.0.0.1",\n'
+                    '        "vllm_serve_port": 18090,\n'
+                    '        "vllm_serve_model_alias": "gemma-local",\n'
+                    '        "vllm_serve_timeout_s": 33.5,\n'
+                    '        "vllm_serve_start_timeout_s": 44.5,\n'
+                    '        "vllm_serve_stop_timeout_s": 3.5,\n'
+                    '        "vllm_serve_library_path": ["/cuda/lib", "/extra/lib"],\n'
+                    '        "vllm_serve_env": {"VLLM_USE_FLASHINFER_SAMPLER": "0"},\n'
+                    '        "vllm_serve_api_key": "local-secret",\n'
+                    '        "vllm_serve_extra_args": ["--tool-call-parser", "gemma4"]\n'
+                    "      }\n"
+                    "    }\n"
+                    "  }\n"
+                    "}\n"
+                ),
+                encoding="utf-8",
+            )
+
+            settings = load_settings(path)
+
+        model = settings.engine.models["gemma4-vllm"]
+        self.assertIsNone(model.model_path)
+        self.assertEqual(model.backend, "vllm_serve")
+        self.assertEqual(model.vllm_model, "/models/nvidia/Gemma-4-26B-A4B-NVFP4")
+        self.assertEqual(model.vllm_dtype, "auto")
+        self.assertEqual(model.vllm_gpu_memory_utilization, 0.55)
+        self.assertEqual(model.vllm_kv_cache_memory_bytes, 2147483648)
+        self.assertEqual(model.vllm_kv_cache_dtype, "fp8")
+        self.assertEqual(model.vllm_max_model_len, 8192)
+        self.assertEqual(model.vllm_tensor_parallel_size, 2)
+        self.assertTrue(model.vllm_trust_remote_code)
+        self.assertTrue(model.vllm_enforce_eager)
+        self.assertEqual(model.vllm_limit_mm_per_prompt, (("image", 1),))
+        self.assertEqual(model.vllm_mm_processor_kwargs, (("max_soft_tokens", 560),))
+        self.assertEqual(model.vllm_speculative_method, "mtp")
+        self.assertEqual(model.vllm_speculative_model, "google/gemma-4-26B-A4B-it-assistant")
+        self.assertEqual(model.vllm_num_speculative_tokens, 4)
+        self.assertEqual(model.vllm_serve_binary, "/opt/vllm/bin/vllm")
+        self.assertEqual(model.vllm_serve_port, 18090)
+        self.assertEqual(model.vllm_serve_model_alias, "gemma-local")
+        self.assertEqual(model.vllm_serve_timeout_s, 33.5)
+        self.assertEqual(model.vllm_serve_start_timeout_s, 44.5)
+        self.assertEqual(model.vllm_serve_stop_timeout_s, 3.5)
+        self.assertEqual(model.vllm_serve_library_path, ("/cuda/lib", "/extra/lib"))
+        self.assertEqual(model.vllm_serve_env, (("VLLM_USE_FLASHINFER_SAMPLER", "0"),))
+        self.assertEqual(model.vllm_serve_api_key, "local-secret")
+        self.assertEqual(model.vllm_serve_extra_args, ("--tool-call-parser", "gemma4"))
+
     def test_load_settings_defaults_target_inflight_to_one(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             path = Path(tmpdir) / "settings.json"

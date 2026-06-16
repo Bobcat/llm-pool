@@ -323,8 +323,72 @@
         },
         "enabled": false
       },
+      "gemma-4-26b-a4b-it-nvidia-nvfp4-vllm-serve": {
+        "backend": "vllm_serve",
+        "model_path": null,
+        "prompt_format": "gemma4_template",
+        "enable_thinking": false,
+        "modalities": [
+          "text",
+          "image"
+        ],
+        "vllm_model": "/home/gunnar/models/nvidia/Gemma-4-26B-A4B-NVFP4",
+        "vllm_dtype": "auto",
+        "vllm_gpu_memory_utilization": 0.01,
+        "vllm_kv_cache_memory_bytes": 2147483648,
+        "vllm_max_model_len": 8192,
+        "vllm_trust_remote_code": true,
+        "vllm_limit_mm_per_prompt": {
+          "image": 1
+        },
+        "vllm_mm_processor_kwargs": {
+          "max_soft_tokens": 560
+        },
+        "vllm_speculative_method": "mtp",
+        "vllm_speculative_model": "google/gemma-4-26B-A4B-it-assistant",
+        "vllm_num_speculative_tokens": 8,
+        "vllm_serve_binary": "/home/gunnar/projects/llm-pool/.venv/bin/vllm",
+        "vllm_serve_model_alias": "gemma-4-26b-a4b-it-nvidia-nvfp4-vllm-serve",
+        "vllm_serve_library_path": [
+          "/home/gunnar/projects/llm-pool/.venv/lib/python3.12/site-packages/nvidia/cu13/lib"
+        ],
+        "vllm_serve_env": {
+          "VLLM_USE_FLASHINFER_SAMPLER": "0"
+        },
+        "vllm_serve_extra_args": [
+          "--max-num-seqs",
+          "1"
+        ],
+        "enabled": false
+      },
       "gemma-4-26b-a4b-it-ud-q5ks-llama-server": {
         "model_path": "/home/gunnar/models/unsloth/gemma-4-26B-A4B-it-GGUF/gemma-4-26B-A4B-it-UD-Q5_K_S.gguf",
+        "backend": "llama_server",
+        "prompt_format": "gemma4_template",
+        "enable_thinking": false,
+        "modalities": [
+          "text",
+          "image"
+        ],
+        "llama_server_binary": "/home/gunnar/.unsloth/llama.cpp/llama-server",
+        "llama_server_library_path": [
+          "/home/gunnar/projects/llm-pool/.venv/lib/python3.12/site-packages/nvidia/cu13/lib"
+        ],
+        "llama_server_n_ctx": 4096,
+        "llama_server_n_gpu_layers": "999",
+        "llama_server_flash_attn": "on",
+        "llama_server_mmproj_path": "/home/gunnar/models/unsloth/gemma-4-26B-A4B-it-GGUF/mmproj-BF16.gguf",
+        "llama_server_image_max_tokens": 512,
+        "llama_server_draft_model_path": "/home/gunnar/models/unsloth/gemma-4-26B-A4B-it-GGUF/MTP/gemma-4-26B-A4B-it-Q8_0-MTP.gguf",
+        "llama_server_spec_type": "draft-mtp",
+        "llama_server_spec_draft_n_max": 5,
+        "llama_server_spec_draft_p_min": 0.0,
+        "llama_server_spec_draft_ngl": "999",
+        "llama_server_reasoning": "off",
+        "enabled": false
+      },
+      "gemma-4-26b-a4b-it-ud-q8kxl-llama-server": {
+        "model_path": "/home/gunnar/models/unsloth/gemma-4-26B-A4B-it-GGUF/gemma-4-26B-A4B-it-UD-Q8_K_XL.gguf",
         "backend": "llama_server",
         "prompt_format": "gemma4_template",
         "enable_thinking": false,

@@ -1,0 +1,24 @@
+**Perform a structural analysis of the text in this image. Reconstruct the document's hierarchy by labeling each element in its natural reading order.**
+
+**Instructions:**
+
+1. **Analyze Visual Cues:** Use font size, font weight (boldness), spatial positioning, and grouping to determine the importance of each text element.
+
+2. **Linear Labeling (Do Not Group):** Do **not** group all elements of the same level together. Instead, process the text from top to bottom, following the natural reading order. For every piece of text, immediately precede it with its classification:
+    * **[Level 1 / Title | <font-family> | <font-size>pt | <font-weight (100-900)> | <alignment>]:** The most prominent text (largest/boldest).
+    * **[Level 2 / Header | <font-family> | <font-size>pt | <font-weight (100-900)> | <alignment>]:** Sub-headings that introduce new sections.
+    * **[Level 3 / Body | <font-family> | <font-size>pt | <font-weight (100-900)> | <alignment>]:** Descriptive or supporting text.
+    * **[Metadata/Footer | <alignment>]:** Small text at the edges, such as contact info, dates, or fine print.
+
+3. **Tables:** If an element is a table row, put '|' between its fields.
+
+3.1. **Field values:** If an element has the format <Field-label> <Field-value>, put '|' between the label and the value.
+
+4. For font-family, provide your best best guess for a **specific font name** do NOT just mention serif or sans-serif.
+
+5. **Alignment (required):** End every classification with the element's horizontal alignment as the final field: ' | left', ' | center', or ' | right'. Judge it from the line EDGES and margins, not the text meaning:
+    * **left:** the lines begin at a common left edge (a list, a column, a left-justified paragraph).
+    * **center:** the lines are staggered on the left and the block sits symmetrically - roughly equal empty space to its left and to its right. A single line counts as 'center' when it sits midway between the surrounding margins (equal gap on both sides).
+    * **right:** the lines end at a common right edge.
+
+6. **Output Format:** Present the final structure using **Markdown formatting**. The output must begin with a single line in the format **[Image Classification: <just a few words>]**, followed by a continuous stream of labeled text that follows the visual flow of the document. Output only the text.

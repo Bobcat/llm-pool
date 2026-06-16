@@ -11,7 +11,9 @@ Current reality note:
 - `llm-pool` already has a first in-process scheduler/executor layer
 - requests are already queue-backed per public model
 - the runtime admin API already uses the scheduler boundary for load/unload semantics
-- `llama_server` now runs through the same scheduler path, while its native subprocess lifecycle remains backend-owned
+- `llama_server` and `vllm_serve` now run through the same scheduler path, while their native subprocess lifecycles remain backend-owned
+- scheduler-visible capacity for local backends is still conservative: `vllm_serve` may use vLLM's internal scheduler, prefix cache, CUDA graphs, and speculative decoding, but `llm-pool` still treats it as one submitted request per loaded runtime
+- backend-native tuning such as `vllm_serve_extra_args: ["--max-num-seqs", "1"]` is model config, not scheduler policy
 - this note now describes the broader scheduler design space beyond that first implemented cut
 
 ## Why This Is Worth Doing

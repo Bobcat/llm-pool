@@ -28,6 +28,8 @@ from .router import ModelRouterEngine
 from .stub import StubEngine
 from .vllm import VllmEngine
 from .vllm import VllmModelRuntime
+from .vllm_serve import VllmServeEngine
+from .vllm_serve import VllmServeModelRuntime
 
 
 def build_engine(settings):

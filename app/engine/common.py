@@ -110,6 +110,33 @@ _BACKEND_MODEL_DEFINITION_FIELDS = {
         "vllm_speculative_model",
         "vllm_num_speculative_tokens",
     ),
+    "vllm_serve": (
+        "vllm_model",
+        "vllm_dtype",
+        "vllm_gpu_memory_utilization",
+        "vllm_kv_cache_memory_bytes",
+        "vllm_kv_cache_dtype",
+        "vllm_max_model_len",
+        "vllm_tensor_parallel_size",
+        "vllm_trust_remote_code",
+        "vllm_enforce_eager",
+        "vllm_limit_mm_per_prompt",
+        "vllm_mm_processor_kwargs",
+        "vllm_speculative_method",
+        "vllm_speculative_model",
+        "vllm_num_speculative_tokens",
+        "vllm_serve_binary",
+        "vllm_serve_host",
+        "vllm_serve_port",
+        "vllm_serve_model_alias",
+        "vllm_serve_timeout_s",
+        "vllm_serve_start_timeout_s",
+        "vllm_serve_stop_timeout_s",
+        "vllm_serve_library_path",
+        "vllm_serve_env",
+        "vllm_serve_api_key",
+        "vllm_serve_extra_args",
+    ),
 }
 
 # GGUF multi-turn is text-only and depends on llama.cpp's chat-completion path.
@@ -134,7 +161,7 @@ _OVERRIDE_THINKING_MODES = ("default", "enabled", "disabled")
 
 def _model_supports_multi_turn(backend: str, prompt_format: str | None) -> bool:
     normalized_backend = backend.strip().lower()
-    if normalized_backend in {"llama_server", "vllm"}:
+    if normalized_backend in {"llama_server", "vllm", "vllm_serve"}:
         return True
     if normalized_backend == "gguf":
         normalized_prompt_format = (prompt_format or "").strip().lower()
@@ -397,7 +424,7 @@ def _load_constraints_for_backend(backend: str) -> dict[str, object]:
                 "format": "<bits>|<k_bits>,<v_bits>",
             },
         }
-    if normalized_backend == "vllm":
+    if normalized_backend in {"vllm", "vllm_serve"}:
         return {
             "vllm_max_model_len": {
                 "kind": "integer",
@@ -422,6 +449,24 @@ def _load_constraints_for_backend(backend: str) -> dict[str, object]:
                 "minimum": 200704,
                 "step": 200704,
                 "unit": "pixels",
+            },
+            "vllm_speculative_method": {
+                "kind": "string_or_null",
+                "format": "vllm_speculative_method",
+                "default": None,
+                "examples": ["mtp", "draft_model", "mlp_speculator"],
+            },
+            "vllm_speculative_model": {
+                "kind": "string_or_null",
+                "format": "hf_id_or_local_path",
+                "default": None,
+                "examples": ["google/gemma-4-26B-A4B-it-assistant"],
+            },
+            "vllm_num_speculative_tokens": {
+                "kind": "integer",
+                "minimum": 1,
+                "step": 1,
+                "default": 1,
             },
         }
     return {}

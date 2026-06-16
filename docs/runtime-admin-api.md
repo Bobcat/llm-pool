@@ -15,8 +15,9 @@ It is intentionally a v1 design:
 Current reality note:
 
 - this admin API is implemented and is the live control plane used by the workbench
-- runtime-only load overrides are implemented for `gguf`, `exllamav3`, `vllm`, and `llama_server`
+- runtime-only load overrides are implemented for `gguf`, `exllamav3`, `vllm`, `vllm_serve`, and `llama_server`
 - `llama_server` load/unload starts and stops a managed native `llama-server` subprocess; binary path, model path, library path, `mmproj`, draft model path, host, port, and extra native args stay in model config in v1
+- `vllm_serve` load/unload starts and stops a managed local `vllm serve` subprocess; binary path, target model id/path, library path, environment, host, port, API key, and extra CLI args stay in model config in v1
 - the live `load_constraints` payload remains the source of truth for UI controls when this note and implementation details drift
 
 ## Contents
@@ -258,7 +259,7 @@ Notes:
 - `vram_estimate_replica_count` is the replica count that the VRAM estimate was measured or derived for
 - `vram_estimate_source` is either `observed_load_delta`, `model_artifact_size`, or `unavailable`
 - `capabilities.modalities` lists which input modalities the model accepts (`["text"]` or `["text", "image"]`); a UI can use it to decide whether to allow image input for a model
-- `capabilities.multi_turn` reports whether the model accepts a multi-turn `messages` array on `POST /v1/responses`; this is `true` for `llama_server` and vLLM models and for supported text-only GGUF chat prompt formats (`generic`, `mistral_template`, `qwen3_template`, `gemma4_template`), but remains `false` for GGUF `translategemma_template`
+- `capabilities.multi_turn` reports whether the model accepts a multi-turn `messages` array on `POST /v1/responses`; this is `true` for `llama_server`, `vllm`, and `vllm_serve` models and for supported text-only GGUF chat prompt formats (`generic`, `mistral_template`, `qwen3_template`, `gemma4_template`), but remains `false` for GGUF `translategemma_template`
 - `capabilities.thinking_modes` lists accepted values for request-level `thinking`; models without a safe per-request control report only `["default"]`, while supported vLLM Gemma4/Qwen3, GGUF Gemma4, ExLlamaV3 Gemma4/Qwen3, CT2 Qwen3, and configured remote models report `["default", "enabled", "disabled"]`
 - `load_constraints` describes backend-specific live-load fields for UI controls
 - `load_recommendations` describes service-curated recommended presets and pairings for UI defaults
@@ -443,7 +444,7 @@ ExLlamaV3:
 }
 ```
 
-vLLM:
+vLLM and vLLM Serve:
 
 ```json
 {
@@ -470,6 +471,24 @@ vLLM:
     "minimum": 200704,
     "step": 200704,
     "unit": "pixels"
+  },
+  "vllm_speculative_method": {
+    "kind": "string_or_null",
+    "format": "vllm_speculative_method",
+    "default": null,
+    "examples": ["mtp", "draft_model", "mlp_speculator"]
+  },
+  "vllm_speculative_model": {
+    "kind": "string_or_null",
+    "format": "hf_id_or_local_path",
+    "default": null,
+    "examples": ["google/gemma-4-26B-A4B-it-assistant"]
+  },
+  "vllm_num_speculative_tokens": {
+    "kind": "integer",
+    "minimum": 1,
+    "step": 1,
+    "default": 1
   }
 }
 ```
@@ -613,7 +632,7 @@ Supported load override fields:
 - public model: `replicas`
 - GGUF: `gguf_n_ctx`, `gguf_flash_attn`, `gguf_type_k`, `gguf_type_v`
 - ExLlamaV3: `exllama_cache_size`, `exllama_cache_quant`, `exllama_cache_k_bits`, `exllama_cache_v_bits`, `exllama_max_rq_tokens`
-- vLLM: `vllm_max_model_len`, `vllm_kv_cache_dtype`, `vllm_kv_cache_memory_bytes`, `vllm_max_pixels`
+- vLLM and vLLM Serve: `vllm_max_model_len`, `vllm_kv_cache_dtype`, `vllm_kv_cache_memory_bytes`, `vllm_max_pixels`, `vllm_speculative_method`, `vllm_speculative_model`, `vllm_num_speculative_tokens`
 - llama-server: `llama_server_n_ctx`, `llama_server_image_max_tokens`, `llama_server_spec_type`, `llama_server_spec_draft_n_max`, `llama_server_spec_draft_p_min`
 
 Example load bodies:
@@ -689,7 +708,10 @@ Example load bodies:
   "vllm_max_model_len": 16384,
   "vllm_kv_cache_dtype": "fp8",
   "vllm_kv_cache_memory_bytes": 2147483648,
-  "vllm_max_pixels": 4014080
+  "vllm_max_pixels": 4014080,
+  "vllm_speculative_method": "mtp",
+  "vllm_speculative_model": "google/gemma-4-26B-A4B-it-assistant",
+  "vllm_num_speculative_tokens": 1
 }
 ```
 
@@ -705,12 +727,18 @@ Example load bodies:
 
 #### Backend-Specific Load Override Notes
 
-vLLM load override notes:
+vLLM and vLLM Serve load override notes:
 
 - `vllm_max_model_len` is the per-load context length.
 - `vllm_kv_cache_dtype` quantizes the KV cache; allowed UI values are `auto`, `fp8`, `fp8_e4m3`, `fp8_e5m2`. The service accepts any dtype string vLLM supports.
 - `vllm_kv_cache_memory_bytes` sets an absolute KV cache size in bytes. It is machine-independent and overrides `vllm_gpu_memory_utilization` for KV sizing. The `load_constraints` entry carries `unit: "bytes"` and `display_unit: "mib"` so the UI can present it in MiB.
+- Prefer keeping configured `vllm_gpu_memory_utilization` very low and controlling load-time cache budget with `vllm_kv_cache_memory_bytes`, otherwise vLLM may reserve most free VRAM.
 - `vllm_max_pixels` caps the vision-token budget per image for vision-language models; it is merged into the model's `vllm_mm_processor_kwargs` as `max_pixels`.
+- `vllm_speculative_method` selects the vLLM speculative path for this load, for example `mtp`, `draft_model`, or `mlp_speculator`. `null` disables the configured speculative path for that load.
+- `vllm_speculative_model` is the assistant/draft/speculator checkpoint or local path passed through vLLM's `speculative_config.model`. For Gemma 4 MTP this is the Gemma 4 assistant checkpoint, not a generic smaller draft model.
+- `vllm_num_speculative_tokens` maps to vLLM `speculative_config.num_speculative_tokens`.
+- For `vllm_serve`, target model id/path, binary path, library path, environment, host, port, API key, and extra CLI args are configured in the model definition, not overridden through the admin load body in v1.
+- Loading a `vllm_serve` model starts a local `vllm serve` subprocess. Unloading terminates that subprocess, so VRAM is released by the server process rather than by Python object cleanup alone.
 
 llama-server load override notes:
 

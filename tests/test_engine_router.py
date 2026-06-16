@@ -223,6 +223,45 @@ class ModelRouterEngineTests(unittest.TestCase):
         self.assertEqual(entry["runtime_state"], "unloaded")
         self.assertTrue(runtime.closed)
 
+    def test_dispatches_vllm_serve_backend_as_local_runtime(self) -> None:
+        settings = AppSettings(
+            service=ServiceSettings(),
+            engine=EngineSettings(
+                backend="ct2",
+                models={
+                    "vllm-model": ModelSettings(
+                        model_path=None,
+                        backend="vllm_serve",
+                        vllm_model="/models/gemma4",
+                        target_inflight=3,
+                    ),
+                },
+            ),
+        )
+        runtime = types.SimpleNamespace(closed=False)
+
+        def close_runtime() -> None:
+            runtime.closed = True
+
+        runtime.close = close_runtime
+
+        class FakeVllmServeEngine:
+            def __init__(self, scoped_settings):
+                self._models = {name: runtime for name in scoped_settings.engine.models}
+                self._load_errors = {}
+
+            def complete(self, request: ResponseRequest) -> EngineResult:
+                return EngineResult(text=f"vllm-serve:{request.model}")
+
+        with mock.patch.object(engine_module, "VllmServeEngine", FakeVllmServeEngine):
+            engine = ModelRouterEngine(settings)
+            result = engine.complete(ResponseRequest(model="vllm-model", input="hello"))
+            entry = engine.unload_model("vllm-model", settings)
+
+        self.assertEqual(result.text, "vllm-serve:vllm-model#1")
+        self.assertEqual(entry["runtime_state"], "unloaded")
+        self.assertTrue(runtime.closed)
+
     def test_build_engine_uses_model_router_for_non_stub_backends(self) -> None:
         settings = AppSettings(
             service=ServiceSettings(),
@@ -1069,6 +1108,93 @@ class ModelRouterEngineTests(unittest.TestCase):
                 "llama_server_spec_type": "draft-mtp",
                 "llama_server_spec_draft_n_max": 4,
                 "llama_server_spec_draft_p_min": 0.25,
+            },
+        )
+
+    def test_load_model_applies_vllm_serve_load_overrides(self) -> None:
+        settings = AppSettings(
+            service=ServiceSettings(),
+            engine=EngineSettings(
+                backend="vllm_serve",
+                models={
+                    "vllm-model": ModelSettings(
+                        model_path=None,
+                        backend="vllm_serve",
+                        vllm_model="/models/gemma4",
+                        enabled=False,
+                        vllm_max_model_len=4096,
+                        vllm_kv_cache_dtype="auto",
+                        vllm_kv_cache_memory_bytes=None,
+                        vllm_mm_processor_kwargs=(("min_pixels", 100), ("max_pixels", 1000)),
+                        vllm_speculative_method=None,
+                        vllm_speculative_model=None,
+                        vllm_num_speculative_tokens=1,
+                    ),
+                },
+            ),
+        )
+
+        captured: dict[str, object] = {}
+
+        class FakeBackend:
+            def __init__(self):
+                self._models = {}
+                self._load_errors = {}
+
+        engine = ModelRouterEngine(settings)
+
+        def fake_build_backend(backend: str, scoped_settings: AppSettings):
+            model_settings = next(iter(scoped_settings.engine.models.values()))
+            captured["backend"] = backend
+            captured["replica_ids"] = sorted(scoped_settings.engine.models.keys())
+            captured["vllm_max_model_len"] = model_settings.vllm_max_model_len
+            captured["vllm_kv_cache_dtype"] = model_settings.vllm_kv_cache_dtype
+            captured["vllm_kv_cache_memory_bytes"] = model_settings.vllm_kv_cache_memory_bytes
+            captured["vllm_mm_processor_kwargs"] = model_settings.vllm_mm_processor_kwargs
+            captured["vllm_speculative_method"] = model_settings.vllm_speculative_method
+            captured["vllm_speculative_model"] = model_settings.vllm_speculative_model
+            captured["vllm_num_speculative_tokens"] = model_settings.vllm_num_speculative_tokens
+            backend_instance = FakeBackend()
+            backend_instance._models = {name: object() for name in scoped_settings.engine.models}
+            return backend_instance
+
+        with mock.patch.object(engine, "_build_backend_engine", side_effect=fake_build_backend):
+            entry = engine.load_model(
+                "vllm-model",
+                settings,
+                AdminLoadRequest(
+                    vllm_max_model_len=8192,
+                    vllm_kv_cache_dtype="fp8",
+                    vllm_kv_cache_memory_bytes=2147483648,
+                    vllm_max_pixels=4014080,
+                    vllm_speculative_method="mtp",
+                    vllm_speculative_model="google/gemma-4-26B-A4B-it-assistant",
+                    vllm_num_speculative_tokens=2,
+                ),
+            )
+
+        self.assertEqual(captured["backend"], "vllm_serve")
+        self.assertEqual(captured["replica_ids"], ["vllm-model#1"])
+        self.assertEqual(captured["vllm_max_model_len"], 8192)
+        self.assertEqual(captured["vllm_kv_cache_dtype"], "fp8")
+        self.assertEqual(captured["vllm_kv_cache_memory_bytes"], 2147483648)
+        self.assertEqual(
+            captured["vllm_mm_processor_kwargs"],
+            (("min_pixels", 100), ("max_pixels", 4014080)),
+        )
+        self.assertEqual(captured["vllm_speculative_method"], "mtp")
+        self.assertEqual(captured["vllm_speculative_model"], "google/gemma-4-26B-A4B-it-assistant")
+        self.assertEqual(captured["vllm_num_speculative_tokens"], 2)
+        self.assertEqual(
+            entry["load_override"],
+            {
+                "vllm_max_model_len": 8192,
+                "vllm_kv_cache_dtype": "fp8",
+                "vllm_kv_cache_memory_bytes": 2147483648,
+                "vllm_max_pixels": 4014080,
+                "vllm_speculative_method": "mtp",
+                "vllm_speculative_model": "google/gemma-4-26B-A4B-it-assistant",
+                "vllm_num_speculative_tokens": 2,
             },
         )
 
