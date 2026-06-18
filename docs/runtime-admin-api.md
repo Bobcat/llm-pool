@@ -26,6 +26,7 @@ Current reality note:
 - [Core Concepts](#core-concepts)
 - [State Semantics](#state-semantics)
 - [Request Behavior By Runtime State](#request-behavior-by-runtime-state)
+- [TranslateGemma Request Notes](#translategemma-request-notes)
 - [Endpoints](#endpoints)
   - [`GET /v1/admin/models`](#get-v1adminmodels)
   - [`GET /v1/admin/gpu-memory`](#get-v1admingpu-memory)
@@ -133,6 +134,14 @@ Requests may optionally include `thinking: "default" | "enabled" | "disabled"`.
 accepted only when the selected model advertises those values in
 `capabilities.thinking_modes`; otherwise the request is rejected with
 `400 thinking_unsupported`.
+
+## TranslateGemma Request Notes
+
+GGUF models configured with `prompt_format: "translategemma_template"` use the official structured TranslateGemma request shape internally. They remain single-turn text models and continue to report `capabilities.multi_turn: false`.
+
+Known-source requests should include both `source_lang_code` and `target_lang_code`.
+
+Mixed-source requests may omit `source_lang_code`, or set it to `"auto"` or `"mixed"`, while still providing `target_lang_code`. In that mode, the runtime keeps the structured TranslateGemma path, uses an internal valid source-language fallback, and prepends a short instruction asking the model to detect the source language per segment. This supports payloads where one `input` contains multiple source languages; it is not a raw Gemma prompt/tokenizer path.
 
 ## Endpoints
 

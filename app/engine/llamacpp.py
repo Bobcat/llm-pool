@@ -28,6 +28,14 @@ from .common import ResolvedDecoding
 
 _LLAMA_CPP_FLASH_ATTN_MODE_LOCK = threading.Lock()
 _DEFAULT_SYSTEM_PROMPT = "You are a helpful assistant. Return only the response."
+_TRANSLATEGEMMA_AUTO_SOURCE_LANG_CODES = {"auto", "mixed"}
+_TRANSLATEGEMMA_AUTO_SOURCE_FALLBACK_LANG_CODE = "en"
+_TRANSLATEGEMMA_AUTO_SOURCE_PREFIX = (
+    "The source language may differ across the text. Detect the source language "
+    "of each sentence or segment yourself and translate all translatable content "
+    "to the target language. Preserve numbering, line breaks, and placeholders "
+    "where possible. Return only the translation.\n\n"
+)
 
 
 @dataclass
@@ -337,14 +345,14 @@ class LlamaCppEngine:
         decoding: ResolvedDecoding,
         stop_strings: list[str],
     ) -> EngineResult:
-        source_lang_code = self._resolve_translation_lang_code(
-            source_lang_code,
-            "source_lang_code",
-        )
         target_lang_code = self._resolve_translation_lang_code(
             target_lang_code,
             "target_lang_code",
         )
+        source_lang_code = self._resolve_optional_translation_lang_code(source_lang_code)
+        if source_lang_code is None or source_lang_code.lower() in _TRANSLATEGEMMA_AUTO_SOURCE_LANG_CODES:
+            source_lang_code = _TRANSLATEGEMMA_AUTO_SOURCE_FALLBACK_LANG_CODE
+            user_text = f"{_TRANSLATEGEMMA_AUTO_SOURCE_PREFIX}{user_text}"
 
         generate_started = time.perf_counter()
         with runtime.generation_lock:
@@ -393,6 +401,14 @@ class LlamaCppEngine:
         normalized = value.strip()
         if normalized == "":
             raise ValueError(f"translategemma_template requires non-empty request.{field_name}")
+        return normalized
+
+    def _resolve_optional_translation_lang_code(self, value: str | None) -> str | None:
+        if value is None:
+            return None
+        normalized = value.strip()
+        if normalized == "":
+            raise ValueError("translategemma_template requires non-empty request.source_lang_code")
         return normalized
 
     def _build_runtime(self, settings: ModelSettings) -> LlamaCppModelRuntime:

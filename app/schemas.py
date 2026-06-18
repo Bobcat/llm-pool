@@ -65,8 +65,17 @@ class ResponseRequest(BaseModel):
     input: str | list[ContentItem] | None = None
     messages: list[Message] | None = None
     instructions: str | None = None
-    source_lang_code: str | None = None
-    target_lang_code: str | None = None
+    source_lang_code: str | None = Field(
+        default=None,
+        description=(
+            "Source language code for translation models. For GGUF TranslateGemma, "
+            "omit this field or use 'auto'/'mixed' to request mixed-source detection."
+        ),
+    )
+    target_lang_code: str | None = Field(
+        default=None,
+        description="Target language code for translation models.",
+    )
     allow_remote: bool = False
     stream: bool = False
     thinking: ThinkingMode = "default"

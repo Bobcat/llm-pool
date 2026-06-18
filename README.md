@@ -187,7 +187,7 @@ This is not yet guaranteed to be backend-native live token streaming for every r
 | `input` | `string \| array` | conditional | none | Single-turn input. Provide either `input` or `messages`. |
 | `messages` | `array` | conditional | none | Multi-turn conversation. Last message must have role `user`. Support is backend-dependent and advertised as `capabilities.multi_turn`. |
 | `instructions` | `string \| null` | no | `null` | System prompt or high-level guidance. Omit for `translategemma_template`. |
-| `source_lang_code` | `string \| null` | no | `null` | Required for `prompt_format: "translategemma_template"`. |
+| `source_lang_code` | `string \| null` | no | `null` | Source language for translation models. For `translategemma_template`, omit it or use `"auto"`/`"mixed"` to translate mixed-source input. |
 | `target_lang_code` | `string \| null` | no | `null` | Required for `prompt_format: "translategemma_template"`. |
 | `allow_remote` | `boolean` | no | `false` | Must be `true` for `openai_compatible` remote models. |
 | `stream` | `boolean` | no | `false` | `false` returns one JSON response; `true` returns SSE events. |
@@ -350,7 +350,19 @@ TranslateGemma request example:
 }
 ```
 
-For `prompt_format: "translategemma_template"`, put the source text in `input`, include `source_lang_code` and `target_lang_code`, and omit `instructions`.
+For known-source `prompt_format: "translategemma_template"` requests, put the source text in `input`, include `source_lang_code` and `target_lang_code`, and omit `instructions`.
+
+TranslateGemma mixed-source request example:
+
+```json
+{
+  "model": "translategemma-12b-it-q5-k-m-gguf",
+  "input": "1. De vergadering is verplaatst.\n2. La réunion a été déplacée.\n3. Die Besprechung wurde verschoben.",
+  "target_lang_code": "en"
+}
+```
+
+For mixed-source TranslateGemma input, omit `source_lang_code` or set it to `"auto"` or `"mixed"`. The service keeps the official TranslateGemma structured request format, uses a valid internal source-language fallback, and prepends a short instruction asking the model to detect each segment's source language. This is intended for text that may contain multiple source languages in one request; it is not a separate raw Gemma prompt/tokenizer path.
 
 ## llama-server Backend
 

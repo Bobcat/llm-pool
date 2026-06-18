@@ -532,7 +532,78 @@ class LlamaCppEngineTests(unittest.TestCase):
         self.assertEqual(runtime.llm.chat_kwargs["max_tokens"], 64)
         self.assertIn("<end_of_turn>", runtime.llm.chat_kwargs["stop"])
 
-    def test_complete_translategemma_requires_request_language_codes(self) -> None:
+    def test_complete_translategemma_supports_target_only_mixed_source(self) -> None:
+        class FakeLlama:
+            def create_chat_completion(self, **kwargs):
+                self.chat_kwargs = kwargs
+                return {
+                    "choices": [{"message": {"content": "1. The meeting moved."}}],
+                    "usage": {"prompt_tokens": 121, "completion_tokens": 5},
+                }
+
+        runtime = llamacpp_module.LlamaCppModelRuntime(
+            config=ModelSettings(
+                model_path="/models/translategemma.gguf",
+                backend="gguf",
+                prompt_format="translategemma_template",
+            ),
+            llm=FakeLlama(),
+        )
+        engine = llamacpp_module.LlamaCppEngine.__new__(llamacpp_module.LlamaCppEngine)
+        engine.decoding_defaults = DecodingDefaults()
+        engine._models = {"translategemma": runtime}
+
+        result = engine.complete(
+            ResponseRequest(
+                model="translategemma",
+                input="1. De vergadering is verplaatst.\n2. La réunion a été déplacée.",
+                target_lang_code="en",
+            )
+        )
+
+        self.assertEqual(result.text, "1. The meeting moved.")
+        content = runtime.llm.chat_kwargs["messages"][0]["content"][0]
+        self.assertEqual(content["source_lang_code"], "en")
+        self.assertEqual(content["target_lang_code"], "en")
+        self.assertIn("Detect the source language", content["text"])
+        self.assertIn("1. De vergadering is verplaatst.", content["text"])
+
+    def test_complete_translategemma_supports_auto_source_lang_code(self) -> None:
+        class FakeLlama:
+            def create_chat_completion(self, **kwargs):
+                self.chat_kwargs = kwargs
+                return {
+                    "choices": [{"message": {"content": "De vergadering is verplaatst."}}],
+                    "usage": {"prompt_tokens": 98, "completion_tokens": 6},
+                }
+
+        runtime = llamacpp_module.LlamaCppModelRuntime(
+            config=ModelSettings(
+                model_path="/models/translategemma.gguf",
+                backend="gguf",
+                prompt_format="translategemma_template",
+            ),
+            llm=FakeLlama(),
+        )
+        engine = llamacpp_module.LlamaCppEngine.__new__(llamacpp_module.LlamaCppEngine)
+        engine.decoding_defaults = DecodingDefaults()
+        engine._models = {"translategemma": runtime}
+
+        engine.complete(
+            ResponseRequest(
+                model="translategemma",
+                input="The meeting moved.",
+                source_lang_code="auto",
+                target_lang_code="nl",
+            )
+        )
+
+        content = runtime.llm.chat_kwargs["messages"][0]["content"][0]
+        self.assertEqual(content["source_lang_code"], "en")
+        self.assertEqual(content["target_lang_code"], "nl")
+        self.assertIn("Return only the translation", content["text"])
+
+    def test_complete_translategemma_requires_request_target_language_code(self) -> None:
         class FakeLlama:
             def create_chat_completion(self, **kwargs):
                 raise AssertionError("chat completion should not be called")
@@ -554,7 +625,7 @@ class LlamaCppEngineTests(unittest.TestCase):
 
         self.assertEqual(
             str(exc_info.exception),
-            "translategemma_template requires request.source_lang_code",
+            "translategemma_template requires request.target_lang_code",
         )
 
     def test_build_runtime_passes_gguf_cache_types(self) -> None:
