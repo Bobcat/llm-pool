@@ -76,16 +76,16 @@ class LlamaCppEngine:
         stop_strings = self._resolve_stop_strings(prompt_format, decoding.stop)
         if request.decoding.beam_size is not None:
             LOGGER.info(
-                "Ignoring beam_size=%s for GGUF model '%s'.",
+                "Ignoring beam_size=%s for llama_cpp model '%s'.",
                 request.decoding.beam_size,
                 request.model,
             )
         if request.messages is not None:
-            if not _model_supports_multi_turn("gguf", prompt_format):
+            if not _model_supports_multi_turn("llama_cpp", prompt_format):
                 raise BackendExecutionError(
                     code="multi_turn_unsupported",
                     status_code=400,
-                    message=f"GGUF prompt_format {prompt_format!r} does not support multi-turn chat",
+                    message=f"llama_cpp prompt_format {prompt_format!r} does not support multi-turn chat",
                 )
             return self._complete_with_chat_messages(
                 runtime=runtime,
@@ -291,7 +291,7 @@ class LlamaCppEngine:
         runtime: LlamaCppModelRuntime,
         request: ResponseRequest,
     ) -> bool | None:
-        thinking_modes = _model_thinking_modes("gguf", runtime.config.prompt_format)
+        thinking_modes = _model_thinking_modes("llama_cpp", runtime.config.prompt_format)
         if request.thinking != "default" and request.thinking not in thinking_modes:
             raise BackendExecutionError(
                 code="thinking_unsupported",
@@ -330,7 +330,7 @@ class LlamaCppEngine:
                 raise BackendExecutionError(
                     code="modality_unsupported",
                     status_code=400,
-                    message="GGUF multi-turn chat does not support image content",
+                    message="llama_cpp multi-turn chat does not support image content",
                 )
             parts.append(item.text)
         return "".join(parts)
@@ -416,7 +416,7 @@ class LlamaCppEngine:
             import llama_cpp as llama_cpp_module
             from llama_cpp import Llama
         except ImportError as exc:  # pragma: no cover - depends on local environment
-            raise RuntimeError("llama-cpp-python is required for the GGUF engine") from exc
+            raise RuntimeError("llama-cpp-python is required for the llama_cpp engine") from exc
         try:
             import llama_cpp.llama_cpp as llama_cpp_low_level
         except ImportError:

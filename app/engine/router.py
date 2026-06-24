@@ -82,7 +82,7 @@ class ModelRouterEngine:
             state = self._model_states[request.model]
             if state.lifecycle != "loaded":
                 raise ModelStateError(request.model, self._lifecycle_error_code(state.lifecycle))
-            if state.resolved_backend == "openai_compatible" and not request.allow_remote:
+            if state.resolved_backend == "openai_remote" and not request.allow_remote:
                 raise RequestAdmissionError(
                     code="remote_execution_disallowed",
                     status_code=403,
@@ -436,7 +436,7 @@ class ModelRouterEngine:
     def _runtime_capability_for_model(self, model_name: str, backend_engine: object) -> int:
         del backend_engine
         state = self._model_states[model_name]
-        if state.resolved_backend == "openai_compatible":
+        if state.resolved_backend == "openai_remote":
             return self._configured_models[model_name].target_inflight
         return 1
 
@@ -467,7 +467,7 @@ class ModelRouterEngine:
             try:
                 close()
             except Exception:
-                LOGGER.warning("Failed to close GGUF runtime during cleanup.", exc_info=True)
+                LOGGER.warning("Failed to close llama_cpp runtime during cleanup.", exc_info=True)
 
         model = getattr(runtime, "model", None)
         cache = getattr(runtime, "cache", None)
@@ -640,7 +640,7 @@ class ModelRouterEngine:
         if not load_override:
             return replace(model_settings, enabled=True)
 
-        if resolved_backend == "gguf":
+        if resolved_backend == "llama_cpp":
             unsupported = sorted(
                 field_name
                 for field_name in load_override
@@ -648,7 +648,7 @@ class ModelRouterEngine:
             )
             if unsupported:
                 names = ", ".join(unsupported)
-                raise ValueError(f"unsupported load override for gguf backend: {names}")
+                raise ValueError(f"unsupported load override for llama_cpp backend: {names}")
 
             replacement_kwargs: dict[str, object | None] = {"enabled": True}
 
@@ -896,12 +896,12 @@ class ModelRouterEngine:
             return engine_module.Ct2Engine(settings)
         if backend == "exllamav3":
             return engine_module.ExLlamaV3Engine(settings)
-        if backend == "gguf":
+        if backend == "llama_cpp":
             return engine_module.LlamaCppEngine(settings)
         if backend == "llama_server":
             return engine_module.LlamaServerEngine(settings)
-        if backend == "openai_compatible":
-            return engine_module.OpenAICompatibleEngine(settings)
+        if backend == "openai_remote":
+            return engine_module.OpenAIRemoteEngine(settings)
         if backend == "vllm":
             return engine_module.VllmEngine(settings)
         if backend == "vllm_serve":

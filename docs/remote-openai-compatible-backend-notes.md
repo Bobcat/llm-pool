@@ -8,19 +8,18 @@ Status: phase 1 implemented; cost control remains proposed.
 
 Current reality note:
 
-- the implemented backend is still named `openai_compatible`
+- the implemented backend is named `openai_remote`
 - it is for remote/provider Chat Completions routes and keeps config-only load semantics
 - it is not the local lifecycle backend for managed `llama-server` or `vllm serve` processes
 - local managed server support now lives in separate `llama_server` and `vllm_serve` backends
-- a rename to `openai_remote` is not implemented in this repo at the time of this note
 
 ## Implementation Status
 
 Implemented on 2026-05-16:
 
-- `openai_compatible` backend name
+- `openai_remote` backend name
 - remote config fields for Chat Completions route activation
-- `model_path` no longer required for `openai_compatible` models
+- `model_path` no longer required for `openai_remote` models
 - config-only load validation, including required remote fields and API key environment variable presence
 - non-streaming OpenAI-compatible Chat Completions adapter
 - request-level `allow_remote` admission before scheduler enqueue
@@ -64,7 +63,7 @@ Both should still look like loaded public models to the rest of `llm-pool`.
 
 Suggested working name:
 
-- `openai_compatible`
+- `openai_remote`
 
 This name is intentionally provider-neutral.
 
@@ -81,7 +80,7 @@ Example:
   "engine": {
     "models": {
       "frontier-large": {
-        "backend": "openai_compatible",
+        "backend": "openai_remote",
         "remote_api_kind": "chat_completions",
         "remote_base_url": "https://api.example.com/v1",
         "remote_api_key_env": "EXAMPLE_API_KEY",
@@ -598,7 +597,7 @@ Cost logging can avoid prompt text entirely by recording:
 Suggested phased implementation:
 
 1. Add remote config fields and parse them into `ModelSettings`.
-2. Add an `OpenAICompatibleEngine` that can load configured remote routes.
+2. Add an `OpenAIRemoteEngine` that can load configured remote routes.
 3. Implement the `chat_completions` request/response adapter.
 4. Register remote replicas through the existing scheduler path.
 5. Implement non-streaming upstream completion with timeout and retries defaulting to `0`.

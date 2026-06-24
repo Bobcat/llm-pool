@@ -15,7 +15,7 @@ FastAPI service that exposes a single `POST /v1/responses` API across local and 
 - [Multimodal Input](#multimodal-input)
 - [Multi-turn Conversations](#multi-turn-conversations)
 - [Configuration](#configuration)
-- [llama-server Backend](#llama-server-backend)
+- [llama_server Backend](#llama_server-backend)
 - [vLLM Backend](#vllm-backend)
 - [vLLM Serve Backend](#vllm-serve-backend)
 - [Remote Backends](#remote-backends)
@@ -32,7 +32,7 @@ FastAPI service that exposes a single `POST /v1/responses` API across local and 
 ## What It Does
 
 - exposes one inference API for multiple model runtimes
-- supports local CT2, ExLlamaV3, GGUF/`llama-cpp-python`, managed native `llama-server`, in-process vLLM, and managed `vllm serve` backends
+- supports local CT2, ExLlamaV3, `llama_cpp`/GGUF, managed native `llama-server`, in-process vLLM, and managed `vllm serve` backends
 - supports OpenAI-compatible remote Chat Completions backends behind an explicit `allow_remote` request gate
 - accepts text input everywhere, and image input on backends/models that advertise image support
 - supports single-turn `input` requests and backend-dependent multi-turn `messages` requests
@@ -75,11 +75,11 @@ The names above describe the local project family. This repo should remain usabl
 | `app/engine/common.py` | Shared backend metadata, capability helpers, stop strings, GPU memory helpers. |
 | `app/engine/ct2.py` | CTranslate2 runtime adapter. |
 | `app/engine/exllamav3.py` | ExLlamaV3 runtime adapter. |
-| `app/engine/llamacpp.py` | In-process `llama-cpp-python` GGUF adapter. |
+| `app/engine/llama_cpp.py` | In-process llama.cpp GGUF adapter. |
 | `app/engine/llama_server.py` | Managed native `llama-server` subprocess adapter. |
 | `app/engine/vllm.py` | In-process vLLM adapter. |
 | `app/engine/vllm_serve.py` | Managed `vllm serve` subprocess adapter. |
-| `app/engine/openai_compatible.py` | Remote OpenAI-compatible Chat Completions adapter. |
+| `app/engine/openai_remote.py` | Remote OpenAI-compatible Chat Completions adapter. |
 | `config/settings.json` | Shared model and service defaults. |
 | `config/local.json` | Optional ignored machine-local overrides. |
 | `docs/` | Runtime notes, admin API notes, scheduler notes, and backend investigations. |
@@ -100,9 +100,9 @@ At runtime:
 
 Backends currently run in three different shapes:
 
-- in-process Python runtimes: CT2, ExLlamaV3, GGUF/`llama-cpp-python`, vLLM
+- in-process Python runtimes: CT2, ExLlamaV3, `llama_cpp`/GGUF, vLLM
 - managed local subprocess runtimes: `llama_server`, `vllm_serve`
-- remote upstream API runtime: `openai_compatible`
+- remote upstream API runtime: `openai_remote`
 
 The managed subprocess backends are useful when native upstream dependencies, CUDA libraries, or backend build variants should be isolated from the main Python API process. The broader uniform subprocess architecture is still design-note work; see [runtime-subprocess-notes.md](docs/runtime-subprocess-notes.md).
 
@@ -189,7 +189,7 @@ This is not yet guaranteed to be backend-native live token streaming for every r
 | `instructions` | `string \| null` | no | `null` | System prompt or high-level guidance. Omit for `translategemma_template`. |
 | `source_lang_code` | `string \| null` | no | `null` | Source language for translation models. For `translategemma_template`, omit it or use `"auto"`/`"mixed"` to translate mixed-source input. |
 | `target_lang_code` | `string \| null` | no | `null` | Required for `prompt_format: "translategemma_template"`. |
-| `allow_remote` | `boolean` | no | `false` | Must be `true` for `openai_compatible` remote models. |
+| `allow_remote` | `boolean` | no | `false` | Must be `true` for `openai_remote` remote models. |
 | `stream` | `boolean` | no | `false` | `false` returns one JSON response; `true` returns SSE events. |
 | `thinking` | `"default" \| "enabled" \| "disabled"` | no | `"default"` | Request-level thinking override. Accepted values are advertised per model in `capabilities.thinking_modes`. |
 | `decoding` | `object` | no | `{}` | Omitted subfields fall back to `engine.decoding` defaults. |
@@ -278,7 +278,7 @@ Current support:
 - `llama_server`: multi-turn text and image, depending on model capabilities.
 - `vllm`: multi-turn text and image, depending on model capabilities.
 - `vllm_serve`: multi-turn text and image, depending on model capabilities.
-- `gguf`: text-only multi-turn for selected prompt formats: `generic`, `mistral_template`, `qwen3_template`, and `gemma4_template`.
+- `llama_cpp`: text-only multi-turn for selected prompt formats: `generic`, `mistral_template`, `qwen3_template`, and `gemma4_template`.
 - CT2 and ExLlamaV3: single-turn `input` only.
 
 ## Configuration
@@ -315,7 +315,7 @@ Backends add their own fields:
 
 - CT2: `device`, `compute_type`
 - ExLlamaV3: `exllama_cache_size`, `exllama_cache_quant`, `exllama_gpu_split`, `exllama_tensor_parallel`, `exllama_tp_backend`, batching and queue-size fields
-- GGUF in-process: `gguf_n_gpu_layers`, `gguf_n_ctx`, `gguf_flash_attn`, `gguf_type_k`, `gguf_type_v`
+- `llama_cpp`/GGUF in-process: `gguf_n_gpu_layers`, `gguf_n_ctx`, `gguf_flash_attn`, `gguf_type_k`, `gguf_type_v`
 - `llama_server`: binary, host, port, library path, context, GPU layers, flash attention, `mmproj`, image token budget, MTP/speculative decoding, reasoning, and extra native args
 - vLLM: model id/path, dtype, KV cache, model length, tensor parallelism, multimodal limits, processor kwargs, speculative decoding
 - `vllm_serve`: the same vLLM model/runtime fields plus binary path, host, port, library path, environment, API key, timeout, and extra CLI args
@@ -364,7 +364,7 @@ TranslateGemma mixed-source request example:
 
 For mixed-source TranslateGemma input, omit `source_lang_code` or set it to `"auto"` or `"mixed"`. The service keeps the official TranslateGemma structured request format, uses a valid internal source-language fallback, and prepends a short instruction asking the model to detect each segment's source language. This is intended for text that may contain multiple source languages in one request; it is not a separate raw Gemma prompt/tokenizer path.
 
-## llama-server Backend
+## llama_server Backend
 
 The `llama_server` backend starts a native `llama-server` subprocess for a configured model, waits for its health endpoint, and forwards requests through its OpenAI-compatible chat API. Unloading the model stops the subprocess, so VRAM is actually released.
 
@@ -603,7 +603,7 @@ The example shows a short `vllm_serve_library_path`; production configs may need
 
 ## Remote Backends
 
-Remote models use the same public model contract, but call an upstream API instead of loading model weights. The current remote backend is `openai_compatible` with Chat Completions.
+Remote models use the same public model contract, but call an upstream API instead of loading model weights. The current remote backend is `openai_remote` with Chat Completions.
 
 Example:
 
@@ -612,7 +612,7 @@ Example:
   "engine": {
     "models": {
       "frontier-large": {
-        "backend": "openai_compatible",
+        "backend": "openai_remote",
         "model_path": null,
         "remote_api_kind": "chat_completions",
         "remote_base_url": "https://api.example.com/v1",
@@ -728,7 +728,7 @@ Heavy backend dependencies are loaded lazily. Install the dependencies for the b
 
 - CT2 for `ct2`
 - ExLlamaV3 for `exllamav3`
-- `llama-cpp-python` for in-process `gguf`
+- `llama-cpp-python` for in-process `llama_cpp`
 - a native `llama-server` binary for `llama_server`
 - vLLM and its CUDA/PyTorch stack for `vllm`
 - a `vllm` executable and matching CUDA/PyTorch environment for `vllm_serve`

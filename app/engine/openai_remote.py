@@ -31,7 +31,7 @@ _REMOTE_THINKING_VALUES = {"enabled", "disabled"}
 
 
 @dataclass(frozen=True)
-class OpenAICompatibleModelRuntime:
+class OpenAIRemoteModelRuntime:
     config: ModelSettings
     base_url: str
     api_key_env: str
@@ -39,10 +39,10 @@ class OpenAICompatibleModelRuntime:
     timeout_s: float
 
 
-class OpenAICompatibleEngine:
+class OpenAIRemoteEngine:
     def __init__(self, settings: AppSettings) -> None:
         self.decoding_defaults = settings.engine.decoding
-        self._models: dict[str, OpenAICompatibleModelRuntime] = {}
+        self._models: dict[str, OpenAIRemoteModelRuntime] = {}
         self._load_errors: dict[str, str] = {}
         for model_name, model_settings in settings.engine.models.items():
             if not model_settings.enabled:
@@ -96,7 +96,7 @@ class OpenAICompatibleEngine:
             ),
         )
 
-    def _build_runtime(self, settings: ModelSettings) -> OpenAICompatibleModelRuntime:
+    def _build_runtime(self, settings: ModelSettings) -> OpenAIRemoteModelRuntime:
         api_kind = self._required_remote_field(settings.remote_api_kind, "remote_api_kind").lower()
         if api_kind != _REMOTE_API_KIND:
             raise ValueError(f"remote_api_kind must be {_REMOTE_API_KIND!r}")
@@ -117,7 +117,7 @@ class OpenAICompatibleEngine:
         if os.environ.get(api_key_env, "").strip() == "":
             raise RuntimeError(f"missing API key environment variable: {api_key_env}")
 
-        return OpenAICompatibleModelRuntime(
+        return OpenAIRemoteModelRuntime(
             config=settings,
             base_url=base_url,
             api_key_env=api_key_env,
@@ -128,7 +128,7 @@ class OpenAICompatibleEngine:
     def _chat_completions_payload(
         self,
         *,
-        runtime: OpenAICompatibleModelRuntime,
+        runtime: OpenAIRemoteModelRuntime,
         request: ResponseRequest,
         decoding: ResolvedDecoding,
     ) -> dict[str, object]:
@@ -187,7 +187,7 @@ class OpenAICompatibleEngine:
 
     def _post_json(
         self,
-        runtime: OpenAICompatibleModelRuntime,
+        runtime: OpenAIRemoteModelRuntime,
         payload: dict[str, object],
     ) -> dict[str, object]:
         api_key = os.environ.get(runtime.api_key_env, "").strip()
@@ -300,7 +300,7 @@ class OpenAICompatibleEngine:
             parsed = json.loads(body)
         except json.JSONDecodeError:
             return body[:500]
-        detail = OpenAICompatibleEngine._http_error_json_detail(parsed)
+        detail = OpenAIRemoteEngine._http_error_json_detail(parsed)
         if detail is None:
             detail = json.dumps(parsed, ensure_ascii=True)
         detail = detail.strip()
@@ -405,10 +405,10 @@ class OpenAICompatibleEngine:
     @staticmethod
     def _required_remote_field(value: str | None, field_name: str) -> str:
         if value is None:
-            raise ValueError(f"{field_name} is required for openai_compatible models")
+            raise ValueError(f"{field_name} is required for openai_remote models")
         parsed = value.strip()
         if parsed == "":
-            raise ValueError(f"{field_name} is required for openai_compatible models")
+            raise ValueError(f"{field_name} is required for openai_remote models")
         return parsed
 
     @staticmethod

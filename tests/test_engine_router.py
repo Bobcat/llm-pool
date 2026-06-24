@@ -65,7 +65,7 @@ class ModelRouterEngineTests(unittest.TestCase):
         self.assertEqual(exl_result.text, "exl3:exl-model#1")
         self.assertEqual(sorted(engine._models.keys()), ["ct2-model#1", "exl-model#1"])
 
-    def test_dispatches_gguf_backend(self) -> None:
+    def test_dispatches_llama_cpp_backend(self) -> None:
         settings = AppSettings(
             service=ServiceSettings(),
             engine=EngineSettings(
@@ -74,7 +74,7 @@ class ModelRouterEngineTests(unittest.TestCase):
                     "ct2-model": ModelSettings(model_path="/models/ct2"),
                     "gguf-model": ModelSettings(
                         model_path="/models/test.gguf",
-                        backend="gguf",
+                        backend="llama_cpp",
                     ),
                 },
             ),
@@ -111,7 +111,7 @@ class ModelRouterEngineTests(unittest.TestCase):
                 models={
                     "gguf-model": ModelSettings(
                         model_path="/models/test.gguf",
-                        backend="gguf",
+                        backend="llama_cpp",
                         prompt_format="generic",
                     ),
                 },
@@ -139,7 +139,7 @@ class ModelRouterEngineTests(unittest.TestCase):
 
         self.assertEqual(exc_info.exception.code, "thinking_unsupported")
 
-    def test_dispatches_openai_compatible_backend_with_remote_admission(self) -> None:
+    def test_dispatches_openai_remote_backend_with_remote_admission(self) -> None:
         settings = AppSettings(
             service=ServiceSettings(),
             engine=EngineSettings(
@@ -147,7 +147,7 @@ class ModelRouterEngineTests(unittest.TestCase):
                 models={
                     "remote-model": ModelSettings(
                         model_path=None,
-                        backend="openai_compatible",
+                        backend="openai_remote",
                         remote_api_kind="chat_completions",
                         remote_base_url="https://api.example.com/v1",
                         remote_api_key_env="EXAMPLE_API_KEY",
@@ -158,7 +158,7 @@ class ModelRouterEngineTests(unittest.TestCase):
             ),
         )
 
-        class FakeOpenAICompatibleEngine:
+        class FakeOpenAIRemoteEngine:
             def __init__(self, scoped_settings):
                 self._models = {name: object() for name in scoped_settings.engine.models}
                 self._load_errors = {}
@@ -166,7 +166,7 @@ class ModelRouterEngineTests(unittest.TestCase):
             def complete(self, request: ResponseRequest) -> EngineResult:
                 return EngineResult(text=f"remote:{request.model}")
 
-        with mock.patch.object(engine_module, "OpenAICompatibleEngine", FakeOpenAICompatibleEngine):
+        with mock.patch.object(engine_module, "OpenAIRemoteEngine", FakeOpenAIRemoteEngine):
             engine = ModelRouterEngine(settings)
 
             with self.assertRaises(engine_module.RequestAdmissionError) as exc_info:
@@ -379,9 +379,9 @@ class ModelRouterEngineTests(unittest.TestCase):
         settings = AppSettings(
             service=ServiceSettings(),
             engine=EngineSettings(
-                backend="gguf",
+                backend="llama_cpp",
                 models={
-                    "gguf-model": ModelSettings(model_path="/models/test.gguf", backend="gguf"),
+                    "gguf-model": ModelSettings(model_path="/models/test.gguf", backend="llama_cpp"),
                 },
             ),
         )
@@ -915,11 +915,11 @@ class ModelRouterEngineTests(unittest.TestCase):
         settings = AppSettings(
             service=ServiceSettings(),
             engine=EngineSettings(
-                backend="gguf",
+                backend="llama_cpp",
                 models={
                     "gguf-model": ModelSettings(
                         model_path="/models/test.gguf",
-                        backend="gguf",
+                        backend="llama_cpp",
                         enabled=False,
                         gguf_n_ctx=4096,
                         gguf_flash_attn="off",
@@ -963,7 +963,7 @@ class ModelRouterEngineTests(unittest.TestCase):
                 ),
             )
 
-        self.assertEqual(captured["backend"], "gguf")
+        self.assertEqual(captured["backend"], "llama_cpp")
         self.assertEqual(captured["replica_ids"], ["gguf-model#1"])
         self.assertEqual(captured["gguf_n_ctx"], 32768)
         self.assertEqual(captured["gguf_flash_attn"], "auto")
@@ -1284,9 +1284,9 @@ class ModelRouterEngineTests(unittest.TestCase):
         settings = AppSettings(
             service=ServiceSettings(),
             engine=EngineSettings(
-                backend="gguf",
+                backend="llama_cpp",
                 models={
-                    "gguf-model": ModelSettings(model_path="/models/test.gguf", backend="gguf"),
+                    "gguf-model": ModelSettings(model_path="/models/test.gguf", backend="llama_cpp"),
                 },
             ),
         )
@@ -1314,9 +1314,9 @@ class ModelRouterEngineTests(unittest.TestCase):
         settings = AppSettings(
             service=ServiceSettings(),
             engine=EngineSettings(
-                backend="gguf",
+                backend="llama_cpp",
                 models={
-                    "gguf-model": ModelSettings(model_path="/models/test.gguf", backend="gguf", enabled=False),
+                    "gguf-model": ModelSettings(model_path="/models/test.gguf", backend="llama_cpp", enabled=False),
                 },
             ),
         )
@@ -1328,16 +1328,16 @@ class ModelRouterEngineTests(unittest.TestCase):
 
         self.assertEqual(
             str(exc_info.exception),
-            "unsupported load override for gguf backend: exllama_cache_size",
+            "unsupported load override for llama_cpp backend: exllama_cache_size",
         )
 
     def test_load_model_rejects_invalid_gguf_cache_type_override(self) -> None:
         settings = AppSettings(
             service=ServiceSettings(),
             engine=EngineSettings(
-                backend="gguf",
+                backend="llama_cpp",
                 models={
-                    "gguf-model": ModelSettings(model_path="/models/test.gguf", backend="gguf", enabled=False),
+                    "gguf-model": ModelSettings(model_path="/models/test.gguf", backend="llama_cpp", enabled=False),
                 },
             ),
         )
@@ -1356,9 +1356,9 @@ class ModelRouterEngineTests(unittest.TestCase):
         settings = AppSettings(
             service=ServiceSettings(),
             engine=EngineSettings(
-                backend="gguf",
+                backend="llama_cpp",
                 models={
-                    "gguf-model": ModelSettings(model_path="/models/test.gguf", backend="gguf", enabled=False),
+                    "gguf-model": ModelSettings(model_path="/models/test.gguf", backend="llama_cpp", enabled=False),
                 },
             ),
         )
@@ -1377,9 +1377,9 @@ class ModelRouterEngineTests(unittest.TestCase):
         settings = AppSettings(
             service=ServiceSettings(),
             engine=EngineSettings(
-                backend="gguf",
+                backend="llama_cpp",
                 models={
-                    "gguf-model": ModelSettings(model_path="/models/test.gguf", backend="gguf", enabled=False),
+                    "gguf-model": ModelSettings(model_path="/models/test.gguf", backend="llama_cpp", enabled=False),
                 },
             ),
         )

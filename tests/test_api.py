@@ -384,9 +384,9 @@ class ApiTests(unittest.TestCase):
                 (
                     "{\n"
                     '  "engine": {\n'
-                    '    "backend": "gguf",\n'
+                    '    "backend": "llama_cpp",\n'
                     '    "models": {\n'
-                    '      "gguf-model": {"model_path": "/tmp/test.gguf", "enabled": false, "backend": "gguf"}\n'
+                    '      "gguf-model": {"model_path": "/tmp/test.gguf", "enabled": false, "backend": "llama_cpp"}\n'
                     "    }\n"
                     "  }\n"
                     "}\n"
@@ -415,7 +415,7 @@ class ApiTests(unittest.TestCase):
                         captured["load_request"] = load_request
                         return {
                             "name": model_name,
-                            "resolved_backend": "gguf",
+                            "resolved_backend": "llama_cpp",
                             "configured_enabled": False,
                             "runtime_state": "loaded",
                             "is_loaded": True,
@@ -508,7 +508,7 @@ class ApiTests(unittest.TestCase):
                             },
                             "definition": {
                                 "model_path": "/tmp/test.gguf",
-                                "backend": "gguf",
+                                "backend": "llama_cpp",
                                 "enabled": False,
                                 "gguf_n_ctx": 4096,
                                 "gguf_flash_attn": "auto",
@@ -634,9 +634,9 @@ class ApiTests(unittest.TestCase):
                 (
                     "{\n"
                     '  "engine": {\n'
-                    '    "backend": "gguf",\n'
+                    '    "backend": "llama_cpp",\n'
                     '    "models": {\n'
-                    '      "gguf-model": {"model_path": "/tmp/test.gguf", "enabled": false, "backend": "gguf"}\n'
+                    '      "gguf-model": {"model_path": "/tmp/test.gguf", "enabled": false, "backend": "llama_cpp"}\n'
                     "    }\n"
                     "  }\n"
                     "}\n"
@@ -660,7 +660,7 @@ class ApiTests(unittest.TestCase):
 
                     def load_model(self, model_name: str, settings, load_request=None) -> dict[str, object]:
                         del model_name, settings, load_request
-                        raise ValueError("unsupported load override for gguf backend: exllama_cache_size")
+                        raise ValueError("unsupported load override for llama_cpp backend: exllama_cache_size")
 
                     def unload_model(self, model_name: str, settings) -> dict[str, object]:
                         del model_name, settings
@@ -687,7 +687,7 @@ class ApiTests(unittest.TestCase):
             {
                 "code": "invalid_load_request",
                 "model": "gguf-model",
-                "message": "unsupported load override for gguf backend: exllama_cache_size",
+                "message": "unsupported load override for llama_cpp backend: exllama_cache_size",
             },
         )
 

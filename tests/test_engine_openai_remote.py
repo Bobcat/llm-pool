@@ -15,7 +15,7 @@ if HAS_PYDANTIC:
     from app.config import EngineSettings
     from app.config import ModelSettings
     from app.engine.common import ResolvedDecoding
-    import app.engine.openai_compatible as openai_compatible_module
+    import app.engine.openai_remote as openai_remote_module
     from app.schemas import DecodingParams
     from app.schemas import ResponseRequest
 
@@ -38,7 +38,7 @@ class FakeResponse:
 
 
 @unittest.skipUnless(HAS_PYDANTIC, "pydantic not installed")
-class OpenAICompatibleEngineTests(unittest.TestCase):
+class OpenAIRemoteEngineTests(unittest.TestCase):
     def test_complete_posts_chat_completion_and_extracts_usage(self) -> None:
         settings = AppSettings(
             engine=EngineSettings(
@@ -51,7 +51,7 @@ class OpenAICompatibleEngineTests(unittest.TestCase):
                 models={
                     "remote-model": ModelSettings(
                         model_path=None,
-                        backend="openai_compatible",
+                        backend="openai_remote",
                         remote_api_kind="chat_completions",
                         remote_base_url="https://api.example.com/v1/",
                         remote_api_key_env="EXAMPLE_API_KEY",
@@ -89,8 +89,8 @@ class OpenAICompatibleEngineTests(unittest.TestCase):
         previous = os.environ.get("EXAMPLE_API_KEY")
         os.environ["EXAMPLE_API_KEY"] = "secret"
         try:
-            with mock.patch.object(openai_compatible_module, "urlopen", side_effect=fake_urlopen):
-                engine = openai_compatible_module.OpenAICompatibleEngine(settings)
+            with mock.patch.object(openai_remote_module, "urlopen", side_effect=fake_urlopen):
+                engine = openai_remote_module.OpenAIRemoteEngine(settings)
                 result = engine.complete(
                     ResponseRequest(
                         model="remote-model",
@@ -138,13 +138,13 @@ class OpenAICompatibleEngineTests(unittest.TestCase):
         )
 
     def test_remote_thinking_request_override_takes_precedence(self) -> None:
-        engine = openai_compatible_module.OpenAICompatibleEngine.__new__(
-            openai_compatible_module.OpenAICompatibleEngine
+        engine = openai_remote_module.OpenAIRemoteEngine.__new__(
+            openai_remote_module.OpenAIRemoteEngine
         )
-        runtime = openai_compatible_module.OpenAICompatibleModelRuntime(
+        runtime = openai_remote_module.OpenAIRemoteModelRuntime(
             config=ModelSettings(
                 model_path=None,
-                backend="openai_compatible",
+                backend="openai_remote",
                 remote_thinking="disabled",
             ),
             base_url="https://api.example.com/v1",
@@ -174,13 +174,13 @@ class OpenAICompatibleEngineTests(unittest.TestCase):
         self.assertEqual(payload["thinking"], {"type": "enabled"})
 
     def test_kimi_thinking_omits_non_one_temperature(self) -> None:
-        engine = openai_compatible_module.OpenAICompatibleEngine.__new__(
-            openai_compatible_module.OpenAICompatibleEngine
+        engine = openai_remote_module.OpenAIRemoteEngine.__new__(
+            openai_remote_module.OpenAIRemoteEngine
         )
-        runtime = openai_compatible_module.OpenAICompatibleModelRuntime(
+        runtime = openai_remote_module.OpenAIRemoteModelRuntime(
             config=ModelSettings(
                 model_path=None,
-                backend="openai_compatible",
+                backend="openai_remote",
                 remote_thinking="disabled",
             ),
             base_url="https://api.moonshot.ai/v1",
@@ -212,13 +212,13 @@ class OpenAICompatibleEngineTests(unittest.TestCase):
         self.assertEqual(payload["thinking"], {"type": "enabled"})
 
     def test_kimi_disabled_thinking_omits_unsupported_sampling_values(self) -> None:
-        engine = openai_compatible_module.OpenAICompatibleEngine.__new__(
-            openai_compatible_module.OpenAICompatibleEngine
+        engine = openai_remote_module.OpenAIRemoteEngine.__new__(
+            openai_remote_module.OpenAIRemoteEngine
         )
-        runtime = openai_compatible_module.OpenAICompatibleModelRuntime(
+        runtime = openai_remote_module.OpenAIRemoteModelRuntime(
             config=ModelSettings(
                 model_path=None,
-                backend="openai_compatible",
+                backend="openai_remote",
                 remote_thinking="disabled",
             ),
             base_url="https://api.moonshot.ai/v1",
@@ -250,12 +250,12 @@ class OpenAICompatibleEngineTests(unittest.TestCase):
         self.assertEqual(payload["thinking"], {"type": "disabled"})
 
     def test_build_runtime_requires_api_key_environment_variable(self) -> None:
-        engine = openai_compatible_module.OpenAICompatibleEngine.__new__(
-            openai_compatible_module.OpenAICompatibleEngine
+        engine = openai_remote_module.OpenAIRemoteEngine.__new__(
+            openai_remote_module.OpenAIRemoteEngine
         )
         settings = ModelSettings(
             model_path=None,
-            backend="openai_compatible",
+            backend="openai_remote",
             remote_api_kind="chat_completions",
             remote_base_url="https://api.example.com/v1",
             remote_api_key_env="MISSING_API_KEY",
@@ -292,9 +292,9 @@ class OpenAICompatibleEngineTests(unittest.TestCase):
             ),
         )
 
-        mapped = openai_compatible_module.OpenAICompatibleEngine._map_http_error(
-            openai_compatible_module.OpenAICompatibleEngine.__new__(
-                openai_compatible_module.OpenAICompatibleEngine
+        mapped = openai_remote_module.OpenAIRemoteEngine._map_http_error(
+            openai_remote_module.OpenAIRemoteEngine.__new__(
+                openai_remote_module.OpenAIRemoteEngine
             ),
             exc,
         )

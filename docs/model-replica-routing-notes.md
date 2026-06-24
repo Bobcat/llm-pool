@@ -103,14 +103,14 @@ Example:
     "models": {
       "gemma_translate": {
         "model_path": "/models/gemma-2b-q8.gguf",
-        "backend": "gguf",
+        "backend": "llama_cpp",
         "gguf_n_ctx": 4096,
         "replicas": 3,
         "replica_max": 4
       },
       "gemma_topics_longctx": {
         "model_path": "/models/gemma-2b-q8.gguf",
-        "backend": "gguf",
+        "backend": "llama_cpp",
         "gguf_n_ctx": 16384,
         "replicas": 1,
         "replica_max": 1
@@ -273,7 +273,7 @@ K copies of the weights.
 
 The more efficient path is backend-native concurrency: one weight copy serving
 many in-flight requests through continuous batching. vLLM already works this
-way. llama.cpp can also do it, but the GGUF backend does not expose it yet — it
+way. llama.cpp can also do it, but the llama_cpp backend does not expose it yet — it
 constructs the runtime with `n_ctx` only and serializes generation with a lock,
 so it is effectively single-sequence today.
 
@@ -302,11 +302,11 @@ n_parallel = 5
 
 #### Intended direction
 
-When GGUF concurrency is taken seriously, the backend should gain an
+When llama_cpp concurrency is taken seriously, the backend should gain an
 `n_parallel` (slot count) knob, set `n_ctx = n_parallel * per_request_ctx`, and
 drop the per-runtime serialization lock so slots decode concurrently. That
 backend-native path is the proper replacement for the replica workaround for
-GGUF; replicas remain useful where a single weight copy cannot be shared (for
+llama_cpp; replicas remain useful where a single weight copy cannot be shared (for
 example heterogeneous load profiles, or backends without batching support).
 
 This is a backend-internals concern and stays behind the same runtime adapter

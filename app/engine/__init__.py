@@ -18,12 +18,12 @@ from .ct2 import Ct2Engine
 from .ct2 import Ct2ModelRuntime
 from .exllamav3 import ExLlamaV3Engine
 from .exllamav3 import ExLlamaV3ModelRuntime
-from .llamacpp import LlamaCppEngine
-from .llamacpp import LlamaCppModelRuntime
+from .llama_cpp import LlamaCppEngine
+from .llama_cpp import LlamaCppModelRuntime
 from .llama_server import LlamaServerEngine
 from .llama_server import LlamaServerModelRuntime
-from .openai_compatible import OpenAICompatibleEngine
-from .openai_compatible import OpenAICompatibleModelRuntime
+from .openai_remote import OpenAIRemoteEngine
+from .openai_remote import OpenAIRemoteModelRuntime
 from .router import ModelRouterEngine
 from .stub import StubEngine
 from .vllm import VllmEngine

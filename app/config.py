@@ -171,7 +171,7 @@ def load_settings(path: str | Path | None = None) -> AppSettings:
                 backend = parsed_backend
         resolved_backend = backend or default_backend
         model_path = _coerce_optional_str(model_payload.get("model_path"))
-        if model_path is None and resolved_backend not in {"openai_compatible", "vllm", "vllm_serve"}:
+        if model_path is None and resolved_backend not in {"openai_remote", "vllm", "vllm_serve"}:
             continue
         cache_quant_value = model_payload.get("exllama_cache_quant")
         cache_quant = None

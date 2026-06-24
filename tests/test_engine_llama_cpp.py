@@ -12,7 +12,7 @@ if HAS_PYDANTIC:
     from app.config import DecodingDefaults
     from app.config import ModelSettings
     from app.engine.common import BackendExecutionError
-    import app.engine.llamacpp as llamacpp_module
+    import app.engine.llama_cpp as llama_cpp_module
     from app.schemas import DecodingParams
     from app.schemas import ResponseRequest
 
@@ -20,7 +20,7 @@ if HAS_PYDANTIC:
 @unittest.skipUnless(HAS_PYDANTIC, "pydantic not installed")
 class LlamaCppEngineTests(unittest.TestCase):
     def test_render_prompt_qwen3_without_thinking(self) -> None:
-        engine = llamacpp_module.LlamaCppEngine.__new__(llamacpp_module.LlamaCppEngine)
+        engine = llama_cpp_module.LlamaCppEngine.__new__(llama_cpp_module.LlamaCppEngine)
 
         result = engine._render_prompt(
             prompt_format="qwen3_template",
@@ -61,15 +61,15 @@ class LlamaCppEngineTests(unittest.TestCase):
             def token_eos(self):
                 return 999
 
-        runtime = llamacpp_module.LlamaCppModelRuntime(
+        runtime = llama_cpp_module.LlamaCppModelRuntime(
             config=ModelSettings(
                 model_path="/models/test.gguf",
-                backend="gguf",
+                backend="llama_cpp",
                 prompt_format="generic",
             ),
             llm=FakeLlama(),
         )
-        engine = llamacpp_module.LlamaCppEngine.__new__(llamacpp_module.LlamaCppEngine)
+        engine = llama_cpp_module.LlamaCppEngine.__new__(llama_cpp_module.LlamaCppEngine)
         engine.decoding_defaults = DecodingDefaults(
             beam_size=1,
             top_k=40,
@@ -107,11 +107,11 @@ class LlamaCppEngineTests(unittest.TestCase):
             def token_eos(self):
                 return 999
 
-        runtime = llamacpp_module.LlamaCppModelRuntime(
-            config=ModelSettings(model_path="/models/t.gguf", backend="gguf"),
+        runtime = llama_cpp_module.LlamaCppModelRuntime(
+            config=ModelSettings(model_path="/models/t.gguf", backend="llama_cpp"),
             llm=FakeLlama(),
         )
-        engine = llamacpp_module.LlamaCppEngine.__new__(llamacpp_module.LlamaCppEngine)
+        engine = llama_cpp_module.LlamaCppEngine.__new__(llama_cpp_module.LlamaCppEngine)
         engine.decoding_defaults = DecodingDefaults(max_tokens=100)
         engine._models = {"m": runtime}
 
@@ -134,11 +134,11 @@ class LlamaCppEngineTests(unittest.TestCase):
             def token_eos(self):
                 return 999
 
-        runtime = llamacpp_module.LlamaCppModelRuntime(
-            config=ModelSettings(model_path="/models/t.gguf", backend="gguf"),
+        runtime = llama_cpp_module.LlamaCppModelRuntime(
+            config=ModelSettings(model_path="/models/t.gguf", backend="llama_cpp"),
             llm=FakeLlama(),
         )
-        engine = llamacpp_module.LlamaCppEngine.__new__(llamacpp_module.LlamaCppEngine)
+        engine = llama_cpp_module.LlamaCppEngine.__new__(llama_cpp_module.LlamaCppEngine)
         engine.decoding_defaults = DecodingDefaults(max_tokens=5)
         engine._models = {"m": runtime}
 
@@ -166,11 +166,11 @@ class LlamaCppEngineTests(unittest.TestCase):
             def token_eos(self):
                 return 999
 
-        runtime = llamacpp_module.LlamaCppModelRuntime(
-            config=ModelSettings(model_path="/models/t.gguf", backend="gguf"),
+        runtime = llama_cpp_module.LlamaCppModelRuntime(
+            config=ModelSettings(model_path="/models/t.gguf", backend="llama_cpp"),
             llm=FakeLlama(),
         )
-        engine = llamacpp_module.LlamaCppEngine.__new__(llamacpp_module.LlamaCppEngine)
+        engine = llama_cpp_module.LlamaCppEngine.__new__(llama_cpp_module.LlamaCppEngine)
         engine.decoding_defaults = DecodingDefaults(stop=["</stop>"])
         engine._models = {"m": runtime}
 
@@ -193,11 +193,11 @@ class LlamaCppEngineTests(unittest.TestCase):
             def token_eos(self):
                 return 999
 
-        runtime = llamacpp_module.LlamaCppModelRuntime(
-            config=ModelSettings(model_path="/models/t.gguf", backend="gguf"),
+        runtime = llama_cpp_module.LlamaCppModelRuntime(
+            config=ModelSettings(model_path="/models/t.gguf", backend="llama_cpp"),
             llm=FakeLlama(),
         )
-        engine = llamacpp_module.LlamaCppEngine.__new__(llamacpp_module.LlamaCppEngine)
+        engine = llama_cpp_module.LlamaCppEngine.__new__(llama_cpp_module.LlamaCppEngine)
         engine.decoding_defaults = DecodingDefaults()
         engine._models = {"gguf-model": runtime}
         request = ResponseRequest(
@@ -206,7 +206,7 @@ class LlamaCppEngineTests(unittest.TestCase):
             decoding=DecodingParams(beam_size=7),
         )
 
-        with mock.patch.object(llamacpp_module.LOGGER, "info") as info_log:
+        with mock.patch.object(llama_cpp_module.LOGGER, "info") as info_log:
             result = engine.complete(request)
 
         self.assertEqual(result.text, "done")
@@ -223,15 +223,15 @@ class LlamaCppEngineTests(unittest.TestCase):
                     "usage": {"prompt_tokens": 12, "completion_tokens": 1},
                 }
 
-        runtime = llamacpp_module.LlamaCppModelRuntime(
+        runtime = llama_cpp_module.LlamaCppModelRuntime(
             config=ModelSettings(
                 model_path="/models/gemma4.gguf",
-                backend="gguf",
+                backend="llama_cpp",
                 prompt_format="gemma4_template",
             ),
             llm=FakeLlama(),
         )
-        engine = llamacpp_module.LlamaCppEngine.__new__(llamacpp_module.LlamaCppEngine)
+        engine = llama_cpp_module.LlamaCppEngine.__new__(llama_cpp_module.LlamaCppEngine)
         engine.decoding_defaults = DecodingDefaults(
             top_k=12,
             top_p=0.8,
@@ -283,16 +283,16 @@ class LlamaCppEngineTests(unittest.TestCase):
                     "usage": {"prompt_tokens": 12, "completion_tokens": 1},
                 }
 
-        runtime = llamacpp_module.LlamaCppModelRuntime(
+        runtime = llama_cpp_module.LlamaCppModelRuntime(
             config=ModelSettings(
                 model_path="/models/gemma4.gguf",
-                backend="gguf",
+                backend="llama_cpp",
                 prompt_format="gemma4_template",
                 enable_thinking=False,
             ),
             llm=FakeLlama(),
         )
-        engine = llamacpp_module.LlamaCppEngine.__new__(llamacpp_module.LlamaCppEngine)
+        engine = llama_cpp_module.LlamaCppEngine.__new__(llama_cpp_module.LlamaCppEngine)
         engine.decoding_defaults = DecodingDefaults(max_tokens=9)
         engine._models = {"gemma4-gguf": runtime}
 
@@ -318,15 +318,15 @@ class LlamaCppEngineTests(unittest.TestCase):
                     "usage": {"prompt_tokens": 21, "completion_tokens": 2},
                 }
 
-        runtime = llamacpp_module.LlamaCppModelRuntime(
+        runtime = llama_cpp_module.LlamaCppModelRuntime(
             config=ModelSettings(
                 model_path="/models/generic.gguf",
-                backend="gguf",
+                backend="llama_cpp",
                 prompt_format="generic",
             ),
             llm=FakeLlama(),
         )
-        engine = llamacpp_module.LlamaCppEngine.__new__(llamacpp_module.LlamaCppEngine)
+        engine = llama_cpp_module.LlamaCppEngine.__new__(llama_cpp_module.LlamaCppEngine)
         engine.decoding_defaults = DecodingDefaults(
             top_k=3,
             top_p=0.7,
@@ -373,15 +373,15 @@ class LlamaCppEngineTests(unittest.TestCase):
                     "usage": {"prompt_tokens": 5, "completion_tokens": 1},
                 }
 
-        runtime = llamacpp_module.LlamaCppModelRuntime(
+        runtime = llama_cpp_module.LlamaCppModelRuntime(
             config=ModelSettings(
                 model_path="/models/gemma4.gguf",
-                backend="gguf",
+                backend="llama_cpp",
                 prompt_format="gemma4_template",
             ),
             llm=FakeLlama(),
         )
-        engine = llamacpp_module.LlamaCppEngine.__new__(llamacpp_module.LlamaCppEngine)
+        engine = llama_cpp_module.LlamaCppEngine.__new__(llama_cpp_module.LlamaCppEngine)
         engine.decoding_defaults = DecodingDefaults()
         engine._models = {"gemma4-gguf": runtime}
 
@@ -407,15 +407,15 @@ class LlamaCppEngineTests(unittest.TestCase):
             def create_chat_completion(self, **kwargs):
                 raise AssertionError("chat completion should not be called")
 
-        runtime = llamacpp_module.LlamaCppModelRuntime(
+        runtime = llama_cpp_module.LlamaCppModelRuntime(
             config=ModelSettings(
                 model_path="/models/generic.gguf",
-                backend="gguf",
+                backend="llama_cpp",
                 prompt_format="generic",
             ),
             llm=FakeLlama(),
         )
-        engine = llamacpp_module.LlamaCppEngine.__new__(llamacpp_module.LlamaCppEngine)
+        engine = llama_cpp_module.LlamaCppEngine.__new__(llama_cpp_module.LlamaCppEngine)
         engine.decoding_defaults = DecodingDefaults()
         engine._models = {"generic-gguf": runtime}
 
@@ -448,15 +448,15 @@ class LlamaCppEngineTests(unittest.TestCase):
             def create_chat_completion(self, **kwargs):
                 raise AssertionError("chat completion should not be called")
 
-        runtime = llamacpp_module.LlamaCppModelRuntime(
+        runtime = llama_cpp_module.LlamaCppModelRuntime(
             config=ModelSettings(
                 model_path="/models/translategemma.gguf",
-                backend="gguf",
+                backend="llama_cpp",
                 prompt_format="translategemma_template",
             ),
             llm=FakeLlama(),
         )
-        engine = llamacpp_module.LlamaCppEngine.__new__(llamacpp_module.LlamaCppEngine)
+        engine = llama_cpp_module.LlamaCppEngine.__new__(llama_cpp_module.LlamaCppEngine)
         engine.decoding_defaults = DecodingDefaults()
         engine._models = {"translategemma": runtime}
 
@@ -480,15 +480,15 @@ class LlamaCppEngineTests(unittest.TestCase):
                     "usage": {"prompt_tokens": 81, "completion_tokens": 7},
                 }
 
-        runtime = llamacpp_module.LlamaCppModelRuntime(
+        runtime = llama_cpp_module.LlamaCppModelRuntime(
             config=ModelSettings(
                 model_path="/models/translategemma.gguf",
-                backend="gguf",
+                backend="llama_cpp",
                 prompt_format="translategemma_template",
             ),
             llm=FakeLlama(),
         )
-        engine = llamacpp_module.LlamaCppEngine.__new__(llamacpp_module.LlamaCppEngine)
+        engine = llama_cpp_module.LlamaCppEngine.__new__(llama_cpp_module.LlamaCppEngine)
         engine.decoding_defaults = DecodingDefaults(
             top_k=64,
             top_p=0.95,
@@ -541,15 +541,15 @@ class LlamaCppEngineTests(unittest.TestCase):
                     "usage": {"prompt_tokens": 121, "completion_tokens": 5},
                 }
 
-        runtime = llamacpp_module.LlamaCppModelRuntime(
+        runtime = llama_cpp_module.LlamaCppModelRuntime(
             config=ModelSettings(
                 model_path="/models/translategemma.gguf",
-                backend="gguf",
+                backend="llama_cpp",
                 prompt_format="translategemma_template",
             ),
             llm=FakeLlama(),
         )
-        engine = llamacpp_module.LlamaCppEngine.__new__(llamacpp_module.LlamaCppEngine)
+        engine = llama_cpp_module.LlamaCppEngine.__new__(llama_cpp_module.LlamaCppEngine)
         engine.decoding_defaults = DecodingDefaults()
         engine._models = {"translategemma": runtime}
 
@@ -577,15 +577,15 @@ class LlamaCppEngineTests(unittest.TestCase):
                     "usage": {"prompt_tokens": 98, "completion_tokens": 6},
                 }
 
-        runtime = llamacpp_module.LlamaCppModelRuntime(
+        runtime = llama_cpp_module.LlamaCppModelRuntime(
             config=ModelSettings(
                 model_path="/models/translategemma.gguf",
-                backend="gguf",
+                backend="llama_cpp",
                 prompt_format="translategemma_template",
             ),
             llm=FakeLlama(),
         )
-        engine = llamacpp_module.LlamaCppEngine.__new__(llamacpp_module.LlamaCppEngine)
+        engine = llama_cpp_module.LlamaCppEngine.__new__(llama_cpp_module.LlamaCppEngine)
         engine.decoding_defaults = DecodingDefaults()
         engine._models = {"translategemma": runtime}
 
@@ -608,15 +608,15 @@ class LlamaCppEngineTests(unittest.TestCase):
             def create_chat_completion(self, **kwargs):
                 raise AssertionError("chat completion should not be called")
 
-        runtime = llamacpp_module.LlamaCppModelRuntime(
+        runtime = llama_cpp_module.LlamaCppModelRuntime(
             config=ModelSettings(
                 model_path="/models/translategemma.gguf",
-                backend="gguf",
+                backend="llama_cpp",
                 prompt_format="translategemma_template",
             ),
             llm=FakeLlama(),
         )
-        engine = llamacpp_module.LlamaCppEngine.__new__(llamacpp_module.LlamaCppEngine)
+        engine = llama_cpp_module.LlamaCppEngine.__new__(llama_cpp_module.LlamaCppEngine)
         engine.decoding_defaults = DecodingDefaults()
         engine._models = {"translategemma": runtime}
 
@@ -642,13 +642,13 @@ class LlamaCppEngineTests(unittest.TestCase):
 
         settings = ModelSettings(
             model_path="/models/test.gguf",
-            backend="gguf",
+            backend="llama_cpp",
             gguf_n_ctx=8192,
             gguf_flash_attn="off",
             gguf_type_k="q8_0",
             gguf_type_v="q4_0",
         )
-        engine = llamacpp_module.LlamaCppEngine.__new__(llamacpp_module.LlamaCppEngine)
+        engine = llama_cpp_module.LlamaCppEngine.__new__(llama_cpp_module.LlamaCppEngine)
 
         with mock.patch.dict(sys.modules, {"llama_cpp": fake_module}):
             runtime = engine._build_runtime(settings)
@@ -679,10 +679,10 @@ class LlamaCppEngineTests(unittest.TestCase):
 
         settings = ModelSettings(
             model_path="/models/test.gguf",
-            backend="gguf",
+            backend="llama_cpp",
             gguf_flash_attn="auto",
         )
-        engine = llamacpp_module.LlamaCppEngine.__new__(llamacpp_module.LlamaCppEngine)
+        engine = llama_cpp_module.LlamaCppEngine.__new__(llama_cpp_module.LlamaCppEngine)
 
         with mock.patch.dict(
             sys.modules,

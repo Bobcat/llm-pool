@@ -29,7 +29,7 @@ if HAS_PYDANTIC:
     from app.config import ModelSettings
     from app.config import load_settings
     from app.engine import BackendExecutionError
-    import app.engine.openai_compatible as openai_compatible_module
+    import app.engine.openai_remote as openai_remote_module
     from app.engine.stub import StubEngine
     from app.schemas import ImageContent
     from app.schemas import ImageUrlSpec
@@ -212,7 +212,7 @@ class ConfigModalitiesTests(unittest.TestCase):
 
 
 @unittest.skipUnless(HAS_PYDANTIC, "pydantic not installed")
-class OpenAICompatibleMultimodalPayloadTests(unittest.TestCase):
+class OpenAIRemoteMultimodalPayloadTests(unittest.TestCase):
     def _build_engine_and_capture(self, request: ResponseRequest):
         settings = AppSettings(
             engine=EngineSettings(
@@ -220,7 +220,7 @@ class OpenAICompatibleMultimodalPayloadTests(unittest.TestCase):
                 models={
                     "remote-model": ModelSettings(
                         model_path=None,
-                        backend="openai_compatible",
+                        backend="openai_remote",
                         remote_api_kind="chat_completions",
                         remote_base_url="https://api.example.com/v1/",
                         remote_api_key_env="EXAMPLE_API_KEY",
@@ -245,8 +245,8 @@ class OpenAICompatibleMultimodalPayloadTests(unittest.TestCase):
         previous = os.environ.get("EXAMPLE_API_KEY")
         os.environ["EXAMPLE_API_KEY"] = "secret"
         try:
-            with mock.patch.object(openai_compatible_module, "urlopen", side_effect=fake_urlopen):
-                engine = openai_compatible_module.OpenAICompatibleEngine(settings)
+            with mock.patch.object(openai_remote_module, "urlopen", side_effect=fake_urlopen):
+                engine = openai_remote_module.OpenAIRemoteEngine(settings)
                 engine.complete(request)
         finally:
             if previous is None:
@@ -385,7 +385,7 @@ class AdminCapabilitiesExposureTests(unittest.TestCase):
     def test_stub_admin_payload_reports_gguf_chat_prompt_multi_turn_capability(self) -> None:
         settings = AppSettings(
             engine=EngineSettings(
-                backend="gguf",
+                backend="llama_cpp",
                 models={
                     "m": ModelSettings(
                         model_path="/tmp/m.gguf",
@@ -435,7 +435,7 @@ class AdminCapabilitiesExposureTests(unittest.TestCase):
     def test_stub_admin_payload_reports_gguf_thinking_modes_for_gemma4(self) -> None:
         settings = AppSettings(
             engine=EngineSettings(
-                backend="gguf",
+                backend="llama_cpp",
                 models={
                     "m": ModelSettings(
                         model_path="/tmp/m.gguf",
@@ -460,7 +460,7 @@ class AdminCapabilitiesExposureTests(unittest.TestCase):
     def test_stub_admin_payload_keeps_translategemma_single_turn(self) -> None:
         settings = AppSettings(
             engine=EngineSettings(
-                backend="gguf",
+                backend="llama_cpp",
                 models={
                     "m": ModelSettings(
                         model_path="/tmp/m.gguf",

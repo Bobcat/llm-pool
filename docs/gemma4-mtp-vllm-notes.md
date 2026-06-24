@@ -30,7 +30,7 @@ Current reality note:
   VRAM than the explicit KV-cache budget suggests.
 - Beyond this note's scope, the same backend also gained multimodal (image)
   input support, used by the image-description / OCR-grounding work.
-- A separate `backend: "llama_server"` now exists for GGUF models that need
+- A separate `backend: "llama_server"` now exists for llama_cpp models that need
   native llama-server features such as `--mmproj` and MTP draft flags. That is
   a separate local backend path and does not change this note's vLLM-specific
   architecture.
@@ -148,9 +148,9 @@ GGUF should not be the first Gemma 4 MTP target for the vLLM path.
 
 vLLM has GGUF loading support, but vLLM documents it as experimental and under-optimized. For Gemma 4 MTP, the first path should use official Hugging Face target and assistant checkpoints.
 
-The existing `gguf` backend should remain the llama.cpp path.
+The existing `llama_cpp` backend should remain the llama.cpp path.
 
-If llama.cpp later supports official Gemma 4 MTP well enough through GGUF, that should be handled as a separate enhancement to the existing `gguf` backend, not as part of the vLLM backend.
+If llama.cpp later supports official Gemma 4 MTP well enough through GGUF, that should be handled as a separate enhancement to the existing `llama_cpp` backend, not as part of the vLLM backend.
 
 ## Request Behavior
 

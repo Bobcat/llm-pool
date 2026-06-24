@@ -215,18 +215,18 @@ class ConfigTests(unittest.TestCase):
         self.assertEqual(model.exllama_max_q_size, 6)
         self.assertEqual(model.exllama_max_rq_tokens, 2048)
 
-    def test_load_settings_reads_gguf_backend_specific_fields(self) -> None:
+    def test_load_settings_reads_llama_cpp_backend_specific_fields(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             path = Path(tmpdir) / "settings.json"
             path.write_text(
                 (
                     "{\n"
                     '  "engine": {\n'
-                    '    "backend": "gguf",\n'
+                    '    "backend": "llama_cpp",\n'
                     '    "models": {\n'
                     '      "test-gguf": {\n'
                     '        "model_path": "/models/test.gguf",\n'
-                    '        "backend": "gguf",\n'
+                    '        "backend": "llama_cpp",\n'
                     '        "gguf_n_gpu_layers": 42,\n'
                     '        "gguf_n_ctx": 8192,\n'
                     '        "gguf_flash_attn": "off",\n'
@@ -243,14 +243,14 @@ class ConfigTests(unittest.TestCase):
             settings = load_settings(path)
 
         model = settings.engine.models["test-gguf"]
-        self.assertEqual(model.backend, "gguf")
+        self.assertEqual(model.backend, "llama_cpp")
         self.assertEqual(model.gguf_n_gpu_layers, 42)
         self.assertEqual(model.gguf_n_ctx, 8192)
         self.assertEqual(model.gguf_flash_attn, "off")
         self.assertEqual(model.gguf_type_k, "q8_0")
         self.assertEqual(model.gguf_type_v, "q4_0")
 
-    def test_load_settings_reads_openai_compatible_model_without_model_path(self) -> None:
+    def test_load_settings_reads_openai_remote_model_without_model_path(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             path = Path(tmpdir) / "settings.json"
             path.write_text(
@@ -260,7 +260,7 @@ class ConfigTests(unittest.TestCase):
                     '    "backend": "stub",\n'
                     '    "models": {\n'
                     '      "frontier-large": {\n'
-                    '        "backend": "openai_compatible",\n'
+                    '        "backend": "openai_remote",\n'
                     '        "remote_api_kind": "chat_completions",\n'
                     '        "remote_base_url": "https://api.example.com/v1",\n'
                     '        "remote_api_key_env": "EXAMPLE_API_KEY",\n'
@@ -282,7 +282,7 @@ class ConfigTests(unittest.TestCase):
 
         model = settings.engine.models["frontier-large"]
         self.assertIsNone(model.model_path)
-        self.assertEqual(model.backend, "openai_compatible")
+        self.assertEqual(model.backend, "openai_remote")
         self.assertEqual(model.remote_api_kind, "chat_completions")
         self.assertEqual(model.remote_base_url, "https://api.example.com/v1")
         self.assertEqual(model.remote_api_key_env, "EXAMPLE_API_KEY")

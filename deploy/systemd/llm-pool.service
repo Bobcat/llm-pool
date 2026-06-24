@@ -1,5 +1,5 @@
 [Unit]
-Description=llm-pool (conda-free, gguf + vllm)
+Description=llm-pool (conda-free, llama_cpp + vllm)
 After=network-online.target
 Wants=network-online.target
 

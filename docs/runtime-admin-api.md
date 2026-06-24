@@ -15,7 +15,7 @@ It is intentionally a v1 design:
 Current reality note:
 
 - this admin API is implemented and is the live control plane used by the workbench
-- runtime-only load overrides are implemented for `gguf`, `exllamav3`, `vllm`, `vllm_serve`, and `llama_server`
+- runtime-only load overrides are implemented for `llama_cpp`, `exllamav3`, `vllm`, `vllm_serve`, and `llama_server`
 - `llama_server` load/unload starts and stops a managed native `llama-server` subprocess; binary path, model path, library path, `mmproj`, draft model path, host, port, and extra native args stay in model config in v1
 - `vllm_serve` load/unload starts and stops a managed local `vllm serve` subprocess; binary path, target model id/path, library path, environment, host, port, API key, and extra CLI args stay in model config in v1
 - the live `load_constraints` payload remains the source of truth for UI controls when this note and implementation details drift
@@ -137,7 +137,7 @@ accepted only when the selected model advertises those values in
 
 ## TranslateGemma Request Notes
 
-GGUF models configured with `prompt_format: "translategemma_template"` use the official structured TranslateGemma request shape internally. They remain single-turn text models and continue to report `capabilities.multi_turn: false`.
+llama_cpp models configured with `prompt_format: "translategemma_template"` use the official structured TranslateGemma request shape internally. They remain single-turn text models and continue to report `capabilities.multi_turn: false`.
 
 Known-source requests should include both `source_lang_code` and `target_lang_code`.
 
@@ -158,7 +158,7 @@ Suggested response shape:
   "models": [
     {
       "name": "google_gemma-4-E2B-it-Q8_0-gguf",
-      "resolved_backend": "gguf",
+      "resolved_backend": "llama_cpp",
       "configured_enabled": true,
       "runtime_state": "loaded",
       "is_loaded": true,
@@ -236,7 +236,7 @@ Suggested response shape:
       },
       "definition": {
         "model_path": "/home/gunnar/models/google_gemma-4-E2B-it-Q8_0/google_gemma-4-E2B-it-Q8_0.gguf",
-        "backend": "gguf",
+        "backend": "llama_cpp",
         "prompt_format": "gemma4_template",
         "enabled": true,
         "replicas": 3,
@@ -268,8 +268,8 @@ Notes:
 - `vram_estimate_replica_count` is the replica count that the VRAM estimate was measured or derived for
 - `vram_estimate_source` is either `observed_load_delta`, `model_artifact_size`, or `unavailable`
 - `capabilities.modalities` lists which input modalities the model accepts (`["text"]` or `["text", "image"]`); a UI can use it to decide whether to allow image input for a model
-- `capabilities.multi_turn` reports whether the model accepts a multi-turn `messages` array on `POST /v1/responses`; this is `true` for `llama_server`, `vllm`, and `vllm_serve` models and for supported text-only GGUF chat prompt formats (`generic`, `mistral_template`, `qwen3_template`, `gemma4_template`), but remains `false` for GGUF `translategemma_template`
-- `capabilities.thinking_modes` lists accepted values for request-level `thinking`; models without a safe per-request control report only `["default"]`, while supported vLLM Gemma4/Qwen3, GGUF Gemma4, ExLlamaV3 Gemma4/Qwen3, CT2 Qwen3, and configured remote models report `["default", "enabled", "disabled"]`
+- `capabilities.multi_turn` reports whether the model accepts a multi-turn `messages` array on `POST /v1/responses`; this is `true` for `llama_server`, `vllm`, and `vllm_serve` models and for supported text-only `llama_cpp` chat prompt formats (`generic`, `mistral_template`, `qwen3_template`, `gemma4_template`), but remains `false` for `llama_cpp` `translategemma_template`
+- `capabilities.thinking_modes` lists accepted values for request-level `thinking`; models without a safe per-request control report only `["default"]`, while supported vLLM Gemma4/Qwen3, `llama_cpp` Gemma4, ExLlamaV3 Gemma4/Qwen3, CT2 Qwen3, and configured remote models report `["default", "enabled", "disabled"]`
 - `load_constraints` describes backend-specific live-load fields for UI controls
 - `load_recommendations` describes service-curated recommended presets and pairings for UI defaults
 - `load_override` reports the runtime-only override currently active on a loaded model
@@ -337,7 +337,7 @@ Example:
 
 In this case, the effective loaded value is `null`.
 
-For GGUF, the UI may interpret the effective cache type value as:
+For `llama_cpp` GGUF cache fields, the UI may interpret the effective cache type value as:
 
 - field absent in `load_override` and absent or `null` in `definition`: use `load_constraints.<field>.default`, currently `"f16"`
 - effective value `null`: use `load_constraints.<field>.default`, currently `"f16"`
@@ -356,7 +356,7 @@ The UI should parse `exllama_cache_quant` itself when it wants to display separa
 
 #### Current `load_constraints` Shapes
 
-GGUF:
+`llama_cpp` GGUF:
 
 ```json
 {
@@ -566,7 +566,7 @@ ExLlamaV3 recommended presets:
 }
 ```
 
-CT2, `openai_compatible`, and stub:
+CT2, `openai_remote`, and stub:
 
 ```json
 {}
@@ -639,7 +639,7 @@ Rules:
 Supported load override fields:
 
 - public model: `replicas`
-- GGUF: `gguf_n_ctx`, `gguf_flash_attn`, `gguf_type_k`, `gguf_type_v`
+- `llama_cpp`: `gguf_n_ctx`, `gguf_flash_attn`, `gguf_type_k`, `gguf_type_v`
 - ExLlamaV3: `exllama_cache_size`, `exllama_cache_quant`, `exllama_cache_k_bits`, `exllama_cache_v_bits`, `exllama_max_rq_tokens`
 - vLLM and vLLM Serve: `vllm_max_model_len`, `vllm_kv_cache_dtype`, `vllm_kv_cache_memory_bytes`, `vllm_max_pixels`, `vllm_speculative_method`, `vllm_speculative_model`, `vllm_num_speculative_tokens`
 - llama-server: `llama_server_n_ctx`, `llama_server_image_max_tokens`, `llama_server_spec_type`, `llama_server_spec_draft_n_max`, `llama_server_spec_draft_p_min`
@@ -787,7 +787,7 @@ llama-server load override notes:
 
 Upstream references for these backend-specific value sets:
 
-- GGUF `allowed_values` and default `f16` are based on the official `llama.cpp` server docs:
+- `llama_cpp` GGUF cache `allowed_values` and default `f16` are based on the official `llama.cpp` server docs:
   https://github.com/ggml-org/llama.cpp/blob/master/tools/server/README.md
 - ExLlamaV3 `k_bits`/`v_bits` allowed range `2..8` is based on the official ExLlamaV3 README, which documents `2-8 bit cache quantization`:
   https://github.com/turboderp-org/exllamav3
@@ -806,7 +806,7 @@ Suggested response shape:
 ```json
 {
   "name": "google_gemma-4-E2B-it-Q8_0-gguf",
-  "resolved_backend": "gguf",
+  "resolved_backend": "llama_cpp",
   "configured_enabled": false,
   "runtime_state": "loaded",
   "is_loaded": true,
@@ -874,7 +874,7 @@ Suggested response shape:
   },
   "definition": {
     "model_path": "/home/gunnar/models/google_gemma-4-E2B-it-Q8_0/google_gemma-4-E2B-it-Q8_0.gguf",
-    "backend": "gguf",
+    "backend": "llama_cpp",
     "prompt_format": "gemma4_template",
     "enabled": false,
     "replicas": 3,
@@ -914,7 +914,7 @@ Validation behavior:
   `llama_server_spec_type: "medusa"`
   `llama_server_spec_draft_n_max: 7`
   `llama_server_spec_draft_p_min: 1.5`
-  sending ExLlamaV3-only fields to a GGUF model
+  sending ExLlamaV3-only fields to a llama_cpp model
   sending llama-server-only fields to a vLLM model
   sending load overrides while the model is already loaded and not first unloading it
 - `409` still applies for runtime state conflicts such as loading or unloading transitions
@@ -940,7 +940,7 @@ Suggested response shape:
 ```json
 {
   "name": "google_gemma-4-E2B-it-Q8_0-gguf",
-  "resolved_backend": "gguf",
+  "resolved_backend": "llama_cpp",
   "configured_enabled": false,
   "runtime_state": "unloaded",
   "is_loaded": false,
@@ -958,7 +958,7 @@ Suggested response shape:
   "vram_estimate_source": "observed_load_delta",
   "definition": {
     "model_path": "/home/gunnar/models/google_gemma-4-E2B-it-Q8_0/google_gemma-4-E2B-it-Q8_0.gguf",
-    "backend": "gguf",
+    "backend": "llama_cpp",
     "device": "cuda",
     "prompt_format": "gemma4_template",
     "enabled": false,

@@ -68,7 +68,7 @@ class ResponseRequest(BaseModel):
     source_lang_code: str | None = Field(
         default=None,
         description=(
-            "Source language code for translation models. For GGUF TranslateGemma, "
+            "Source language code for translation models. For llama_cpp TranslateGemma, "
             "omit this field or use 'auto'/'mixed' to request mixed-source detection."
         ),
     )

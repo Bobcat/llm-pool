@@ -40,7 +40,7 @@
       },
       "google_gemma-4-E2B-it-Q8_0-gguf": {
         "model_path": "/home/gunnar/models/google_gemma-4-E2B-it-Q8_0/google_gemma-4-E2B-it-Q8_0.gguf",
-        "backend": "gguf",
+        "backend": "llama_cpp",
         "device": "cuda",
         "prompt_format": "gemma4_template",
         "enable_thinking": false,
@@ -50,7 +50,7 @@
       },
       "google_gemma-4-E2B-it-Q6_K-gguf": {
         "model_path": "/home/gunnar/models/google_gemma-4-E2B-it-Q6_K/google_gemma-4-E2B-it-Q6_K.gguf",
-        "backend": "gguf",
+        "backend": "llama_cpp",
         "device": "cuda",
         "prompt_format": "gemma4_template",
         "enable_thinking": false,
@@ -60,7 +60,7 @@
       },
       "google_gemma-4-E2B-it-Q5_K_M-gguf": {
         "model_path": "/home/gunnar/models/google_gemma-4-E2B-it-Q5_K_M/google_gemma-4-E2B-it-Q5_K_M.gguf",
-        "backend": "gguf",
+        "backend": "llama_cpp",
         "device": "cuda",
         "prompt_format": "gemma4_template",
         "enable_thinking": false,
@@ -72,7 +72,7 @@
       },
       "google_gemma-4-E2B-it-Q4_K_M-gguf": {
         "model_path": "/home/gunnar/models/google_gemma-4-E2B-it-Q4_K_M/google_gemma-4-E2B-it-Q4_K_M.gguf",
-        "backend": "gguf",
+        "backend": "llama_cpp",
         "device": "cuda",
         "prompt_format": "gemma4_template",
         "enable_thinking": false,
@@ -82,7 +82,7 @@
       },
       "google_gemma-4-E4B-it-Q8_0-gguf": {
         "model_path": "/home/gunnar/models/google_gemma-4-E4B-it-Q8_0/google_gemma-4-E4B-it-Q8_0.gguf",
-        "backend": "gguf",
+        "backend": "llama_cpp",
         "device": "cuda",
         "prompt_format": "gemma4_template",
         "enable_thinking": false,
@@ -92,7 +92,7 @@
       },
       "google_gemma-4-E4B-it-Q6_K-gguf": {
         "model_path": "/home/gunnar/models/google_gemma-4-E4B-it-Q6_K/google_gemma-4-E4B-it-Q6_K.gguf",
-        "backend": "gguf",
+        "backend": "llama_cpp",
         "device": "cuda",
         "prompt_format": "gemma4_template",
         "enable_thinking": false,
@@ -102,7 +102,7 @@
       },
       "google_gemma-4-E4B-it-Q5_K_M-gguf": {
         "model_path": "/home/gunnar/models/google_gemma-4-E4B-it-Q5_K_M/google_gemma-4-E4B-it-Q5_K_M.gguf",
-        "backend": "gguf",
+        "backend": "llama_cpp",
         "device": "cuda",
         "prompt_format": "gemma4_template",
         "enable_thinking": false,
@@ -112,7 +112,7 @@
       },
       "google_gemma-4-E4B-it-Q4_K_M-gguf": {
         "model_path": "/home/gunnar/models/google_gemma-4-E4B-it-Q4_K_M/google_gemma-4-E4B-it-Q4_K_M.gguf",
-        "backend": "gguf",
+        "backend": "llama_cpp",
         "device": "cuda",
         "prompt_format": "gemma4_template",
         "enable_thinking": false,
@@ -122,7 +122,7 @@
       },
       "google_gemma-4-26B-A4B-it-Q4_K_M-gguf": {
         "model_path": "/home/gunnar/models/google_gemma-4-26B-A4B-it-Q4_K_M/google_gemma-4-26B-A4B-it-Q4_K_M.gguf",
-        "backend": "gguf",
+        "backend": "llama_cpp",
         "device": "cuda",
         "prompt_format": "gemma4_template",
         "enable_thinking": false,
@@ -132,7 +132,7 @@
       },
       "google_gemma-4-31B-it-gguf": {
         "model_path": "/home/gunnar/models/gemma-4-31B-it-Q6_K_L/google_gemma-4-31B-it-Q6_K_L.gguf",
-        "backend": "gguf",
+        "backend": "llama_cpp",
         "device": "cuda",
         "prompt_format": "gemma4_template",
         "enable_thinking": false,
@@ -527,7 +527,7 @@
       },
       "translategemma-12b-it-q5-k-m-gguf": {
         "model_path": "/home/gunnar/models/translategemma-12b-it-GGUF/translategemma-12b-it-Q5_K_M.gguf",
-        "backend": "gguf",
+        "backend": "llama_cpp",
         "device": "cuda",
         "prompt_format": "translategemma_template",
         "gguf_n_ctx": 2048,
@@ -536,7 +536,7 @@
       },
       "translategemma-12b-it-q6-k-h-gguf": {
         "model_path": "/home/gunnar/models/translategemma-12b-it-MP-GGUF/translategemma-12b-it.Q6_K_H.gguf",
-        "backend": "gguf",
+        "backend": "llama_cpp",
         "device": "cuda",
         "prompt_format": "translategemma_template",
         "gguf_n_ctx": 2048,
@@ -545,7 +545,7 @@
       },
       "translategemma-27b-it-q4-k-m-gguf": {
         "model_path": "/home/gunnar/models/translategemma-27b-it.Q4_K_M.gguf",
-        "backend": "gguf",
+        "backend": "llama_cpp",
         "device": "cuda",
         "prompt_format": "translategemma_template",
         "gguf_n_ctx": 2048,
@@ -554,7 +554,7 @@
       },
       "translategemma-27b-it-q6-k-gguf": {
         "model_path": "/home/gunnar/models/translategemma-27b-it.Q6_K.gguf",
-        "backend": "gguf",
+        "backend": "llama_cpp",
         "device": "cuda",
         "prompt_format": "translategemma_template",
         "gguf_n_ctx": 2048,
@@ -563,7 +563,7 @@
       },
       "translategemma-4b-it-q5-k-m-gguf": {
         "model_path": "/home/gunnar/models/google/translategemma-4b-it-GGUF/translategemma-4b-it.Q5_K_M.gguf",
-        "backend": "gguf",
+        "backend": "llama_cpp",
         "device": "cuda",
         "prompt_format": "translategemma_template",
         "gguf_n_ctx": 2048,
@@ -572,7 +572,7 @@
       },
       "translategemma-4b-it-q6-k-gguf": {
         "model_path": "/home/gunnar/models/translategemma-4b-it-GGUF/translategemma-4b-it.Q6_K.gguf",
-        "backend": "gguf",
+        "backend": "llama_cpp",
         "device": "cuda",
         "prompt_format": "translategemma_template",
         "gguf_n_ctx": 2048,
@@ -581,7 +581,7 @@
       },
       "translategemma-4b-it-q8-0-gguf": {
         "model_path": "/home/gunnar/models/google/translategemma-4b-it-GGUF/translategemma-4b-it.Q8_0.gguf",
-        "backend": "gguf",
+        "backend": "llama_cpp",
         "device": "cuda",
         "prompt_format": "translategemma_template",
         "gguf_n_ctx": 2048,
@@ -590,7 +590,7 @@
       },
       "eurollm-22b-instruct-2512-gguf": {
         "model_path": "/home/gunnar/models/EuroLLM-22B-Instruct-2512-Q6_K/utter-project_EuroLLM-22B-Instruct-2512-Q6_K.gguf",
-        "backend": "gguf",
+        "backend": "llama_cpp",
         "device": "cuda",
         "prompt_format": "generic",
         "enable_thinking": false,
@@ -599,7 +599,7 @@
       },
       "eurollm-22b-instruct-2512-q5-k-m-gguf": {
         "model_path": "/home/gunnar/models/EuroLLM-22B-Instruct-2512-Q5_K_M/utter-project_EuroLLM-22B-Instruct-2512-Q5_K_M.gguf",
-        "backend": "gguf",
+        "backend": "llama_cpp",
         "device": "cuda",
         "prompt_format": "generic",
         "enable_thinking": false,
@@ -608,7 +608,7 @@
       },
       "eurollm-9b-instruct-q5-k-m-gguf": {
         "model_path": "/home/gunnar/models/EuroLLM-9B-Instruct-Q5_K_M/EuroLLM-9B-Instruct-Q5_K_M.gguf",
-        "backend": "gguf",
+        "backend": "llama_cpp",
         "device": "cuda",
         "prompt_format": "generic",
         "enable_thinking": false,
@@ -617,7 +617,7 @@
       },
       "ministral-3-3b-instruct-2512-gguf": {
         "model_path": "/home/gunnar/models/Ministral-3-3B-Instruct-2512-Q8_0/Ministral-3-3B-Instruct-2512-Q8_0.gguf",
-        "backend": "gguf",
+        "backend": "llama_cpp",
         "device": "cuda",
         "prompt_format": "mistral_template",
         "enable_thinking": false,
@@ -626,7 +626,7 @@
       },
       "mistral-small-3.2-24b-instruct-2506-gguf": {
         "model_path": "/home/gunnar/models/Mistral-Small-3.2-24B-Instruct-2506-Q6_K_L/mistralai_Mistral-Small-3.2-24B-Instruct-2506-Q6_K_L.gguf",
-        "backend": "gguf",
+        "backend": "llama_cpp",
         "device": "cuda",
         "prompt_format": "mistral_template",
         "enable_thinking": false,
@@ -669,7 +669,7 @@
         "enabled": false
       },
       "kimi-k2.6": {
-        "backend": "openai_compatible",
+        "backend": "openai_remote",
         "remote_api_kind": "chat_completions",
         "remote_base_url": "https://api.moonshot.ai/v1",
         "remote_api_key_env": "MOONSHOT_API_KEY",

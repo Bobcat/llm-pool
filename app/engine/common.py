@@ -54,7 +54,7 @@ _BACKEND_MODEL_DEFINITION_FIELDS = {
         "exllama_max_q_size",
         "exllama_max_rq_tokens",
     ),
-    "gguf": (
+    "llama_cpp": (
         "gguf_n_gpu_layers",
         "gguf_n_ctx",
         "gguf_flash_attn",
@@ -84,7 +84,7 @@ _BACKEND_MODEL_DEFINITION_FIELDS = {
         "llama_server_reasoning",
         "llama_server_extra_args",
     ),
-    "openai_compatible": (
+    "openai_remote": (
         "remote_api_kind",
         "remote_base_url",
         "remote_api_key_env",
@@ -143,7 +143,7 @@ _BACKEND_MODEL_DEFINITION_FIELDS = {
     ),
 }
 
-# GGUF multi-turn is text-only and depends on llama.cpp's chat-completion path.
+# llama_cpp multi-turn is text-only and depends on llama.cpp's chat-completion path.
 # TranslateGemma remains a structured translation flow rather than assistant chat.
 _GGUF_MULTI_TURN_PROMPT_FORMATS = frozenset(
     {
@@ -156,7 +156,7 @@ _GGUF_MULTI_TURN_PROMPT_FORMATS = frozenset(
 _THINKING_CONTROL_PROMPT_FORMATS = {
     "ct2": frozenset({"qwen3_template"}),
     "exllamav3": frozenset({"gemma4_template", "qwen3_template"}),
-    "gguf": frozenset({"gemma4_template"}),
+    "llama_cpp": frozenset({"gemma4_template"}),
     "vllm": frozenset({"gemma4_template", "qwen3_template"}),
 }
 _DEFAULT_THINKING_MODES = ("default",)
@@ -167,7 +167,7 @@ def _model_supports_multi_turn(backend: str, prompt_format: str | None) -> bool:
     normalized_backend = backend.strip().lower()
     if normalized_backend in {"llama_server", "vllm", "vllm_serve"}:
         return True
-    if normalized_backend == "gguf":
+    if normalized_backend == "llama_cpp":
         normalized_prompt_format = (prompt_format or "").strip().lower()
         return normalized_prompt_format in _GGUF_MULTI_TURN_PROMPT_FORMATS
     return False
@@ -179,7 +179,7 @@ def _model_thinking_modes(
     remote_thinking: str | None = None,
 ) -> list[str]:
     normalized_backend = backend.strip().lower()
-    if normalized_backend == "openai_compatible":
+    if normalized_backend == "openai_remote":
         if remote_thinking is not None:
             return list(_OVERRIDE_THINKING_MODES)
         return list(_DEFAULT_THINKING_MODES)
@@ -335,7 +335,7 @@ def _empty_cuda_allocator_cache() -> None:
 
 def _load_constraints_for_backend(backend: str) -> dict[str, object]:
     normalized_backend = backend.strip().lower()
-    if normalized_backend == "gguf":
+    if normalized_backend == "llama_cpp":
         return {
             "gguf_n_ctx": {
                 "kind": "integer",
@@ -490,7 +490,7 @@ def _load_constraints_for_backend(backend: str) -> dict[str, object]:
 
 def _load_recommendations_for_backend(backend: str) -> dict[str, object]:
     normalized_backend = backend.strip().lower()
-    if normalized_backend == "gguf":
+    if normalized_backend == "llama_cpp":
         return {
             "gguf_cache_type_pairs": {
                 "kind": "pair_presets",
