@@ -5,6 +5,7 @@ import json
 import os
 import unittest
 from unittest import mock
+from urllib.error import HTTPError
 
 HAS_PYDANTIC = importlib.util.find_spec("pydantic") is not None
 
@@ -31,6 +32,9 @@ class FakeResponse:
 
     def read(self) -> bytes:
         return json.dumps(self._payload).encode("utf-8")
+
+    def close(self) -> None:
+        pass
 
 
 @unittest.skipUnless(HAS_PYDANTIC, "pydantic not installed")
@@ -169,6 +173,82 @@ class OpenAICompatibleEngineTests(unittest.TestCase):
 
         self.assertEqual(payload["thinking"], {"type": "enabled"})
 
+    def test_kimi_thinking_omits_non_one_temperature(self) -> None:
+        engine = openai_compatible_module.OpenAICompatibleEngine.__new__(
+            openai_compatible_module.OpenAICompatibleEngine
+        )
+        runtime = openai_compatible_module.OpenAICompatibleModelRuntime(
+            config=ModelSettings(
+                model_path=None,
+                backend="openai_compatible",
+                remote_thinking="disabled",
+            ),
+            base_url="https://api.moonshot.ai/v1",
+            api_key_env="EXAMPLE_API_KEY",
+            remote_model="kimi-k2.6",
+            timeout_s=1.0,
+        )
+
+        payload = engine._chat_completions_payload(
+            runtime=runtime,
+            request=ResponseRequest(
+                model="kimi-k2.6",
+                input="Hello",
+                thinking="enabled",
+            ),
+            decoding=ResolvedDecoding(
+                beam_size=1,
+                top_k=1,
+                top_p=0.95,
+                temperature=0.6,
+                repetition_penalty=1.0,
+                max_tokens=16,
+                stop=[],
+            ),
+        )
+
+        self.assertNotIn("temperature", payload)
+        self.assertEqual(payload["top_p"], 0.95)
+        self.assertEqual(payload["thinking"], {"type": "enabled"})
+
+    def test_kimi_disabled_thinking_omits_unsupported_sampling_values(self) -> None:
+        engine = openai_compatible_module.OpenAICompatibleEngine.__new__(
+            openai_compatible_module.OpenAICompatibleEngine
+        )
+        runtime = openai_compatible_module.OpenAICompatibleModelRuntime(
+            config=ModelSettings(
+                model_path=None,
+                backend="openai_compatible",
+                remote_thinking="disabled",
+            ),
+            base_url="https://api.moonshot.ai/v1",
+            api_key_env="EXAMPLE_API_KEY",
+            remote_model="kimi-k2.6",
+            timeout_s=1.0,
+        )
+
+        payload = engine._chat_completions_payload(
+            runtime=runtime,
+            request=ResponseRequest(
+                model="kimi-k2.6",
+                input="Hello",
+                thinking="disabled",
+            ),
+            decoding=ResolvedDecoding(
+                beam_size=1,
+                top_k=1,
+                top_p=1.0,
+                temperature=0.0,
+                repetition_penalty=1.0,
+                max_tokens=16,
+                stop=[],
+            ),
+        )
+
+        self.assertNotIn("temperature", payload)
+        self.assertNotIn("top_p", payload)
+        self.assertEqual(payload["thinking"], {"type": "disabled"})
+
     def test_build_runtime_requires_api_key_environment_variable(self) -> None:
         engine = openai_compatible_module.OpenAICompatibleEngine.__new__(
             openai_compatible_module.OpenAICompatibleEngine
@@ -194,6 +274,37 @@ class OpenAICompatibleEngineTests(unittest.TestCase):
         self.assertEqual(
             str(exc_info.exception),
             "missing API key environment variable: MISSING_API_KEY",
+        )
+
+    def test_http_error_message_includes_upstream_error_body(self) -> None:
+        exc = HTTPError(
+            url="https://api.example.com/v1/chat/completions",
+            code=400,
+            msg="Bad Request",
+            hdrs=None,
+            fp=FakeResponse(
+                {
+                    "error": {
+                        "message": "Invalid request: unsupported image format",
+                        "type": "invalid_request_error",
+                    }
+                }
+            ),
+        )
+
+        mapped = openai_compatible_module.OpenAICompatibleEngine._map_http_error(
+            openai_compatible_module.OpenAICompatibleEngine.__new__(
+                openai_compatible_module.OpenAICompatibleEngine
+            ),
+            exc,
+        )
+
+        self.assertEqual(mapped.code, "upstream_invalid_request")
+        self.assertEqual(mapped.status_code, 502)
+        self.assertIn(
+            "upstream chat completion rejected the request with HTTP 400: "
+            "Invalid request: unsupported image format",
+            mapped.message,
         )
 
 

@@ -140,19 +140,44 @@ class OpenAICompatibleEngine:
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": user_content},
             ],
-            "temperature": decoding.temperature,
-            "top_p": decoding.top_p,
             "max_tokens": decoding.max_tokens,
         }
-        if decoding.stop:
-            payload["stop"] = decoding.stop
         remote_thinking = _resolve_request_remote_thinking(
             request,
             runtime.config.remote_thinking,
         )
+        if self._include_temperature(
+            remote_model=runtime.remote_model,
+            remote_thinking=remote_thinking,
+            temperature=decoding.temperature,
+        ):
+            payload["temperature"] = decoding.temperature
+        if self._include_top_p(remote_model=runtime.remote_model, top_p=decoding.top_p):
+            payload["top_p"] = decoding.top_p
+        if decoding.stop:
+            payload["stop"] = decoding.stop
         if remote_thinking is not None:
             payload["thinking"] = {"type": remote_thinking}
         return payload
+
+    @staticmethod
+    def _include_temperature(
+        *,
+        remote_model: str,
+        remote_thinking: str | None,
+        temperature: float,
+    ) -> bool:
+        if not remote_model.strip().lower().startswith("kimi-"):
+            return True
+        if remote_thinking == "disabled":
+            return temperature == 0.6
+        return temperature == 1.0
+
+    @staticmethod
+    def _include_top_p(*, remote_model: str, top_p: float) -> bool:
+        if not remote_model.strip().lower().startswith("kimi-"):
+            return True
+        return top_p == 0.95
 
     @staticmethod
     def _user_message_content(request: ResponseRequest) -> str | list[dict[str, object]]:
@@ -226,35 +251,77 @@ class OpenAICompatibleEngine:
 
     def _map_http_error(self, exc: HTTPError) -> BackendExecutionError:
         status = int(exc.code)
+        upstream_detail = self._http_error_detail(exc)
+        detail_suffix = f": {upstream_detail}" if upstream_detail else ""
         if status in {401, 403}:
             return BackendExecutionError(
                 code="upstream_authentication_failure",
                 status_code=502,
-                message=f"upstream chat completion authentication failed with HTTP {status}",
+                message=f"upstream chat completion authentication failed with HTTP {status}{detail_suffix}",
             )
         if status == 429:
             return BackendExecutionError(
                 code="upstream_rate_limit",
                 status_code=429,
-                message="upstream chat completion was rate limited",
+                message=f"upstream chat completion was rate limited{detail_suffix}",
             )
         if 400 <= status < 500:
             return BackendExecutionError(
                 code="upstream_invalid_request",
                 status_code=502,
-                message=f"upstream chat completion rejected the request with HTTP {status}",
+                message=f"upstream chat completion rejected the request with HTTP {status}{detail_suffix}",
             )
         if status >= 500:
             return BackendExecutionError(
                 code="upstream_server_error",
                 status_code=502,
-                message=f"upstream chat completion failed with HTTP {status}",
+                message=f"upstream chat completion failed with HTTP {status}{detail_suffix}",
             )
         return BackendExecutionError(
             code="upstream_http_error",
             status_code=502,
-            message=f"upstream chat completion failed with HTTP {status}",
+            message=f"upstream chat completion failed with HTTP {status}{detail_suffix}",
         )
+
+    @staticmethod
+    def _http_error_detail(exc: HTTPError) -> str | None:
+        try:
+            raw_body = exc.read()
+        except Exception:
+            return None
+        try:
+            body = raw_body.decode("utf-8")
+        except UnicodeDecodeError:
+            return None
+        body = body.strip()
+        if not body:
+            return None
+        try:
+            parsed = json.loads(body)
+        except json.JSONDecodeError:
+            return body[:500]
+        detail = OpenAICompatibleEngine._http_error_json_detail(parsed)
+        if detail is None:
+            detail = json.dumps(parsed, ensure_ascii=True)
+        detail = detail.strip()
+        return detail[:500] if detail else None
+
+    @staticmethod
+    def _http_error_json_detail(value: object) -> str | None:
+        if isinstance(value, str):
+            return value
+        if not isinstance(value, dict):
+            return None
+        error = value.get("error")
+        if isinstance(error, dict):
+            message = error.get("message")
+            if isinstance(message, str):
+                return message
+        for key in ("message", "detail", "error"):
+            message = value.get(key)
+            if isinstance(message, str):
+                return message
+        return None
 
     def _extract_text(self, payload: dict[str, object]) -> str:
         choices = payload.get("choices")
