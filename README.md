@@ -520,15 +520,86 @@ Notes:
 - `model_path` is not required for `vllm_serve`.
 - `vllm_*` fields map to vLLM engine arguments; `vllm_serve_*` fields control the subprocess, HTTP route, environment, and CLI extras.
 - Prefer a very low `vllm_gpu_memory_utilization` and set `vllm_kv_cache_memory_bytes` explicitly, so `vllm serve` does not reserve most free VRAM just because it is available.
-- `vllm_speculative_method`, `vllm_speculative_model`, and `vllm_num_speculative_tokens` are serialized into `--speculative-config`.
+- `vllm_speculative_method`, `vllm_speculative_model`, `vllm_speculative_moe_backend`, `vllm_speculative_attention_backend`, and `vllm_num_speculative_tokens` are serialized into `--speculative-config`.
 - For Gemma 4 MTP, `vllm_speculative_method: "mtp"` means `vllm_speculative_model` is the Gemma 4 assistant checkpoint passed through vLLM's `model` key; it is not generic `method: "draft_model"` speculation.
+- For Qwen 3.6 NVFP4 MTP, `vllm_speculative_method: "mtp"` uses the target model's own MTP path; configure the speculative MoE and attention backends instead of a separate draft-model checkpoint.
 - Do not mix the vLLM speculative methods: `draft_model`, `mlp_speculator`, and `mtp` are separate paths with different compatible checkpoints and different performance behavior.
 - `vllm_num_speculative_tokens` is the MTP speculative depth. It is conceptually close to a draft-token count, but it should be tuned separately from llama.cpp `--spec-draft-n-max`; vLLM's documented safe starting point is `1`, while this local Gemma 4 NVFP4 vision benchmark currently uses `8`.
 - `vllm_serve_library_path` is prepended to `LD_LIBRARY_PATH` for the subprocess.
 - `vllm_serve_extra_args` is an escape hatch for upstream CLI flags that are model-specific but should still live in config.
 - For single-user Workbench models, keep `--max-num-seqs` small. vLLM can otherwise infer broad CUDA graph capture sizes that reserve much more VRAM than the explicit KV-cache budget suggests.
-- Live admin overrides currently include `vllm_max_model_len`, `vllm_kv_cache_dtype`, `vllm_kv_cache_memory_bytes`, `vllm_max_pixels`, `vllm_speculative_method`, `vllm_speculative_model`, and `vllm_num_speculative_tokens`.
+- Live admin overrides currently include `vllm_max_model_len`, `vllm_kv_cache_dtype`, `vllm_kv_cache_memory_bytes`, `vllm_max_pixels`, `vllm_speculative_method`, `vllm_speculative_model`, `vllm_speculative_moe_backend`, `vllm_speculative_attention_backend`, and `vllm_num_speculative_tokens`.
 - vLLM sleep mode is intentionally not used in v1; load/unload uses subprocess start/termination.
+
+Qwen 3.6 NVFP4 through `vllm_serve` currently needs an upstream vLLM build with the relevant Qwen 3.5/3.6, ModelOpt, MTP, and backend support. The local config keeps that runtime isolated by pointing `vllm_serve_binary` at that separate executable and by passing the required CUDA library directories through `vllm_serve_library_path`.
+
+Example Qwen 3.6 definition:
+
+```json
+{
+  "engine": {
+    "models": {
+      "qwen3.6-35b-a3b-nvfp4-vllm-serve": {
+        "backend": "vllm_serve",
+        "model_path": null,
+        "prompt_format": "qwen3_template",
+        "enable_thinking": false,
+        "modalities": ["text", "image"],
+        "vllm_model": "/models/nvidia/Qwen3.6-35B-A3B-NVFP4",
+        "vllm_dtype": "auto",
+        "vllm_gpu_memory_utilization": 0.01,
+        "vllm_kv_cache_memory_bytes": 1073741824,
+        "vllm_kv_cache_dtype": "fp8",
+        "vllm_max_model_len": 8192,
+        "vllm_trust_remote_code": true,
+        "vllm_limit_mm_per_prompt": {
+          "image": 1
+        },
+        "vllm_mm_processor_kwargs": {
+          "max_pixels": 4014080
+        },
+        "vllm_speculative_method": "mtp",
+        "vllm_speculative_moe_backend": "triton",
+        "vllm_speculative_attention_backend": "triton_attn",
+        "vllm_num_speculative_tokens": 1,
+        "vllm_serve_binary": "/opt/vllm-qwen/bin/vllm",
+        "vllm_serve_start_timeout_s": 900.0,
+        "vllm_serve_library_path": [
+          "/opt/vllm-qwen/lib/python3.12/site-packages/nvidia/cu13/lib",
+          "/opt/vllm-qwen/lib/python3.12/site-packages/nvidia/cublas/lib"
+        ],
+        "vllm_serve_env": {
+          "VLLM_USE_FLASHINFER_SAMPLER": "0",
+          "VLLM_BLOCKSCALE_FP8_GEMM_FLASHINFER": "0"
+        },
+        "vllm_serve_extra_args": [
+          "--quantization",
+          "modelopt",
+          "--attention-backend",
+          "triton_attn",
+          "--moe-backend",
+          "marlin",
+          "--load-format",
+          "fastsafetensors",
+          "--max-num-seqs",
+          "1",
+          "--max-num-batched-tokens",
+          "2048",
+          "--reasoning-parser",
+          "qwen3",
+          "--default-chat-template-kwargs",
+          "{\"enable_thinking\": false}",
+          "--linear-backend",
+          "cutlass"
+        ],
+        "enabled": false
+      }
+    }
+  }
+}
+```
+
+The example shows a short `vllm_serve_library_path`; production configs may need every CUDA library directory from that isolated vLLM environment.
 
 ## Remote Backends
 
@@ -608,15 +679,17 @@ The following is a local observation, not a portable benchmark claim.
 Hardware:
 
 - GPU: NVIDIA RTX PRO 6000 Blackwell Workstation Edition, 97,887 MiB VRAM
+- GPU power limit: 300 W for all benchmark results in this section
 - Driver/CUDA reported by `nvidia-smi`: 580.126.09 / CUDA 13.0
 - CPU: AMD Ryzen 9 9950X 16-Core Processor, 32 threads
 - RAM: 63,405,352 kB `MemTotal` reported, about 60.5 GiB
 
-On repeated image caption/OCR-style prompts with Gemma 4 26B A4B:
+On repeated image caption/OCR-style prompts with local vision models:
 
 - NVIDIA NVFP4 in-process vLLM version before MTP tuning: about 175 tok/s observed
 - Unsloth UD-Q5_K_S GGUF through managed `llama_server` with MTP tuning: 400+ tok/s observed after warmup
 - NVIDIA NVFP4 through managed `vllm_serve` with Gemma 4 assistant MTP: 430+ tok/s observed after warmup on the document-structure OCR prompt below
+- Qwen 3.6 35B A3B NVFP4 through managed `vllm_serve` with MTP: around 500 tok/s observed with `vllm_num_speculative_tokens: 8`; other speculative-token values were not tested
 
 These results are why both managed local vision subprocess paths are treated as first-class runtimes: `llama_server` for GGUF and fast loading, `vllm_serve` for high warm throughput when its heavier load cost is acceptable.
 

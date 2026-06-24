@@ -91,6 +91,8 @@ class ModelSettings:
     vllm_mm_processor_kwargs: tuple[tuple[str, int], ...] = ()
     vllm_speculative_method: str | None = None
     vllm_speculative_model: str | None = None
+    vllm_speculative_moe_backend: str | None = None
+    vllm_speculative_attention_backend: str | None = None
     vllm_num_speculative_tokens: int = 1
     vllm_serve_binary: str = "vllm"
     vllm_serve_host: str = "127.0.0.1"
@@ -298,6 +300,12 @@ def load_settings(path: str | Path | None = None) -> AppSettings:
             vllm_mm_processor_kwargs=_coerce_int_str_map(model_payload.get("vllm_mm_processor_kwargs")),
             vllm_speculative_method=_coerce_optional_str(model_payload.get("vllm_speculative_method")),
             vllm_speculative_model=_coerce_optional_str(model_payload.get("vllm_speculative_model")),
+            vllm_speculative_moe_backend=_coerce_optional_str(
+                model_payload.get("vllm_speculative_moe_backend")
+            ),
+            vllm_speculative_attention_backend=_coerce_optional_str(
+                model_payload.get("vllm_speculative_attention_backend")
+            ),
             vllm_num_speculative_tokens=max(1, int(model_payload.get("vllm_num_speculative_tokens", 1))),
             vllm_serve_binary=(
                 str(model_payload.get("vllm_serve_binary", "vllm") or "vllm").strip()

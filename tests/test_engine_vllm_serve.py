@@ -86,6 +86,8 @@ class VllmServeEngineTests(unittest.TestCase):
                         vllm_mm_processor_kwargs=(("max_soft_tokens", 560),),
                         vllm_speculative_method="mtp",
                         vllm_speculative_model="google/gemma-4-26B-A4B-it-assistant",
+                        vllm_speculative_moe_backend="triton",
+                        vllm_speculative_attention_backend="triton_attn",
                         vllm_num_speculative_tokens=4,
                         vllm_serve_binary="/opt/vllm/bin/vllm",
                         vllm_serve_host="127.0.0.1",
@@ -186,6 +188,8 @@ class VllmServeEngineTests(unittest.TestCase):
                 "method": "mtp",
                 "num_speculative_tokens": 4,
                 "model": "google/gemma-4-26B-A4B-it-assistant",
+                "moe_backend": "triton",
+                "attention_backend": "triton_attn",
             },
         )
         self.assertEqual(command[command.index("--api-key") + 1], "local-secret")

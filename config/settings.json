@@ -300,6 +300,44 @@
         },
         "enabled": false
       },
+      "gemma-4-26b-a4b-it-redhat-nvfp4-vllm-serve": {
+        "backend": "vllm_serve",
+        "model_path": null,
+        "prompt_format": "gemma4_template",
+        "enable_thinking": false,
+        "modalities": [
+          "text",
+          "image"
+        ],
+        "vllm_model": "/home/gunnar/models/RedHatAI/gemma-4-26B-A4B-it-NVFP4",
+        "vllm_dtype": "auto",
+        "vllm_gpu_memory_utilization": 0.01,
+        "vllm_kv_cache_memory_bytes": 2147483648,
+        "vllm_max_model_len": 8192,
+        "vllm_trust_remote_code": true,
+        "vllm_limit_mm_per_prompt": {
+          "image": 1
+        },
+        "vllm_mm_processor_kwargs": {
+          "max_soft_tokens": 560
+        },
+        "vllm_speculative_method": "mtp",
+        "vllm_speculative_model": "google/gemma-4-26B-A4B-it-assistant",
+        "vllm_num_speculative_tokens": 8,
+        "vllm_serve_binary": "/home/gunnar/projects/llm-pool/.venv/bin/vllm",
+        "vllm_serve_model_alias": "gemma-4-26b-a4b-it-redhat-nvfp4-vllm-serve",
+        "vllm_serve_library_path": [
+          "/home/gunnar/projects/llm-pool/.venv/lib/python3.12/site-packages/nvidia/cu13/lib"
+        ],
+        "vllm_serve_env": {
+          "VLLM_USE_FLASHINFER_SAMPLER": "0"
+        },
+        "vllm_serve_extra_args": [
+          "--max-num-seqs",
+          "1"
+        ],
+        "enabled": false
+      },
       "gemma-4-26b-a4b-it-nvidia-nvfp4-vllm": {
         "backend": "vllm",
         "model_path": null,
@@ -358,6 +396,80 @@
         "vllm_serve_extra_args": [
           "--max-num-seqs",
           "1"
+        ],
+        "enabled": false
+      },
+      "qwen3.6-35b-a3b-nvfp4-vllm-serve": {
+        "backend": "vllm_serve",
+        "model_path": null,
+        "prompt_format": "qwen3_template",
+        "enable_thinking": false,
+        "modalities": [
+          "text",
+          "image"
+        ],
+        "vllm_model": "/home/gunnar/models/nvidia/Qwen3.6-35B-A3B-NVFP4",
+        "vllm_dtype": "auto",
+        "vllm_gpu_memory_utilization": 0.01,
+        "vllm_kv_cache_memory_bytes": 1073741824,
+        "vllm_kv_cache_dtype": "fp8",
+        "vllm_max_model_len": 8192,
+        "vllm_trust_remote_code": true,
+        "vllm_limit_mm_per_prompt": {
+          "image": 1
+        },
+        "vllm_mm_processor_kwargs": {
+          "max_pixels": 4014080
+        },
+        "vllm_speculative_method": "mtp",
+        "vllm_speculative_moe_backend": "triton",
+        "vllm_speculative_attention_backend": "triton_attn",
+        "vllm_num_speculative_tokens": 1,
+        "vllm_serve_binary": "/home/gunnar/.cache/llm-pool/vllm-v023-cu129/bin/vllm",
+        "vllm_serve_model_alias": "qwen3.6-35b-a3b-nvfp4-vllm-serve",
+        "vllm_serve_start_timeout_s": 900.0,
+        "vllm_serve_library_path": [
+          "/home/gunnar/.cache/llm-pool/vllm-v023-cu129/lib/python3.12/site-packages/nvidia/cu13/lib",
+          "/home/gunnar/.cache/llm-pool/vllm-v023-cu129/lib/python3.12/site-packages/nvidia/cublas/lib",
+          "/home/gunnar/.cache/llm-pool/vllm-v023-cu129/lib/python3.12/site-packages/nvidia/cuda_cccl/lib",
+          "/home/gunnar/.cache/llm-pool/vllm-v023-cu129/lib/python3.12/site-packages/nvidia/cuda_cupti/lib",
+          "/home/gunnar/.cache/llm-pool/vllm-v023-cu129/lib/python3.12/site-packages/nvidia/cuda_nvrtc/lib",
+          "/home/gunnar/.cache/llm-pool/vllm-v023-cu129/lib/python3.12/site-packages/nvidia/cuda_runtime/lib",
+          "/home/gunnar/.cache/llm-pool/vllm-v023-cu129/lib/python3.12/site-packages/nvidia/cudnn/lib",
+          "/home/gunnar/.cache/llm-pool/vllm-v023-cu129/lib/python3.12/site-packages/nvidia/cufft/lib",
+          "/home/gunnar/.cache/llm-pool/vllm-v023-cu129/lib/python3.12/site-packages/nvidia/cufile/lib",
+          "/home/gunnar/.cache/llm-pool/vllm-v023-cu129/lib/python3.12/site-packages/nvidia/curand/lib",
+          "/home/gunnar/.cache/llm-pool/vllm-v023-cu129/lib/python3.12/site-packages/nvidia/cusolver/lib",
+          "/home/gunnar/.cache/llm-pool/vllm-v023-cu129/lib/python3.12/site-packages/nvidia/cusparse/lib",
+          "/home/gunnar/.cache/llm-pool/vllm-v023-cu129/lib/python3.12/site-packages/nvidia/cusparselt/lib",
+          "/home/gunnar/.cache/llm-pool/vllm-v023-cu129/lib/python3.12/site-packages/nvidia/nccl/lib",
+          "/home/gunnar/.cache/llm-pool/vllm-v023-cu129/lib/python3.12/site-packages/nvidia/nvjitlink/lib",
+          "/home/gunnar/.cache/llm-pool/vllm-v023-cu129/lib/python3.12/site-packages/nvidia/nvshmem/lib",
+          "/home/gunnar/.cache/llm-pool/vllm-v023-cu129/lib/python3.12/site-packages/nvidia/nvtx/lib"
+        ],
+        "vllm_serve_env": {
+          "VLLM_USE_FLASHINFER_SAMPLER": "0",
+          "VLLM_BLOCKSCALE_FP8_GEMM_FLASHINFER": "0"
+        },
+        "vllm_serve_extra_args": [
+          "--quantization",
+          "modelopt",
+          "--attention-backend",
+          "triton_attn",
+          "--moe-backend",
+          "marlin",
+          "--load-format",
+          "fastsafetensors",
+          "--max-num-seqs",
+          "1",
+          "--max-num-batched-tokens",
+          "2048",
+          "--reasoning-parser",
+          "qwen3",
+          "--default-chat-template-kwargs",
+          "{\"enable_thinking\": false}",
+          "--linear-backend",
+          "cutlass"
         ],
         "enabled": false
       },

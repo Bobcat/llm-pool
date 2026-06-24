@@ -384,6 +384,8 @@ class ConfigTests(unittest.TestCase):
                     '        "vllm_mm_processor_kwargs": {"max_soft_tokens": 560},\n'
                     '        "vllm_speculative_method": "mtp",\n'
                     '        "vllm_speculative_model": "google/gemma-4-26B-A4B-it-assistant",\n'
+                    '        "vllm_speculative_moe_backend": "triton",\n'
+                    '        "vllm_speculative_attention_backend": "triton_attn",\n'
                     '        "vllm_num_speculative_tokens": 4,\n'
                     '        "vllm_serve_binary": "/opt/vllm/bin/vllm",\n'
                     '        "vllm_serve_host": "127.0.0.1",\n'
@@ -422,6 +424,8 @@ class ConfigTests(unittest.TestCase):
         self.assertEqual(model.vllm_mm_processor_kwargs, (("max_soft_tokens", 560),))
         self.assertEqual(model.vllm_speculative_method, "mtp")
         self.assertEqual(model.vllm_speculative_model, "google/gemma-4-26B-A4B-it-assistant")
+        self.assertEqual(model.vllm_speculative_moe_backend, "triton")
+        self.assertEqual(model.vllm_speculative_attention_backend, "triton_attn")
         self.assertEqual(model.vllm_num_speculative_tokens, 4)
         self.assertEqual(model.vllm_serve_binary, "/opt/vllm/bin/vllm")
         self.assertEqual(model.vllm_serve_port, 18090)

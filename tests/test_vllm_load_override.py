@@ -40,6 +40,8 @@ class VllmLoadConstraintsTests(unittest.TestCase):
                 "vllm_max_pixels",
                 "vllm_speculative_method",
                 "vllm_speculative_model",
+                "vllm_speculative_moe_backend",
+                "vllm_speculative_attention_backend",
                 "vllm_num_speculative_tokens",
             },
         )
@@ -48,6 +50,10 @@ class VllmLoadConstraintsTests(unittest.TestCase):
         self.assertEqual(constraints["vllm_kv_cache_memory_bytes"]["display_unit"], "mib")
         self.assertEqual(constraints["vllm_speculative_method"]["kind"], "string_or_null")
         self.assertIn("mtp", constraints["vllm_speculative_method"]["examples"])
+        self.assertEqual(constraints["vllm_speculative_moe_backend"]["kind"], "string_or_null")
+        self.assertIn("triton", constraints["vllm_speculative_moe_backend"]["examples"])
+        self.assertEqual(constraints["vllm_speculative_attention_backend"]["kind"], "string_or_null")
+        self.assertIn("triton_attn", constraints["vllm_speculative_attention_backend"]["examples"])
         self.assertEqual(constraints["vllm_num_speculative_tokens"]["minimum"], 1)
 
     def test_vllm_serve_exposes_the_same_overrides(self) -> None:
@@ -70,6 +76,8 @@ class VllmApplyLoadOverrideTests(unittest.TestCase):
                 "vllm_max_pixels": 4014080,
                 "vllm_speculative_method": " mtp ",
                 "vllm_speculative_model": " google/gemma-4-26B-A4B-it-assistant ",
+                "vllm_speculative_moe_backend": " triton ",
+                "vllm_speculative_attention_backend": " triton_attn ",
                 "vllm_num_speculative_tokens": 2,
             },
         )
@@ -80,6 +88,8 @@ class VllmApplyLoadOverrideTests(unittest.TestCase):
         self.assertEqual(result.vllm_mm_processor_kwargs, (("max_pixels", 4014080),))
         self.assertEqual(result.vllm_speculative_method, "mtp")
         self.assertEqual(result.vllm_speculative_model, "google/gemma-4-26B-A4B-it-assistant")
+        self.assertEqual(result.vllm_speculative_moe_backend, "triton")
+        self.assertEqual(result.vllm_speculative_attention_backend, "triton_attn")
         self.assertEqual(result.vllm_num_speculative_tokens, 2)
 
     def test_all_overrides_apply_to_vllm_serve(self) -> None:
@@ -93,6 +103,8 @@ class VllmApplyLoadOverrideTests(unittest.TestCase):
                 "vllm_max_pixels": 4014080,
                 "vllm_speculative_method": "mtp",
                 "vllm_speculative_model": "google/gemma-4-26B-A4B-it-assistant",
+                "vllm_speculative_moe_backend": "triton",
+                "vllm_speculative_attention_backend": "triton_attn",
                 "vllm_num_speculative_tokens": 2,
             },
         )
@@ -103,6 +115,8 @@ class VllmApplyLoadOverrideTests(unittest.TestCase):
         self.assertEqual(result.vllm_mm_processor_kwargs, (("max_pixels", 4014080),))
         self.assertEqual(result.vllm_speculative_method, "mtp")
         self.assertEqual(result.vllm_speculative_model, "google/gemma-4-26B-A4B-it-assistant")
+        self.assertEqual(result.vllm_speculative_moe_backend, "triton")
+        self.assertEqual(result.vllm_speculative_attention_backend, "triton_attn")
         self.assertEqual(result.vllm_num_speculative_tokens, 2)
 
     def test_speculative_method_and_model_accept_null(self) -> None:
@@ -110,15 +124,21 @@ class VllmApplyLoadOverrideTests(unittest.TestCase):
             _vllm_model(
                 vllm_speculative_method="mtp",
                 vllm_speculative_model="google/gemma-4-26B-A4B-it-assistant",
+                vllm_speculative_moe_backend="triton",
+                vllm_speculative_attention_backend="triton_attn",
             ),
             resolved_backend="vllm",
             load_override={
                 "vllm_speculative_method": None,
                 "vllm_speculative_model": None,
+                "vllm_speculative_moe_backend": None,
+                "vllm_speculative_attention_backend": None,
             },
         )
         self.assertIsNone(result.vllm_speculative_method)
         self.assertIsNone(result.vllm_speculative_model)
+        self.assertIsNone(result.vllm_speculative_moe_backend)
+        self.assertIsNone(result.vllm_speculative_attention_backend)
 
     def test_max_pixels_merges_into_existing_mm_kwargs(self) -> None:
         result = _router()._apply_load_override(
@@ -168,6 +188,14 @@ class VllmApplyLoadOverrideTests(unittest.TestCase):
                 _vllm_model(),
                 resolved_backend="vllm",
                 load_override={"vllm_speculative_method": "  "},
+            )
+
+    def test_blank_speculative_backend_is_rejected(self) -> None:
+        with self.assertRaises(ValueError):
+            _router()._apply_load_override(
+                _vllm_model(),
+                resolved_backend="vllm",
+                load_override={"vllm_speculative_attention_backend": "  "},
             )
 
     def test_invalid_num_speculative_tokens_is_rejected(self) -> None:

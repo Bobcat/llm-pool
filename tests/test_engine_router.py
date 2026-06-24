@@ -1128,6 +1128,8 @@ class ModelRouterEngineTests(unittest.TestCase):
                         vllm_mm_processor_kwargs=(("min_pixels", 100), ("max_pixels", 1000)),
                         vllm_speculative_method=None,
                         vllm_speculative_model=None,
+                        vllm_speculative_moe_backend=None,
+                        vllm_speculative_attention_backend=None,
                         vllm_num_speculative_tokens=1,
                     ),
                 },
@@ -1153,6 +1155,8 @@ class ModelRouterEngineTests(unittest.TestCase):
             captured["vllm_mm_processor_kwargs"] = model_settings.vllm_mm_processor_kwargs
             captured["vllm_speculative_method"] = model_settings.vllm_speculative_method
             captured["vllm_speculative_model"] = model_settings.vllm_speculative_model
+            captured["vllm_speculative_moe_backend"] = model_settings.vllm_speculative_moe_backend
+            captured["vllm_speculative_attention_backend"] = model_settings.vllm_speculative_attention_backend
             captured["vllm_num_speculative_tokens"] = model_settings.vllm_num_speculative_tokens
             backend_instance = FakeBackend()
             backend_instance._models = {name: object() for name in scoped_settings.engine.models}
@@ -1169,6 +1173,8 @@ class ModelRouterEngineTests(unittest.TestCase):
                     vllm_max_pixels=4014080,
                     vllm_speculative_method="mtp",
                     vllm_speculative_model="google/gemma-4-26B-A4B-it-assistant",
+                    vllm_speculative_moe_backend="triton",
+                    vllm_speculative_attention_backend="triton_attn",
                     vllm_num_speculative_tokens=2,
                 ),
             )
@@ -1184,6 +1190,8 @@ class ModelRouterEngineTests(unittest.TestCase):
         )
         self.assertEqual(captured["vllm_speculative_method"], "mtp")
         self.assertEqual(captured["vllm_speculative_model"], "google/gemma-4-26B-A4B-it-assistant")
+        self.assertEqual(captured["vllm_speculative_moe_backend"], "triton")
+        self.assertEqual(captured["vllm_speculative_attention_backend"], "triton_attn")
         self.assertEqual(captured["vllm_num_speculative_tokens"], 2)
         self.assertEqual(
             entry["load_override"],
@@ -1194,6 +1202,8 @@ class ModelRouterEngineTests(unittest.TestCase):
                 "vllm_max_pixels": 4014080,
                 "vllm_speculative_method": "mtp",
                 "vllm_speculative_model": "google/gemma-4-26B-A4B-it-assistant",
+                "vllm_speculative_moe_backend": "triton",
+                "vllm_speculative_attention_backend": "triton_attn",
                 "vllm_num_speculative_tokens": 2,
             },
         )

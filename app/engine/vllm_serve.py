@@ -206,6 +206,10 @@ class VllmServeEngine:
             }
             if settings.vllm_speculative_model is not None:
                 speculative_config["model"] = settings.vllm_speculative_model
+            if settings.vllm_speculative_moe_backend is not None:
+                speculative_config["moe_backend"] = settings.vllm_speculative_moe_backend
+            if settings.vllm_speculative_attention_backend is not None:
+                speculative_config["attention_backend"] = settings.vllm_speculative_attention_backend
             command.extend([
                 "--speculative-config",
                 json.dumps(speculative_config, ensure_ascii=True),

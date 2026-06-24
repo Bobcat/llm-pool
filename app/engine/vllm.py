@@ -266,11 +266,17 @@ class VllmEngine:
         if settings.vllm_mm_processor_kwargs:
             engine_args_kwargs["mm_processor_kwargs"] = dict(settings.vllm_mm_processor_kwargs)
         if settings.vllm_speculative_method:
-            engine_args_kwargs["speculative_config"] = {
+            speculative_config: dict[str, object] = {
                 "method": settings.vllm_speculative_method,
-                "model": settings.vllm_speculative_model,
                 "num_speculative_tokens": settings.vllm_num_speculative_tokens,
             }
+            if settings.vllm_speculative_model is not None:
+                speculative_config["model"] = settings.vllm_speculative_model
+            if settings.vllm_speculative_moe_backend is not None:
+                speculative_config["moe_backend"] = settings.vllm_speculative_moe_backend
+            if settings.vllm_speculative_attention_backend is not None:
+                speculative_config["attention_backend"] = settings.vllm_speculative_attention_backend
+            engine_args_kwargs["speculative_config"] = speculative_config
 
         engine_args = AsyncEngineArgs(**engine_args_kwargs)
 

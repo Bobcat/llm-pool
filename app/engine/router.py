@@ -736,6 +736,8 @@ class ModelRouterEngine:
                     "vllm_max_pixels",
                     "vllm_speculative_method",
                     "vllm_speculative_model",
+                    "vllm_speculative_moe_backend",
+                    "vllm_speculative_attention_backend",
                     "vllm_num_speculative_tokens",
                 }
             )
@@ -790,6 +792,28 @@ class ModelRouterEngine:
                     if speculative_model == "":
                         raise ValueError("vllm_speculative_model load override must be a non-empty string or null")
                 replacement_kwargs["vllm_speculative_model"] = speculative_model
+
+            if "vllm_speculative_moe_backend" in load_override:
+                speculative_moe_backend = load_override["vllm_speculative_moe_backend"]
+                if speculative_moe_backend is not None and not isinstance(speculative_moe_backend, str):
+                    raise ValueError("vllm_speculative_moe_backend load override must be a string or null")
+                if isinstance(speculative_moe_backend, str):
+                    speculative_moe_backend = speculative_moe_backend.strip()
+                    if speculative_moe_backend == "":
+                        raise ValueError("vllm_speculative_moe_backend load override must be a non-empty string or null")
+                replacement_kwargs["vllm_speculative_moe_backend"] = speculative_moe_backend
+
+            if "vllm_speculative_attention_backend" in load_override:
+                speculative_attention_backend = load_override["vllm_speculative_attention_backend"]
+                if speculative_attention_backend is not None and not isinstance(speculative_attention_backend, str):
+                    raise ValueError("vllm_speculative_attention_backend load override must be a string or null")
+                if isinstance(speculative_attention_backend, str):
+                    speculative_attention_backend = speculative_attention_backend.strip()
+                    if speculative_attention_backend == "":
+                        raise ValueError(
+                            "vllm_speculative_attention_backend load override must be a non-empty string or null"
+                        )
+                replacement_kwargs["vllm_speculative_attention_backend"] = speculative_attention_backend
 
             if "vllm_num_speculative_tokens" in load_override:
                 num_speculative_tokens = load_override["vllm_num_speculative_tokens"]

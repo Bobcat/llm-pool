@@ -108,6 +108,8 @@ _BACKEND_MODEL_DEFINITION_FIELDS = {
         "vllm_mm_processor_kwargs",
         "vllm_speculative_method",
         "vllm_speculative_model",
+        "vllm_speculative_moe_backend",
+        "vllm_speculative_attention_backend",
         "vllm_num_speculative_tokens",
     ),
     "vllm_serve": (
@@ -124,6 +126,8 @@ _BACKEND_MODEL_DEFINITION_FIELDS = {
         "vllm_mm_processor_kwargs",
         "vllm_speculative_method",
         "vllm_speculative_model",
+        "vllm_speculative_moe_backend",
+        "vllm_speculative_attention_backend",
         "vllm_num_speculative_tokens",
         "vllm_serve_binary",
         "vllm_serve_host",
@@ -461,6 +465,18 @@ def _load_constraints_for_backend(backend: str) -> dict[str, object]:
                 "format": "hf_id_or_local_path",
                 "default": None,
                 "examples": ["google/gemma-4-26B-A4B-it-assistant"],
+            },
+            "vllm_speculative_moe_backend": {
+                "kind": "string_or_null",
+                "format": "vllm_moe_backend",
+                "default": None,
+                "examples": ["triton", "marlin"],
+            },
+            "vllm_speculative_attention_backend": {
+                "kind": "string_or_null",
+                "format": "vllm_attention_backend",
+                "default": None,
+                "examples": ["triton_attn", "flashinfer"],
             },
             "vllm_num_speculative_tokens": {
                 "kind": "integer",
