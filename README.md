@@ -881,9 +881,10 @@ See [deploy/systemd/README.md](deploy/systemd/README.md).
 
 ## Design Notes
 
-Design notes and implementation trackers:
+[runtime-admin-api.md](docs/runtime-admin-api.md) is kept current and documents the admin API and live load overrides in detail.
 
-- [runtime-admin-api.md](docs/runtime-admin-api.md): current admin API and live load overrides
+The rest are design notes, trackers, and backend investigations. They record intent and exploration and can lag behind the current code, so treat this README and `runtime-admin-api.md` as the source of truth:
+
 - [runtime-scheduler-notes.md](docs/runtime-scheduler-notes.md): broader scheduler design
 - [runtime-scheduler-tracker.md](docs/runtime-scheduler-tracker.md): scheduler MVP status
 - [model-replica-routing-notes.md](docs/model-replica-routing-notes.md): public model id and replica semantics
@@ -900,6 +901,7 @@ This pool builds on excellent upstream projects:
 - Pydantic
 - CTranslate2
 - Transformers
+- PyTorch
 - ExLlamaV3
 - llama-cpp-python
 - llama.cpp
