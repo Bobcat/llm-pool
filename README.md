@@ -1,30 +1,47 @@
 # llm-pool
 
-FastAPI service that exposes a single `POST /v1/responses` API across local and remote LLM backends. It provides runtime model loading, unloading, queueing, replica routing, multimodal input, timing metrics, and a small admin surface for a workbench UI.
+FastAPI service that exposes a single `POST /v1/responses` API across local and remote LLM backends. It provides runtime model loading, unloading, queueing, replica routing, multimodal input, timing metrics, and an admin surface for model state, load/unload, runtime load overrides, and GPU memory estimates, used by a workbench UI.
+
+![The Workbench loaded-models view, listing each loaded model with its state, backend, and VRAM use](docs/images/wb-llm-pool-models.png)
+
+*Loaded models in the Workbench.*
 
 ## Index
+
+**Overview**
 
 - [What It Does](#what-it-does)
 - [Repository Role](#repository-role)
 - [Related Repositories](#related-repositories)
 - [Code Map](#code-map)
-- [Runtime Model](#runtime-model)
+
+**Using the API**
+
 - [API Surface](#api-surface)
 - [Inference Example](#inference-example)
 - [Request Fields](#request-fields)
 - [Multimodal Input](#multimodal-input)
 - [Multi-turn Conversations](#multi-turn-conversations)
+
+**Runtime & Backends**
+
+- [Runtime Model](#runtime-model)
 - [Configuration](#configuration)
-- [llama_server Backend](#llama_server-backend)
-- [vLLM Backend](#vllm-backend)
-- [vLLM Serve Backend](#vllm-serve-backend)
-- [Remote Backends](#remote-backends)
+- [In-process Backends](#in-process-backends) — CT2, ExLlamaV3, llama_cpp, vLLM
+- [Pool-managed Backends](#pool-managed-backends) — llama_server, vllm_serve
+- [Remote Backends](#remote-backends) — openai_remote
 - [Replicas](#replicas)
+
+**Performance & Operations**
+
 - [Timing Metrics](#timing-metrics)
 - [Local Benchmark Snapshot](#local-benchmark-snapshot)
 - [Development](#development)
 - [Tests](#tests)
 - [Deployment Notes](#deployment-notes)
+
+**Reference**
+
 - [Design Notes](#design-notes)
 - [Acknowledgments](#acknowledgments)
 - [License](#license)
@@ -98,13 +115,13 @@ At runtime:
 - a model must be known in the merged settings before the admin API can load it.
 - backend-specific load overrides are accepted for supported runtime knobs, but are temporary.
 
-Backends currently run in three different shapes:
+A runtime model currently runs in one of three different shapes:
 
 - in-process Python runtimes: CT2, ExLlamaV3, `llama_cpp`/GGUF, vLLM
 - managed local subprocess runtimes: `llama_server`, `vllm_serve`
 - remote upstream API runtime: `openai_remote`
 
-The managed subprocess backends are useful when native upstream dependencies, CUDA libraries, or backend build variants should be isolated from the main Python API process. The broader uniform subprocess architecture is still design-note work; see [runtime-subprocess-notes.md](docs/runtime-subprocess-notes.md).
+The managed subprocess backends are useful when native upstream dependencies, CUDA libraries, or backend build variants should be isolated from the main Python API process.
 
 ## API Surface
 
@@ -339,6 +356,10 @@ The base model definition can stay in `settings.json`, while `local.json` only d
 
 Admin load overrides are temporary. They let a UI adjust supported runtime knobs before pressing load without editing config files. See [runtime-admin-api.md](docs/runtime-admin-api.md) for the exact allowed fields and constraints.
 
+![A model's expanded detail panel in the Workbench, exposing runtime load overrides such as max model length, KV cache size and dtype, max image pixels, and speculative-decoding settings before the model is loaded](docs/images/wb-llm-pool-models-detail.png)
+
+*Setting runtime load overrides for a model in the Workbench before loading it.*
+
 TranslateGemma request example:
 
 ```json
@@ -364,7 +385,153 @@ TranslateGemma mixed-source request example:
 
 For mixed-source TranslateGemma input, omit `source_lang_code` or set it to `"auto"` or `"mixed"`. The service keeps the official TranslateGemma structured request format, uses a valid internal source-language fallback, and prepends a short instruction asking the model to detect each segment's source language. This is intended for text that may contain multiple source languages in one request; it is not a separate raw Gemma prompt/tokenizer path.
 
-## llama_server Backend
+## In-process Backends
+
+These backends run inside the `llm-pool` Python process: CT2, ExLlamaV3, `llama_cpp`/GGUF, and vLLM. Because they share one interpreter, they share one dependency environment: every in-process backend must run on a single set of library versions (PyTorch, CUDA, numpy) that works for all of them. Upgrading one can constrain or break the others. When a backend needs a heavier or conflicting stack, run it as a pool-managed subprocess instead.
+
+Load and unload follow in-process object lifecycle; VRAM is released by Python object cleanup rather than by process exit.
+
+### CT2 (CTranslate2)
+
+The `ct2` backend runs CTranslate2 models in-process. It is single-turn `input` only and text only.
+
+Example:
+
+```json
+{
+  "engine": {
+    "models": {
+      "some-ct2-model": {
+        "backend": "ct2",
+        "model_path": "/models/some-model-ct2",
+        "prompt_format": "generic",
+        "device": "cuda",
+        "compute_type": "int8",
+        "enabled": false
+      }
+    }
+  }
+}
+```
+
+Notes:
+
+- `device` selects the CTranslate2 execution target; `compute_type` selects weight quantization (defaults to `int8`).
+- `decoding.beam_size` is honored by CT2; most other backends accept but ignore it.
+
+### ExLlamaV3
+
+The `exllamav3` backend runs ExLlamaV3 quantized models in-process. It is single-turn `input` only.
+
+Example:
+
+```json
+{
+  "engine": {
+    "models": {
+      "some-exl3-model": {
+        "backend": "exllamav3",
+        "model_path": "/models/some-model-exl3",
+        "prompt_format": "generic",
+        "exllama_cache_size": 8192,
+        "exllama_cache_quant": null,
+        "enabled": false
+      }
+    }
+  }
+}
+```
+
+Notes:
+
+- `exllama_cache_size` sets the cache token budget; `exllama_cache_quant` selects cache quantization.
+- `exllama_gpu_split`, `exllama_tensor_parallel`, and `exllama_tp_backend` control multi-GPU placement.
+- `exllama_max_batch_size`, `exllama_max_chunk_size`, `exllama_max_q_size`, and `exllama_max_rq_tokens` tune batching and queue sizes.
+
+### llama_cpp (in-process GGUF)
+
+The `llama_cpp` backend runs GGUF models in-process through `llama-cpp-python`. It supports text-only multi-turn for selected prompt formats (`generic`, `mistral_template`, `qwen3_template`, `gemma4_template`) and does not accept image input. For GGUF vision, or to release VRAM on unload by stopping the process, use the pool-managed `llama_server` backend instead.
+
+Example:
+
+```json
+{
+  "engine": {
+    "models": {
+      "some-gguf-model": {
+        "backend": "llama_cpp",
+        "model_path": "/models/some-model.gguf",
+        "prompt_format": "gemma4_template",
+        "gguf_n_gpu_layers": -1,
+        "gguf_n_ctx": 4096,
+        "gguf_flash_attn": "auto",
+        "enabled": false
+      }
+    }
+  }
+}
+```
+
+Notes:
+
+- `gguf_n_gpu_layers` offloads layers to GPU; `-1` offloads all.
+- `gguf_n_ctx` sets the context window.
+- `gguf_flash_attn`, `gguf_type_k`, and `gguf_type_v` tune flash attention and KV cache types.
+
+### vLLM
+
+The `vllm` backend runs vLLM in-process through `AsyncLLMEngine` on a dedicated event-loop thread. It does not start a separate `vllm serve` process.
+
+Example:
+
+```json
+{
+  "engine": {
+    "models": {
+      "qwen2.5-vl-3b": {
+        "backend": "vllm",
+        "model_path": null,
+        "prompt_format": "generic",
+        "modalities": ["text", "image"],
+        "vllm_model": "Qwen/Qwen2.5-VL-3B-Instruct",
+        "vllm_dtype": "bfloat16",
+        "vllm_gpu_memory_utilization": 0.01,
+        "vllm_kv_cache_memory_bytes": 1073741824,
+        "vllm_max_model_len": 12288,
+        "vllm_limit_mm_per_prompt": {
+          "image": 1
+        },
+        "vllm_mm_processor_kwargs": {
+          "max_pixels": 4014080
+        },
+        "enabled": false
+      }
+    }
+  }
+}
+```
+
+Notes:
+
+- `vllm_model` is the Hugging Face model id or local path used by vLLM.
+- `model_path` is not required for vLLM.
+- `vllm_max_model_len` must cover text tokens plus image tokens.
+- Prefer a very low `vllm_gpu_memory_utilization` and set `vllm_kv_cache_memory_bytes` explicitly, so vLLM does not reserve most free VRAM just because it is available.
+- `vllm_kv_cache_memory_bytes`, when set, manually controls KV cache size and takes precedence over sizing derived from `vllm_gpu_memory_utilization`.
+- `vllm_limit_mm_per_prompt` caps multimodal items per request.
+- `vllm_mm_processor_kwargs` is passed through to the model processor. For some vision models this is where image token budgets are bounded.
+- vLLM speculative decoding fields are wired to `speculative_config`; Gemma 4 MTP remains tracked in [gemma4-mtp-vllm-notes.md](docs/gemma4-mtp-vllm-notes.md).
+- vLLM dependencies are heavy and imported lazily only when a vLLM model is loaded.
+
+Blackwell runtime note:
+
+- On Blackwell GPUs with an older CUDA toolkit, flashinfer's JIT sampler may target an unsupported architecture. The backend sets `VLLM_USE_FLASHINFER_SAMPLER=0` by default before importing vLLM, unless the environment already sets it.
+
+## Pool-managed Backends
+
+These backends run as local subprocesses that the pool starts, supervises, and stops: `llama_server` and `vllm_serve`. Each has its own dependency stack, so its native libraries and CUDA toolkit stay isolated from the pool's environment — `*_library_path` is prepended to the subprocess `LD_LIBRARY_PATH`. Unloading terminates the process, so VRAM is released by process exit.
+
+### llama_server
 
 The `llama_server` backend starts a native `llama-server` subprocess for a configured model, waits for its health endpoint, and forwards requests through its OpenAI-compatible chat API. Unloading the model stops the subprocess, so VRAM is actually released.
 
@@ -416,56 +583,7 @@ Notes:
 - `llama_server_spec_draft_p_min` is constrained to `0..1`. It is a draft acceptance/early-stop probability threshold, not a determinism switch.
 - Live admin overrides currently include `llama_server_n_ctx`, `llama_server_image_max_tokens`, `llama_server_spec_type`, `llama_server_spec_draft_n_max`, and `llama_server_spec_draft_p_min`.
 
-## vLLM Backend
-
-The `vllm` backend runs vLLM in-process through `AsyncLLMEngine` on a dedicated event-loop thread. It does not start a separate `vllm serve` process.
-
-Example:
-
-```json
-{
-  "engine": {
-    "models": {
-      "qwen2.5-vl-3b": {
-        "backend": "vllm",
-        "model_path": null,
-        "prompt_format": "generic",
-        "modalities": ["text", "image"],
-        "vllm_model": "Qwen/Qwen2.5-VL-3B-Instruct",
-        "vllm_dtype": "bfloat16",
-        "vllm_gpu_memory_utilization": 0.01,
-        "vllm_kv_cache_memory_bytes": 1073741824,
-        "vllm_max_model_len": 12288,
-        "vllm_limit_mm_per_prompt": {
-          "image": 1
-        },
-        "vllm_mm_processor_kwargs": {
-          "max_pixels": 4014080
-        },
-        "enabled": false
-      }
-    }
-  }
-}
-```
-
-Notes:
-
-- `vllm_model` is the Hugging Face model id or local path used by vLLM.
-- `model_path` is not required for vLLM.
-- `vllm_max_model_len` must cover text tokens plus image tokens.
-- Prefer a very low `vllm_gpu_memory_utilization` and set `vllm_kv_cache_memory_bytes` explicitly, so vLLM does not reserve most free VRAM just because it is available.
-- `vllm_kv_cache_memory_bytes`, when set, manually controls KV cache size and takes precedence over sizing derived from `vllm_gpu_memory_utilization`.
-- `vllm_limit_mm_per_prompt` caps multimodal items per request.
-- `vllm_mm_processor_kwargs` is passed through to the model processor. For some vision models this is where image token budgets are bounded.
-- vLLM speculative decoding fields are wired to `speculative_config`; Gemma 4 MTP remains tracked in [gemma4-mtp-vllm-notes.md](docs/gemma4-mtp-vllm-notes.md).
-- vLLM dependencies are heavy and imported lazily only when a vLLM model is loaded.
-
-Blackwell runtime note:
-
-- On Blackwell GPUs with an older CUDA toolkit, flashinfer's JIT sampler may target an unsupported architecture. The backend sets `VLLM_USE_FLASHINFER_SAMPLER=0` by default before importing vLLM, unless the environment already sets it.
-
-## vLLM Serve Backend
+### vllm_serve
 
 The `vllm_serve` backend starts a local `vllm serve` subprocess for a configured model, waits for `/v1/models`, and forwards requests through vLLM's OpenAI-compatible chat endpoint. Unloading the model terminates that subprocess, so VRAM is released by process exit rather than by Python object cleanup alone.
 
@@ -603,7 +721,7 @@ The example shows a short `vllm_serve_library_path`; production configs may need
 
 ## Remote Backends
 
-Remote models use the same public model contract, but call an upstream API instead of loading model weights. The current remote backend is `openai_remote` with Chat Completions.
+These backends run entirely off-box: the pool loads no weights and runs no local runtime; it only needs network access and an API key. Remote models use the same public model contract but call an upstream API. The current remote backend is `openai_remote` with Chat Completions.
 
 Example:
 
@@ -655,6 +773,7 @@ The response `metrics` payload uses nested timers:
 
 - `backend_inference_wall_ms`: time spent inside the backend adapter call
 - `engine_total_wall_ms`: backend inference plus scheduler and engine work
+- `engine_outside_backend_wall_ms`: engine and scheduler time outside the backend call (`engine_total_wall_ms` minus `backend_inference_wall_ms`)
 - `pool_total_wall_ms`: total time spent inside the HTTP request handler
 
 Additional fields may include:
@@ -769,7 +888,6 @@ Design notes and implementation trackers:
 - [runtime-scheduler-tracker.md](docs/runtime-scheduler-tracker.md): scheduler MVP status
 - [model-replica-routing-notes.md](docs/model-replica-routing-notes.md): public model id and replica semantics
 - [remote-openai-compatible-backend-notes.md](docs/remote-openai-compatible-backend-notes.md): remote backend shape and cost-control notes
-- [runtime-subprocess-notes.md](docs/runtime-subprocess-notes.md): subprocess isolation direction
 - [gemma4-mtp-vllm-notes.md](docs/gemma4-mtp-vllm-notes.md): vLLM and Gemma 4 MTP investigation
 - [gemma4-vllm-qat-notes.md](docs/gemma4-vllm-qat-notes.md): Gemma 4 QAT/vLLM notes
 
