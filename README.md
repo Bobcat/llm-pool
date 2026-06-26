@@ -450,7 +450,7 @@ Notes:
 
 ### llama_cpp (in-process GGUF)
 
-The `llama_cpp` backend runs GGUF models in-process through `llama-cpp-python`. It supports text-only multi-turn for selected prompt formats (`generic`, `mistral_template`, `qwen3_template`, `gemma4_template`) and does not accept image input. For GGUF vision, or to release VRAM on unload by stopping the process, use the pool-managed `llama_server` backend instead.
+The `llama_cpp` backend runs GGUF models in-process through `llama-cpp-python`. It supports text-only multi-turn for selected prompt formats (`generic`, `mistral_template`, `qwen3_template`, `gemma4_template`) and does not accept image input. For GGUF vision, use the pool-managed `llama_server` backend instead.
 
 Example:
 
@@ -533,7 +533,7 @@ These backends run as local subprocesses that the pool starts, supervises, and s
 
 ### llama_server
 
-The `llama_server` backend starts a native `llama-server` subprocess for a configured model, waits for its health endpoint, and forwards requests through its OpenAI-compatible chat API. Unloading the model stops the subprocess, so VRAM is actually released.
+The `llama_server` backend starts a native `llama-server` subprocess for a configured model, waits for its health endpoint, and forwards requests through its OpenAI-compatible chat API. Unloading the model stops the subprocess and frees its VRAM.
 
 Example definition:
 
@@ -585,7 +585,7 @@ Notes:
 
 ### vllm_serve
 
-The `vllm_serve` backend starts a local `vllm serve` subprocess for a configured model, waits for `/v1/models`, and forwards requests through vLLM's OpenAI-compatible chat endpoint. Unloading the model terminates that subprocess, so VRAM is released by process exit rather than by Python object cleanup alone.
+The `vllm_serve` backend starts a local `vllm serve` subprocess for a configured model, waits for `/v1/models`, and forwards requests through vLLM's OpenAI-compatible chat endpoint. Unloading the model terminates that subprocess and frees its VRAM.
 
 Use this backend when the model works well through upstream `vllm serve`, or when its vLLM/PyTorch/CUDA dependency stack should be isolated from the `llm-pool` process.
 
