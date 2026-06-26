@@ -773,7 +773,6 @@ The response `metrics` payload uses nested timers:
 
 - `backend_inference_wall_ms`: time spent inside the backend adapter call
 - `engine_total_wall_ms`: backend inference plus scheduler and engine work
-- `engine_outside_backend_wall_ms`: engine and scheduler time outside the backend call (`engine_total_wall_ms` minus `backend_inference_wall_ms`)
 - `pool_total_wall_ms`: total time spent inside the HTTP request handler
 
 Additional fields may include:
@@ -786,6 +785,7 @@ Additional fields may include:
 - `engine_prompt_tokens`
 - `engine_output_tokens`
 - `engine_tokens_per_second`
+- `engine_outside_backend_wall_ms`
 
 Some fields are backend-dependent and may be `null`.
 
