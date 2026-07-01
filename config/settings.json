@@ -21,35 +21,8 @@
         "prompt_format": "generic",
         "enabled": false
       },
-      "gemma-4-26B-A4B-it-exl3-5.10bpw": {
-        "model_path": "/home/gunnar/models/gemma-4-26B-A4B-it-exl3-5.10bpw",
-        "backend": "exllamav3",
-        "device": "cuda",
-        "prompt_format": "gemma4_template",
-        "enable_thinking": false,
-        "exllama_cache_size": 16384,
-        "enabled": false
-      },
-      "gemma-4-31b-it-exl3-5.00bpw": {
-        "model_path": "/home/gunnar/models/gemma-4-31b-it-exl3-5.00bpw",
-        "backend": "exllamav3",
-        "device": "cuda",
-        "prompt_format": "gemma4_template",
-        "enable_thinking": false,
-        "enabled": false
-      },
       "google_gemma-4-E2B-it-Q8_0-gguf": {
         "model_path": "/home/gunnar/models/google_gemma-4-E2B-it-Q8_0/google_gemma-4-E2B-it-Q8_0.gguf",
-        "backend": "llama_cpp",
-        "device": "cuda",
-        "prompt_format": "gemma4_template",
-        "enable_thinking": false,
-        "gguf_n_ctx": 16384,
-        "gguf_flash_attn": "auto",
-        "enabled": false
-      },
-      "google_gemma-4-E2B-it-Q6_K-gguf": {
-        "model_path": "/home/gunnar/models/google_gemma-4-E2B-it-Q6_K/google_gemma-4-E2B-it-Q6_K.gguf",
         "backend": "llama_cpp",
         "device": "cuda",
         "prompt_format": "gemma4_template",
@@ -70,16 +43,6 @@
         "gguf_flash_attn": "auto",
         "enabled": false
       },
-      "google_gemma-4-E2B-it-Q4_K_M-gguf": {
-        "model_path": "/home/gunnar/models/google_gemma-4-E2B-it-Q4_K_M/google_gemma-4-E2B-it-Q4_K_M.gguf",
-        "backend": "llama_cpp",
-        "device": "cuda",
-        "prompt_format": "gemma4_template",
-        "enable_thinking": false,
-        "gguf_n_ctx": 16384,
-        "gguf_flash_attn": "auto",
-        "enabled": false
-      },
       "google_gemma-4-E4B-it-Q8_0-gguf": {
         "model_path": "/home/gunnar/models/google_gemma-4-E4B-it-Q8_0/google_gemma-4-E4B-it-Q8_0.gguf",
         "backend": "llama_cpp",
@@ -90,38 +53,8 @@
         "gguf_flash_attn": "auto",
         "enabled": false
       },
-      "google_gemma-4-E4B-it-Q6_K-gguf": {
-        "model_path": "/home/gunnar/models/google_gemma-4-E4B-it-Q6_K/google_gemma-4-E4B-it-Q6_K.gguf",
-        "backend": "llama_cpp",
-        "device": "cuda",
-        "prompt_format": "gemma4_template",
-        "enable_thinking": false,
-        "gguf_n_ctx": 16384,
-        "gguf_flash_attn": "auto",
-        "enabled": false
-      },
       "google_gemma-4-E4B-it-Q5_K_M-gguf": {
         "model_path": "/home/gunnar/models/google_gemma-4-E4B-it-Q5_K_M/google_gemma-4-E4B-it-Q5_K_M.gguf",
-        "backend": "llama_cpp",
-        "device": "cuda",
-        "prompt_format": "gemma4_template",
-        "enable_thinking": false,
-        "gguf_n_ctx": 16384,
-        "gguf_flash_attn": "auto",
-        "enabled": false
-      },
-      "google_gemma-4-E4B-it-Q4_K_M-gguf": {
-        "model_path": "/home/gunnar/models/google_gemma-4-E4B-it-Q4_K_M/google_gemma-4-E4B-it-Q4_K_M.gguf",
-        "backend": "llama_cpp",
-        "device": "cuda",
-        "prompt_format": "gemma4_template",
-        "enable_thinking": false,
-        "gguf_n_ctx": 16384,
-        "gguf_flash_attn": "auto",
-        "enabled": false
-      },
-      "google_gemma-4-26B-A4B-it-Q4_K_M-gguf": {
-        "model_path": "/home/gunnar/models/google_gemma-4-26B-A4B-it-Q4_K_M/google_gemma-4-26B-A4B-it-Q4_K_M.gguf",
         "backend": "llama_cpp",
         "device": "cuda",
         "prompt_format": "gemma4_template",
@@ -499,61 +432,8 @@
         "llama_server_reasoning": "off",
         "enabled": false
       },
-      "gemma-4-26b-a4b-it-ud-q8kxl-llama-server": {
-        "model_path": "/home/gunnar/models/unsloth/gemma-4-26B-A4B-it-GGUF/gemma-4-26B-A4B-it-UD-Q8_K_XL.gguf",
-        "backend": "llama_server",
-        "prompt_format": "gemma4_template",
-        "enable_thinking": false,
-        "modalities": [
-          "text",
-          "image"
-        ],
-        "llama_server_binary": "/home/gunnar/.unsloth/llama.cpp/llama-server",
-        "llama_server_library_path": [
-          "/home/gunnar/projects/llm-pool/.venv/lib/python3.12/site-packages/nvidia/cu13/lib"
-        ],
-        "llama_server_n_ctx": 4096,
-        "llama_server_n_gpu_layers": "999",
-        "llama_server_flash_attn": "on",
-        "llama_server_mmproj_path": "/home/gunnar/models/unsloth/gemma-4-26B-A4B-it-GGUF/mmproj-BF16.gguf",
-        "llama_server_image_max_tokens": 512,
-        "llama_server_draft_model_path": "/home/gunnar/models/unsloth/gemma-4-26B-A4B-it-GGUF/MTP/gemma-4-26B-A4B-it-Q8_0-MTP.gguf",
-        "llama_server_spec_type": "draft-mtp",
-        "llama_server_spec_draft_n_max": 5,
-        "llama_server_spec_draft_p_min": 0.0,
-        "llama_server_spec_draft_ngl": "999",
-        "llama_server_reasoning": "off",
-        "enabled": false
-      },
       "translategemma-12b-it-q5-k-m-gguf": {
         "model_path": "/home/gunnar/models/translategemma-12b-it-GGUF/translategemma-12b-it-Q5_K_M.gguf",
-        "backend": "llama_cpp",
-        "device": "cuda",
-        "prompt_format": "translategemma_template",
-        "gguf_n_ctx": 2048,
-        "gguf_flash_attn": "auto",
-        "enabled": false
-      },
-      "translategemma-12b-it-q6-k-h-gguf": {
-        "model_path": "/home/gunnar/models/translategemma-12b-it-MP-GGUF/translategemma-12b-it.Q6_K_H.gguf",
-        "backend": "llama_cpp",
-        "device": "cuda",
-        "prompt_format": "translategemma_template",
-        "gguf_n_ctx": 2048,
-        "gguf_flash_attn": "auto",
-        "enabled": false
-      },
-      "translategemma-27b-it-q4-k-m-gguf": {
-        "model_path": "/home/gunnar/models/translategemma-27b-it.Q4_K_M.gguf",
-        "backend": "llama_cpp",
-        "device": "cuda",
-        "prompt_format": "translategemma_template",
-        "gguf_n_ctx": 2048,
-        "gguf_flash_attn": "auto",
-        "enabled": false
-      },
-      "translategemma-27b-it-q6-k-gguf": {
-        "model_path": "/home/gunnar/models/translategemma-27b-it.Q6_K.gguf",
         "backend": "llama_cpp",
         "device": "cuda",
         "prompt_format": "translategemma_template",
@@ -588,15 +468,6 @@
         "gguf_flash_attn": "auto",
         "enabled": false
       },
-      "eurollm-22b-instruct-2512-gguf": {
-        "model_path": "/home/gunnar/models/EuroLLM-22B-Instruct-2512-Q6_K/utter-project_EuroLLM-22B-Instruct-2512-Q6_K.gguf",
-        "backend": "llama_cpp",
-        "device": "cuda",
-        "prompt_format": "generic",
-        "enable_thinking": false,
-        "gguf_flash_attn": "auto",
-        "enabled": false
-      },
       "eurollm-22b-instruct-2512-q5-k-m-gguf": {
         "model_path": "/home/gunnar/models/EuroLLM-22B-Instruct-2512-Q5_K_M/utter-project_EuroLLM-22B-Instruct-2512-Q5_K_M.gguf",
         "backend": "llama_cpp",
@@ -622,22 +493,6 @@
         "prompt_format": "mistral_template",
         "enable_thinking": false,
         "gguf_flash_attn": "auto",
-        "enabled": false
-      },
-      "mistral-small-3.2-24b-instruct-2506-gguf": {
-        "model_path": "/home/gunnar/models/Mistral-Small-3.2-24B-Instruct-2506-Q6_K_L/mistralai_Mistral-Small-3.2-24B-Instruct-2506-Q6_K_L.gguf",
-        "backend": "llama_cpp",
-        "device": "cuda",
-        "prompt_format": "mistral_template",
-        "enable_thinking": false,
-        "gguf_flash_attn": "auto",
-        "enabled": false
-      },
-      "eurollm-22b-instruct-2512-ct2-fp16": {
-        "model_path": "/home/gunnar/models/EuroLLM-22B-Instruct-2512-ct2-fp16",
-        "device": "cuda",
-        "compute_type": "default",
-        "prompt_format": "generic",
         "enabled": false
       },
       "eurollm-22b-instruct-2512-ct2-int8f16": {
