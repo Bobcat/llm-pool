@@ -599,12 +599,13 @@ Example:
         "backend": "vllm_serve",
         "model_path": null,
         "prompt_format": "generic",
+        "target_inflight": 4,
         "modalities": ["text", "image"],
         "vllm_model": "/models/nvidia/Gemma-4-26B-A4B-NVFP4",
         "vllm_dtype": "auto",
         "vllm_gpu_memory_utilization": 0.01,
         "vllm_kv_cache_memory_bytes": 2147483648,
-        "vllm_max_model_len": 8192,
+        "vllm_max_model_len": 20480,
         "vllm_limit_mm_per_prompt": {
           "image": 1
         },
@@ -623,7 +624,7 @@ Example:
         },
         "vllm_serve_extra_args": [
           "--max-num-seqs",
-          "1"
+          "4"
         ],
         "enabled": false
       }
@@ -645,6 +646,7 @@ Notes:
 - `vllm_num_speculative_tokens` is the MTP speculative depth. It is conceptually close to a draft-token count, but it should be tuned separately from llama.cpp `--spec-draft-n-max`; vLLM's documented safe starting point is `1`, while this local Gemma 4 NVFP4 vision benchmark currently uses `8`.
 - `vllm_serve_library_path` is prepended to `LD_LIBRARY_PATH` for the subprocess.
 - `vllm_serve_extra_args` is an escape hatch for upstream CLI flags that are model-specific but should still live in config.
+- For concurrent `vllm_serve` routes, align scheduler `target_inflight` with vLLM `--max-num-seqs`. The KV-cache budget and request lengths still determine whether all configured sequences fit at once.
 - For single-user Workbench models, keep `--max-num-seqs` small. vLLM can otherwise infer broad CUDA graph capture sizes that reserve much more VRAM than the explicit KV-cache budget suggests.
 - Live admin overrides currently include `vllm_max_model_len`, `vllm_kv_cache_dtype`, `vllm_kv_cache_memory_bytes`, `vllm_max_pixels`, `vllm_speculative_method`, `vllm_speculative_model`, `vllm_speculative_moe_backend`, `vllm_speculative_attention_backend`, and `vllm_num_speculative_tokens`.
 - vLLM sleep mode is intentionally not used in v1; load/unload uses subprocess start/termination.

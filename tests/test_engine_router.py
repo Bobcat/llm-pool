@@ -256,9 +256,11 @@ class ModelRouterEngineTests(unittest.TestCase):
         with mock.patch.object(engine_module, "VllmServeEngine", FakeVllmServeEngine):
             engine = ModelRouterEngine(settings)
             result = engine.complete(ResponseRequest(model="vllm-model", input="hello"))
+            model = engine.admin_models_payload()["models"][0]
             entry = engine.unload_model("vllm-model", settings)
 
         self.assertEqual(result.text, "vllm-serve:vllm-model#1")
+        self.assertEqual(model["effective_target_inflight"], 3)
         self.assertEqual(entry["runtime_state"], "unloaded")
         self.assertTrue(runtime.closed)
 

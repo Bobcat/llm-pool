@@ -436,7 +436,7 @@ class ModelRouterEngine:
     def _runtime_capability_for_model(self, model_name: str, backend_engine: object) -> int:
         del backend_engine
         state = self._model_states[model_name]
-        if state.resolved_backend == "openai_remote":
+        if state.resolved_backend in {"openai_remote", "vllm_serve"}:
             return self._configured_models[model_name].target_inflight
         return 1
 

@@ -12,8 +12,8 @@ Current reality note:
 - requests are already queue-backed per public model
 - the runtime admin API already uses the scheduler boundary for load/unload semantics
 - `llama_server` and `vllm_serve` now run through the same scheduler path, while their native subprocess lifecycles remain backend-owned
-- scheduler-visible capacity for local backends is still conservative: `vllm_serve` may use vLLM's internal scheduler, prefix cache, CUDA graphs, and speculative decoding, but `llm-pool` still treats it as one submitted request per loaded runtime
-- backend-native tuning such as `vllm_serve_extra_args: ["--max-num-seqs", "1"]` is model config, not scheduler policy
+- scheduler-visible capacity for most local backends is still conservative; `vllm_serve` uses configured `target_inflight` because its HTTP runtime and vLLM scheduler support concurrent requests
+- backend-native tuning through `vllm_serve_extra_args`, including `--max-num-seqs`, is model config, not scheduler policy
 - this note now describes the broader scheduler design space beyond that first implemented cut
 
 ## Why This Is Worth Doing

@@ -10,7 +10,7 @@ Current reality note:
 - one public model may load multiple identical replicas
 - admin remains aggregate per public model
 - local runtime capability is still clamped to one in-flight request per replica except where a backend explicitly reports more capacity
-- `llama_server` and `vllm_serve` participate as backends behind the same aggregate public-model semantics; native server multi-inflight behavior is not exposed as scheduler capacity yet
+- `vllm_serve` reports configured `target_inflight` as scheduler capacity; most other local backends, including `llama_server`, remain effectively single-request per replica
 - live resizing, per-replica admin rows, and per-replica unload remain out of scope
 
 This is separate from `runtime-scheduler-notes.md` because replicas affect more than scheduler internals:
@@ -234,7 +234,7 @@ Flow:
 
 ### Replica selection policy
 
-For MVP and for future `effective_target_inflight > 1`, the scheduler should already be replica-aware.
+The scheduler is replica-aware for both single-request runtimes and runtimes with `effective_target_inflight > 1`.
 
 Proposed rule:
 
@@ -265,17 +265,16 @@ The scheduler note should therefore be read together with this replica-routing n
 
 ### Backend-native concurrency vs replicas
 
-Replicas are the current way to serve concurrent requests for a single public
-model: load the weights N times, one runtime per replica, each runtime
-serializing its own work. This is a quick, predictable workaround, not the
-end-state architecture. Its cost is linear in VRAM: K concurrent requests need
-K copies of the weights.
+For backends that remain clamped to one request per runtime, replicas provide
+concurrency by loading the weights N times. This is a predictable workaround,
+but its VRAM cost grows linearly with the number of replicas.
 
-The more efficient path is backend-native concurrency: one weight copy serving
-many in-flight requests through continuous batching. vLLM already works this
-way. llama.cpp can also do it, but the llama_cpp backend does not expose it yet — it
-constructs the runtime with `n_ctx` only and serializes generation with a lock,
-so it is effectively single-sequence today.
+Backend-native concurrency lets one weight copy serve many in-flight requests
+through continuous batching. The `vllm_serve` backend exposes this path to the
+`llm-pool` scheduler through `target_inflight`. llama.cpp can also work this
+way, but the `llama_cpp` backend does not expose it yet: it constructs the
+runtime with `n_ctx` only and serializes generation with a lock, so it is
+effectively single-sequence today.
 
 #### The two axes
 
@@ -285,7 +284,7 @@ expose them inversely:
 
 | | per-request length | total KV pool | concurrency |
 | --- | --- | --- | --- |
-| vLLM | `max_model_len` (set directly) | `kv_cache_memory_bytes` (set directly) | derived = pool / per-request |
+| vLLM | `max_model_len` (set directly) | `kv_cache_memory_bytes` (set directly) | bounded by `max_num_seqs` and cache capacity |
 | llama.cpp | derived = `n_ctx / n_parallel` | `n_ctx` (in tokens) | `n_parallel` (set directly) |
 
 So llama.cpp is not fundamentally single-axis. `n_ctx` is the total cache in

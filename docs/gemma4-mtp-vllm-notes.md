@@ -24,10 +24,11 @@ Current reality note:
   been run end to end through `vllm_serve` with image input. The local
   document-structure OCR benchmark currently uses
   `vllm_num_speculative_tokens: 8`; the README records the observed sweep.
-- The `vllm_serve` Gemma 4 NVFP4 model also uses `vllm_serve_extra_args`
-  with `--max-num-seqs 1` for single-user Workbench use, because vLLM's
-  broader default scheduler/CUDA-graph capture sizes can reserve much more
-  VRAM than the explicit KV-cache budget suggests.
+- The NVIDIA `vllm_serve` Gemma 4 NVFP4 profile uses matching concurrency
+  limits: `target_inflight: 4` in `llm-pool` and `--max-num-seqs 4` in vLLM.
+  It combines those limits with `vllm_max_model_len: 20480` and an explicit
+  2 GiB KV-cache budget. Four concurrent long text requests and four concurrent
+  image-structure requests completed without preemption or request errors.
 - Beyond this note's scope, the same backend also gained multimodal (image)
   input support, used by the image-description / OCR-grounding work.
 - A separate `backend: "llama_server"` now exists for llama_cpp models that need

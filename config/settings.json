@@ -299,6 +299,7 @@
         "model_path": null,
         "prompt_format": "gemma4_template",
         "enable_thinking": false,
+        "target_inflight": 4,
         "modalities": [
           "text",
           "image"
@@ -307,7 +308,7 @@
         "vllm_dtype": "auto",
         "vllm_gpu_memory_utilization": 0.01,
         "vllm_kv_cache_memory_bytes": 2147483648,
-        "vllm_max_model_len": 8192,
+        "vllm_max_model_len": 20480,
         "vllm_trust_remote_code": true,
         "vllm_limit_mm_per_prompt": {
           "image": 1
@@ -328,7 +329,7 @@
         },
         "vllm_serve_extra_args": [
           "--max-num-seqs",
-          "1"
+          "4"
         ],
         "enabled": false
       },
