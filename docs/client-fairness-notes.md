@@ -25,6 +25,15 @@ It does not provide fairness between users, document runs, or sessions behind
 one service. That would require trusted sub-client identity or hierarchical
 fairness.
 
+The key is a stable scheduling identity, and a caller may present more than one —
+for example a coarse task-class split such as `translation-service:image` and
+`translation-service:pdf`. The pool schedules between keys, not between originating
+services, so a caller that uses more keys gets a larger aggregate share under
+contention. That is the caller's choice; V1 does not attribute keys back to a
+service. translation-services takes exactly this flat-key path (see its
+request-class note), accepting that its aggregate share scales with how many of its
+classes are active.
+
 Fairness across model executors is out of scope. Different executors can still
 compete for the same GPU outside this policy.
 
