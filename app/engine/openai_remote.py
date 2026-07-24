@@ -1,12 +1,16 @@
 from __future__ import annotations
 
+import base64
+import binascii
 from dataclasses import dataclass
 import json
 import os
 import socket
 import time
+import uuid
 from urllib.error import HTTPError
 from urllib.error import URLError
+from urllib.parse import quote
 from urllib.request import Request
 from urllib.request import urlopen
 
@@ -14,6 +18,7 @@ from app.config import AppSettings
 from app.config import ModelSettings
 from app.schemas import DecodingParams
 from app.schemas import EngineResult
+from app.schemas import FileContent
 from app.schemas import ResponseMetrics
 from app.schemas import ResponseRequest
 
@@ -28,6 +33,7 @@ _DEFAULT_SYSTEM_PROMPT = "You are a helpful assistant. Return only the response.
 _REMOTE_API_KIND = "chat_completions"
 _REMOTE_HEALTH_CHECK = "config_only"
 _REMOTE_THINKING_VALUES = {"enabled", "disabled"}
+_REMOTE_FILE_MODES = {"chat_completions_inline", "files_extract"}
 
 
 @dataclass(frozen=True)
@@ -72,10 +78,12 @@ class OpenAIRemoteEngine:
 
         decoding = self._resolve_decoding(request.decoding)
         self._log_unsupported_decoding(request)
+        extracted_file_contents = self._extract_file_contents(runtime, request)
         payload = self._chat_completions_payload(
             runtime=runtime,
             request=request,
             decoding=decoding,
+            extracted_file_contents=extracted_file_contents,
         )
 
         started = time.perf_counter()
@@ -110,6 +118,21 @@ class OpenAIRemoteEngine:
             raise ValueError("remote_timeout_s must be greater than 0")
         if settings.remote_thinking is not None and settings.remote_thinking not in _REMOTE_THINKING_VALUES:
             raise ValueError("remote_thinking must be 'enabled', 'disabled', or omitted")
+        if (
+            settings.remote_file_mode is not None
+            and settings.remote_file_mode not in _REMOTE_FILE_MODES
+        ):
+            raise ValueError(
+                "remote_file_mode must be 'chat_completions_inline', "
+                "'files_extract', or omitted"
+            )
+        if (
+            settings.remote_file_mode == "files_extract"
+            and settings.remote_file_purpose is None
+        ):
+            raise ValueError(
+                "remote_file_purpose is required when remote_file_mode is 'files_extract'"
+            )
 
         base_url = self._required_remote_field(settings.remote_base_url, "remote_base_url").rstrip("/")
         api_key_env = self._required_remote_field(settings.remote_api_key_env, "remote_api_key_env")
@@ -131,15 +154,39 @@ class OpenAIRemoteEngine:
         runtime: OpenAIRemoteModelRuntime,
         request: ResponseRequest,
         decoding: ResolvedDecoding,
+        extracted_file_contents: list[str] | None = None,
     ) -> dict[str, object]:
         system_prompt = request.instructions or _DEFAULT_SYSTEM_PROMPT
-        user_content = self._user_message_content(request)
+        include_files = runtime.config.remote_file_mode != "files_extract"
+        messages: list[dict[str, object]] = [
+            {"role": "system", "content": system_prompt},
+        ]
+        for file_content in extracted_file_contents or []:
+            messages.append({"role": "system", "content": file_content})
+        if request.messages is not None:
+            messages.extend(
+                {
+                    "role": message.role,
+                    "content": self._message_content(
+                        message.content,
+                        include_files=include_files,
+                    ),
+                }
+                for message in request.messages
+            )
+        else:
+            messages.append(
+                {
+                    "role": "user",
+                    "content": self._message_content(
+                        request.input,
+                        include_files=include_files,
+                    ),
+                }
+            )
         payload: dict[str, object] = {
             "model": runtime.remote_model,
-            "messages": [
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": user_content},
-            ],
+            "messages": messages,
             "max_tokens": decoding.max_tokens,
         }
         remote_thinking = _resolve_request_remote_thinking(
@@ -180,16 +227,269 @@ class OpenAIRemoteEngine:
         return top_p == 0.95
 
     @staticmethod
-    def _user_message_content(request: ResponseRequest) -> str | list[dict[str, object]]:
-        if isinstance(request.input, str):
-            return request.input
-        return [item.model_dump(mode="python") for item in request.input]
+    def _message_content(
+        content,
+        *,
+        include_files: bool,
+    ) -> str | list[dict[str, object]]:
+        if content is None:
+            return ""
+        if isinstance(content, str):
+            return content
+        return [
+            item.model_dump(mode="python")
+            for item in content
+            if include_files or not isinstance(item, FileContent)
+        ]
 
-    def _post_json(
+    def _extract_file_contents(
         self,
         runtime: OpenAIRemoteModelRuntime,
-        payload: dict[str, object],
-    ) -> dict[str, object]:
+        request: ResponseRequest,
+    ) -> list[str]:
+        file_items = self._request_file_items(request)
+        if not file_items:
+            return []
+        if runtime.config.remote_file_mode != "files_extract":
+            return []
+
+        extracted: list[str] = []
+        for item in file_items:
+            filename = item.file.filename
+            media_type, file_bytes = self._decode_file_data(
+                filename=filename,
+                file_data=item.file.file_data,
+            )
+            file_id = self._upload_file(
+                runtime,
+                filename=filename,
+                media_type=media_type,
+                file_bytes=file_bytes,
+            )
+            try:
+                extracted.append(self._get_file_content(runtime, file_id))
+            finally:
+                self._delete_file_best_effort(runtime, file_id)
+        return extracted
+
+    @staticmethod
+    def _request_file_items(request: ResponseRequest) -> list[FileContent]:
+        file_items: list[FileContent] = []
+        if isinstance(request.input, list):
+            file_items.extend(
+                item for item in request.input if isinstance(item, FileContent)
+            )
+        for message in request.messages or []:
+            if isinstance(message.content, list):
+                file_items.extend(
+                    item
+                    for item in message.content
+                    if isinstance(item, FileContent)
+                )
+        return file_items
+
+    @staticmethod
+    def _decode_file_data(*, filename: str, file_data: str) -> tuple[str, bytes]:
+        header, separator, encoded = file_data.partition(",")
+        if (
+            separator == ""
+            or not header.startswith("data:")
+            or ";base64" not in header.lower()
+        ):
+            raise BackendExecutionError(
+                code="invalid_file_input",
+                status_code=400,
+                message=f"file {filename!r} must use a base64 data URL",
+            )
+        media_type = header[5:].split(";", 1)[0].strip() or "application/octet-stream"
+        try:
+            decoded = base64.b64decode(encoded, validate=True)
+        except (binascii.Error, ValueError) as exc:
+            raise BackendExecutionError(
+                code="invalid_file_input",
+                status_code=400,
+                message=f"file {filename!r} contains invalid base64 data",
+            ) from exc
+        return media_type, decoded
+
+    def _upload_file(
+        self,
+        runtime: OpenAIRemoteModelRuntime,
+        *,
+        filename: str,
+        media_type: str,
+        file_bytes: bytes,
+    ) -> str:
+        purpose = runtime.config.remote_file_purpose
+        if purpose is None:
+            raise BackendExecutionError(
+                code="remote_file_configuration_error",
+                status_code=500,
+                message="remote file extraction purpose is not configured",
+            )
+        boundary = f"----llm-pool-{uuid.uuid4().hex}"
+        safe_filename = filename.replace("\r", "").replace("\n", "").replace('"', "_")
+        body = (
+            f"--{boundary}\r\n"
+            'Content-Disposition: form-data; name="purpose"\r\n\r\n'
+            f"{purpose}\r\n"
+            f"--{boundary}\r\n"
+            f'Content-Disposition: form-data; name="file"; filename="{safe_filename}"\r\n'
+            f"Content-Type: {media_type}\r\n\r\n"
+        ).encode("utf-8")
+        body += file_bytes
+        body += f"\r\n--{boundary}--\r\n".encode("ascii")
+        request = Request(
+            f"{runtime.base_url}/files",
+            data=body,
+            headers={
+                "Accept": "application/json",
+                "Authorization": f"Bearer {self._api_key(runtime)}",
+                "Content-Type": f"multipart/form-data; boundary={boundary}",
+            },
+            method="POST",
+        )
+        raw_payload = self._request_bytes(
+            runtime,
+            request,
+            operation="file upload",
+        )
+        try:
+            payload = json.loads(raw_payload.decode("utf-8"))
+        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+            raise BackendExecutionError(
+                code="upstream_response_parse_failure",
+                status_code=502,
+                message="upstream file upload returned invalid JSON",
+            ) from exc
+        file_id = payload.get("id") if isinstance(payload, dict) else None
+        if not isinstance(file_id, str) or file_id.strip() == "":
+            raise BackendExecutionError(
+                code="upstream_response_parse_failure",
+                status_code=502,
+                message="upstream file upload response did not contain a file id",
+            )
+        return file_id.strip()
+
+    def _get_file_content(
+        self,
+        runtime: OpenAIRemoteModelRuntime,
+        file_id: str,
+    ) -> str:
+        request = Request(
+            f"{runtime.base_url}/files/{quote(file_id, safe='')}/content",
+            headers={
+                "Accept": "text/plain",
+                "Authorization": f"Bearer {self._api_key(runtime)}",
+            },
+            method="GET",
+        )
+        raw_payload = self._request_bytes(
+            runtime,
+            request,
+            operation="file content extraction",
+        )
+        try:
+            return raw_payload.decode("utf-8")
+        except UnicodeDecodeError as exc:
+            raise BackendExecutionError(
+                code="upstream_response_parse_failure",
+                status_code=502,
+                message="upstream file content was not valid UTF-8 text",
+            ) from exc
+
+    def _delete_file_best_effort(
+        self,
+        runtime: OpenAIRemoteModelRuntime,
+        file_id: str,
+    ) -> None:
+        request = Request(
+            f"{runtime.base_url}/files/{quote(file_id, safe='')}",
+            headers={
+                "Accept": "application/json",
+                "Authorization": f"Bearer {self._api_key(runtime)}",
+            },
+            method="DELETE",
+        )
+        try:
+            self._request_bytes(
+                runtime,
+                request,
+                operation="file cleanup",
+            )
+        except BackendExecutionError as exc:
+            LOGGER.warning(
+                "Failed to delete upstream file %s after extraction: %s",
+                file_id,
+                exc.message,
+            )
+
+    def _request_bytes(
+        self,
+        runtime: OpenAIRemoteModelRuntime,
+        request: Request,
+        *,
+        operation: str,
+    ) -> bytes:
+        try:
+            with urlopen(request, timeout=runtime.timeout_s) as response:
+                return response.read()
+        except HTTPError as exc:
+            raise self._map_operation_http_error(exc, operation=operation) from exc
+        except (TimeoutError, socket.timeout) as exc:
+            raise BackendExecutionError(
+                code="upstream_timeout",
+                status_code=504,
+                message=f"upstream {operation} timed out",
+            ) from exc
+        except URLError as exc:
+            if isinstance(exc.reason, (TimeoutError, socket.timeout)):
+                raise BackendExecutionError(
+                    code="upstream_timeout",
+                    status_code=504,
+                    message=f"upstream {operation} timed out",
+                ) from exc
+            raise BackendExecutionError(
+                code="upstream_connection_error",
+                status_code=502,
+                message=f"upstream {operation} connection failed",
+            ) from exc
+
+    def _map_operation_http_error(
+        self,
+        exc: HTTPError,
+        *,
+        operation: str,
+    ) -> BackendExecutionError:
+        status = int(exc.code)
+        upstream_detail = self._http_error_detail(exc)
+        detail_suffix = f": {upstream_detail}" if upstream_detail else ""
+        if status in {401, 403}:
+            return BackendExecutionError(
+                code="upstream_authentication_failure",
+                status_code=502,
+                message=f"upstream {operation} authentication failed with HTTP {status}{detail_suffix}",
+            )
+        if status == 429:
+            return BackendExecutionError(
+                code="upstream_rate_limit",
+                status_code=429,
+                message=f"upstream {operation} was rate limited{detail_suffix}",
+            )
+        if 400 <= status < 500:
+            return BackendExecutionError(
+                code="upstream_invalid_request",
+                status_code=502,
+                message=f"upstream {operation} rejected the request with HTTP {status}{detail_suffix}",
+            )
+        return BackendExecutionError(
+            code="upstream_server_error" if status >= 500 else "upstream_http_error",
+            status_code=502,
+            message=f"upstream {operation} failed with HTTP {status}{detail_suffix}",
+        )
+
+    @staticmethod
+    def _api_key(runtime: OpenAIRemoteModelRuntime) -> str:
         api_key = os.environ.get(runtime.api_key_env, "").strip()
         if api_key == "":
             raise BackendExecutionError(
@@ -197,14 +497,20 @@ class OpenAIRemoteEngine:
                 status_code=500,
                 message=f"missing API key environment variable: {runtime.api_key_env}",
             )
+        return api_key
 
+    def _post_json(
+        self,
+        runtime: OpenAIRemoteModelRuntime,
+        payload: dict[str, object],
+    ) -> dict[str, object]:
         data = json.dumps(payload, ensure_ascii=True).encode("utf-8")
         request = Request(
             f"{runtime.base_url}/chat/completions",
             data=data,
             headers={
                 "Accept": "application/json",
-                "Authorization": f"Bearer {api_key}",
+                "Authorization": f"Bearer {self._api_key(runtime)}",
                 "Content-Type": "application/json",
             },
             method="POST",

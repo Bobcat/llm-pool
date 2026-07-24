@@ -238,6 +238,7 @@
         "model_path": null,
         "prompt_format": "gemma4_template",
         "enable_thinking": false,
+        "target_inflight": 4,
         "modalities": [
           "text",
           "image"
@@ -245,8 +246,8 @@
         "vllm_model": "/home/gunnar/models/RedHatAI/gemma-4-26B-A4B-it-NVFP4",
         "vllm_dtype": "auto",
         "vllm_gpu_memory_utilization": 0.01,
-        "vllm_kv_cache_memory_bytes": 2147483648,
-        "vllm_max_model_len": 8192,
+        "vllm_kv_cache_memory_bytes": 4294967296,
+        "vllm_max_model_len": 20480,
         "vllm_trust_remote_code": true,
         "vllm_limit_mm_per_prompt": {
           "image": 1
@@ -267,7 +268,7 @@
         },
         "vllm_serve_extra_args": [
           "--max-num-seqs",
-          "1"
+          "4"
         ],
         "enabled": false
       },
@@ -338,6 +339,7 @@
         "model_path": null,
         "prompt_format": "qwen3_template",
         "enable_thinking": false,
+        "target_inflight": 4,
         "modalities": [
           "text",
           "image"
@@ -345,9 +347,9 @@
         "vllm_model": "/home/gunnar/models/nvidia/Qwen3.6-35B-A3B-NVFP4",
         "vllm_dtype": "auto",
         "vllm_gpu_memory_utilization": 0.01,
-        "vllm_kv_cache_memory_bytes": 1073741824,
+        "vllm_kv_cache_memory_bytes": 2147483648,
         "vllm_kv_cache_dtype": "fp8",
-        "vllm_max_model_len": 8192,
+        "vllm_max_model_len": 20480,
         "vllm_trust_remote_code": true,
         "vllm_limit_mm_per_prompt": {
           "image": 1
@@ -395,9 +397,9 @@
           "--load-format",
           "fastsafetensors",
           "--max-num-seqs",
-          "1",
+          "4",
           "--max-num-batched-tokens",
-          "2048",
+          "8192",
           "--reasoning-parser",
           "qwen3",
           "--default-chat-template-kwargs",
@@ -534,6 +536,8 @@
         "remote_health_check": "config_only",
         "remote_max_retries": 0,
         "remote_thinking": "disabled",
+        "remote_file_mode": "files_extract",
+        "remote_file_purpose": "file-extract",
         "target_inflight": 1,
         "modalities": [
           "text",

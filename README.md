@@ -51,7 +51,7 @@ FastAPI service that exposes a single `POST /v1/responses` API across local and 
 - exposes one inference API for multiple model runtimes
 - supports local CT2, ExLlamaV3, `llama_cpp`/GGUF, managed native `llama-server`, in-process vLLM, and managed `vllm serve` backends
 - supports OpenAI-compatible remote Chat Completions backends behind an explicit `allow_remote` request gate
-- accepts text input everywhere, and image input on backends/models that advertise image support
+- accepts text input everywhere, image input on models that advertise image support, and document files on explicitly configured remote models
 - supports single-turn `input` requests and backend-dependent multi-turn `messages` requests
 - returns JSON responses or service-side SSE events from the same endpoint
 - includes per-request timing and token metrics when the selected backend can report them
@@ -249,14 +249,18 @@ Content item types:
 
 - `{ "type": "text", "text": "..." }`
 - `{ "type": "image_url", "image_url": { "url": "...", "detail": "auto" } }`
+- `{ "type": "file", "file": { "filename": "paper.pdf", "file_data": "data:application/pdf;base64,..." } }`
 
 Image URLs may be `data:image/...;base64,...`, `file://...`, or `http(s)://...` depending on the backend's own loader support.
+File data must be a base64 data URL. File support is currently limited to `openai_remote` models with an explicit `remote_file_mode`.
 
 Important behavior:
 
 - `capabilities.modalities` on `GET /v1/admin/models` is the source of truth for each model.
+- `capabilities.file_inputs` tells clients whether a remote model accepts `file` content items.
 - A model declares image support with `"modalities": ["text", "image"]`; the default is `["text"]`.
 - Text-only models reject image content with `modality_unsupported`.
+- Models without configured file support reject file content with `modality_unsupported`.
 - `llama_server`, vLLM, `vllm_serve`, and remote OpenAI-compatible vision models are the current intended vision paths.
 - In-process GGUF via `llama-cpp-python` remains text-only.
 - A text-only content array is accepted by text backends and concatenated into one prompt.
@@ -336,7 +340,7 @@ Backends add their own fields:
 - `llama_server`: binary, host, port, library path, context, GPU layers, flash attention, `mmproj`, image token budget, MTP/speculative decoding, reasoning, and extra native args
 - vLLM: model id/path, dtype, KV cache, model length, tensor parallelism, multimodal limits, processor kwargs, speculative decoding
 - `vllm_serve`: the same vLLM model/runtime fields plus binary path, host, port, library path, environment, API key, timeout, and extra CLI args
-- remote OpenAI-compatible: base URL, API key env var, upstream model name, timeout, retry and thinking settings
+- remote OpenAI-compatible: base URL, API key env var, upstream model name, timeout, retry, thinking, and provider-specific file settings
 
 Minimal local override example:
 
@@ -757,6 +761,39 @@ Notes:
 - `target_inflight` controls local submission concurrency, not upstream provider capacity
 - `remote_thinking` can set a provider-specific Chat Completions `thinking` field when supported
 - remote calls may incur provider costs; this repo currently provides a request-level allow gate, not a full cost ledger
+
+### Remote file input
+
+OpenAI supports files directly in Chat Completions as `type: "file"` content items with inline `file_data`. Configure that route as:
+
+```json
+{
+  "remote_file_mode": "chat_completions_inline"
+}
+```
+
+See the [OpenAI file-input guide](https://developers.openai.com/api/docs/guides/file-inputs) for its supported formats and limits.
+
+Moonshot exposes an OpenAI-style API, but its native file-based question-answering flow is different. The client must upload the file to `/v1/files`, retrieve the provider-formatted content from `/v1/files/{file_id}/content`, and add that content to the Chat Completions request. Configure that route as:
+
+```json
+{
+  "remote_file_mode": "files_extract",
+  "remote_file_purpose": "file-extract"
+}
+```
+
+`llm-pool` performs those steps and makes a best-effort deletion of the temporary upstream file after extraction. See Moonshot's [file-based Q&A guide](https://platform.kimi.ai/docs/guide/use-kimi-api-for-file-based-qa) and [Files API reference](https://platform.kimi.ai/docs/api/files-upload).
+
+The important compatibility boundary is that “OpenAI-compatible” does not guarantee support for Chat Completions file items, the Files API, or the Responses API. Many providers implement only the core Chat Completions request shape. File handling must therefore be selected per remote model:
+
+| `remote_file_mode` | Upstream handling |
+| --- | --- |
+| omitted | File input is disabled and `capabilities.file_inputs` is `false`. |
+| `chat_completions_inline` | The original `file` item and base64 data URL are sent in Chat Completions. |
+| `files_extract` | The file is uploaded, extracted through the provider's Files API, and added to Chat Completions as provider-formatted text. `remote_file_purpose` is required. |
+
+This adapter does not parse PDF, DOCX, or other documents locally and does not silently fall back to a different route. Supported file types, size limits, retention behavior, and extraction quality remain provider-specific. The current `openai_remote` adapter uses Chat Completions; it does not call the Responses API.
 
 ## Replicas
 

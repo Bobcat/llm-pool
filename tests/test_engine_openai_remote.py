@@ -17,7 +17,11 @@ if HAS_PYDANTIC:
     from app.engine.common import ResolvedDecoding
     import app.engine.openai_remote as openai_remote_module
     from app.schemas import DecodingParams
+    from app.schemas import FileContent
+    from app.schemas import FileSpec
+    from app.schemas import Message
     from app.schemas import ResponseRequest
+    from app.schemas import TextContent
 
 
 class FakeResponse:
@@ -35,6 +39,20 @@ class FakeResponse:
 
     def close(self) -> None:
         pass
+
+
+class RawFakeResponse:
+    def __init__(self, payload: bytes) -> None:
+        self._payload = payload
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc, tb) -> None:
+        del exc_type, exc, tb
+
+    def read(self) -> bytes:
+        return self._payload
 
 
 @unittest.skipUnless(HAS_PYDANTIC, "pydantic not installed")
@@ -134,6 +152,181 @@ class OpenAIRemoteEngineTests(unittest.TestCase):
                 "max_tokens": 9,
                 "stop": ["DONE"],
                 "thinking": {"type": "disabled"},
+            },
+        )
+
+    def test_inline_file_input_is_forwarded_in_multi_turn_chat(self) -> None:
+        engine = openai_remote_module.OpenAIRemoteEngine.__new__(
+            openai_remote_module.OpenAIRemoteEngine
+        )
+        runtime = openai_remote_module.OpenAIRemoteModelRuntime(
+            config=ModelSettings(
+                model_path=None,
+                backend="openai_remote",
+                remote_file_mode="chat_completions_inline",
+            ),
+            base_url="https://api.example.com/v1",
+            api_key_env="EXAMPLE_API_KEY",
+            remote_model="provider-model",
+            timeout_s=1.0,
+        )
+        file_data = "data:application/pdf;base64,JVBERi0="
+        payload = engine._chat_completions_payload(
+            runtime=runtime,
+            request=ResponseRequest(
+                model="remote-model",
+                messages=[
+                    Message(
+                        role="user",
+                        content=[
+                            FileContent(
+                                file=FileSpec(
+                                    filename="paper.pdf",
+                                    file_data=file_data,
+                                )
+                            ),
+                            TextContent(text="Summarize this paper."),
+                        ],
+                    )
+                ],
+            ),
+            decoding=ResolvedDecoding(
+                beam_size=1,
+                top_k=1,
+                top_p=1.0,
+                temperature=0.2,
+                repetition_penalty=1.0,
+                max_tokens=16,
+                stop=[],
+            ),
+        )
+
+        self.assertEqual(
+            payload["messages"][1]["content"][0],
+            {
+                "type": "file",
+                "file": {
+                    "filename": "paper.pdf",
+                    "file_data": file_data,
+                },
+            },
+        )
+        self.assertEqual(payload["messages"][1]["content"][1]["type"], "text")
+
+    def test_files_extract_uploads_reads_cleans_up_and_injects_content(self) -> None:
+        settings = AppSettings(
+            engine=EngineSettings(
+                decoding=DecodingDefaults(
+                    top_p=1.0,
+                    temperature=0.1,
+                    max_tokens=32,
+                    stop=[],
+                ),
+                models={
+                    "remote-model": ModelSettings(
+                        model_path=None,
+                        backend="openai_remote",
+                        remote_api_kind="chat_completions",
+                        remote_base_url="https://api.example.com/v1",
+                        remote_api_key_env="EXAMPLE_API_KEY",
+                        remote_model="provider-model",
+                        remote_file_mode="files_extract",
+                        remote_file_purpose="file-extract",
+                    ),
+                },
+            ),
+        )
+        calls: list[tuple[str, str]] = []
+        captured: dict[str, object] = {}
+
+        def fake_urlopen(request, *, timeout):
+            self.assertEqual(timeout, 60.0)
+            method = request.get_method()
+            url = request.full_url
+            calls.append((method, url))
+            if method == "POST" and url.endswith("/files"):
+                captured["upload_body"] = request.data
+                return FakeResponse({"id": "file-123"})
+            if method == "GET" and url.endswith("/files/file-123/content"):
+                return RawFakeResponse(b"Provider-formatted PDF contents")
+            if method == "DELETE" and url.endswith("/files/file-123"):
+                return FakeResponse({"id": "file-123", "deleted": True})
+            if method == "POST" and url.endswith("/chat/completions"):
+                captured["chat_body"] = json.loads(request.data.decode("utf-8"))
+                return FakeResponse(
+                    {
+                        "choices": [{"message": {"content": "summary"}}],
+                        "usage": {"prompt_tokens": 10, "completion_tokens": 2},
+                    }
+                )
+            self.fail(f"unexpected upstream request: {method} {url}")
+
+        previous = os.environ.get("EXAMPLE_API_KEY")
+        os.environ["EXAMPLE_API_KEY"] = "secret"
+        try:
+            with mock.patch.object(
+                openai_remote_module,
+                "urlopen",
+                side_effect=fake_urlopen,
+            ):
+                engine = openai_remote_module.OpenAIRemoteEngine(settings)
+                result = engine.complete(
+                    ResponseRequest(
+                        model="remote-model",
+                        input=[
+                            FileContent(
+                                file=FileSpec(
+                                    filename="paper.pdf",
+                                    file_data=(
+                                        "data:application/pdf;base64,"
+                                        "JVBERi0="
+                                    ),
+                                )
+                            ),
+                            TextContent(text="Summarize this paper."),
+                        ],
+                    )
+                )
+        finally:
+            if previous is None:
+                os.environ.pop("EXAMPLE_API_KEY", None)
+            else:
+                os.environ["EXAMPLE_API_KEY"] = previous
+
+        self.assertEqual(result.text, "summary")
+        self.assertEqual(
+            calls,
+            [
+                ("POST", "https://api.example.com/v1/files"),
+                ("GET", "https://api.example.com/v1/files/file-123/content"),
+                ("DELETE", "https://api.example.com/v1/files/file-123"),
+                ("POST", "https://api.example.com/v1/chat/completions"),
+            ],
+        )
+        self.assertIn(b'name="purpose"', captured["upload_body"])
+        self.assertIn(b"file-extract", captured["upload_body"])
+        self.assertIn(b'filename="paper.pdf"', captured["upload_body"])
+        self.assertIn(b"%PDF-", captured["upload_body"])
+        self.assertEqual(
+            captured["chat_body"]["messages"][:2],
+            [
+                {
+                    "role": "system",
+                    "content": "You are a helpful assistant. Return only the response.",
+                },
+                {
+                    "role": "system",
+                    "content": "Provider-formatted PDF contents",
+                },
+            ],
+        )
+        self.assertEqual(
+            captured["chat_body"]["messages"][2],
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "Summarize this paper."},
+                ],
             },
         )
 
@@ -275,6 +468,32 @@ class OpenAIRemoteEngineTests(unittest.TestCase):
             str(exc_info.exception),
             "missing API key environment variable: MISSING_API_KEY",
         )
+
+    def test_files_extract_requires_purpose(self) -> None:
+        engine = openai_remote_module.OpenAIRemoteEngine.__new__(
+            openai_remote_module.OpenAIRemoteEngine
+        )
+        settings = ModelSettings(
+            model_path=None,
+            backend="openai_remote",
+            remote_api_kind="chat_completions",
+            remote_base_url="https://api.example.com/v1",
+            remote_api_key_env="EXAMPLE_API_KEY",
+            remote_model="provider-model",
+            remote_file_mode="files_extract",
+        )
+        previous = os.environ.get("EXAMPLE_API_KEY")
+        os.environ["EXAMPLE_API_KEY"] = "secret"
+        try:
+            with self.assertRaises(ValueError) as exc_info:
+                engine._build_runtime(settings)
+        finally:
+            if previous is None:
+                os.environ.pop("EXAMPLE_API_KEY", None)
+            else:
+                os.environ["EXAMPLE_API_KEY"] = previous
+
+        self.assertIn("remote_file_purpose is required", str(exc_info.exception))
 
     def test_http_error_message_includes_upstream_error_body(self) -> None:
         exc = HTTPError(

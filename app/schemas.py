@@ -41,8 +41,18 @@ class ImageContent(BaseModel):
     image_url: ImageUrlSpec
 
 
+class FileSpec(BaseModel):
+    filename: str = Field(min_length=1)
+    file_data: str = Field(min_length=1)
+
+
+class FileContent(BaseModel):
+    type: Literal["file"] = "file"
+    file: FileSpec
+
+
 ContentItem = Annotated[
-    Union[TextContent, ImageContent],
+    Union[TextContent, ImageContent, FileContent],
     Field(discriminator="type"),
 ]
 ThinkingMode = Literal["default", "enabled", "disabled"]
@@ -94,9 +104,26 @@ class ResponseRequest(BaseModel):
 
     @property
     def has_image_content(self) -> bool:
-        if self.input is None or isinstance(self.input, str):
-            return False
-        return any(isinstance(item, ImageContent) for item in self.input)
+        return any(
+            isinstance(item, ImageContent)
+            for item in self._content_items()
+        )
+
+    @property
+    def has_file_content(self) -> bool:
+        return any(
+            isinstance(item, FileContent)
+            for item in self._content_items()
+        )
+
+    def _content_items(self) -> list[ContentItem]:
+        items: list[ContentItem] = []
+        if isinstance(self.input, list):
+            items.extend(self.input)
+        for message in self.messages or []:
+            if isinstance(message.content, list):
+                items.extend(message.content)
+        return items
 
     def text_input_or_raise(self) -> str:
         """Return the request input flattened to plain text.
@@ -113,9 +140,9 @@ class ResponseRequest(BaseModel):
             return self.input
         text_parts: list[str] = []
         for item in self.input:
-            if isinstance(item, ImageContent):
+            if isinstance(item, (ImageContent, FileContent)):
                 raise ModalityUnsupportedError(
-                    "image content is not supported by this model"
+                    f"{item.type} content is not supported by this model"
                 )
             text_parts.append(item.text)
         return "".join(text_parts)
@@ -179,6 +206,7 @@ class AdminLoadRequest(BaseModel):
 
 class ModelCapabilities(BaseModel):
     modalities: list[Literal["text", "image"]] = Field(default_factory=lambda: ["text"])
+    file_inputs: bool = False
     multi_turn: bool = False
     thinking_modes: list[ThinkingMode] = Field(default_factory=lambda: ["default"])
 

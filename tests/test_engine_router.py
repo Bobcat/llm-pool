@@ -22,6 +22,8 @@ if HAS_PYDANTIC:
     from app.engine import build_engine
     from app.schemas import AdminLoadRequest
     from app.schemas import EngineResult
+    from app.schemas import FileContent
+    from app.schemas import FileSpec
     from app.schemas import ResponseRequest
 
 
@@ -138,6 +140,43 @@ class ModelRouterEngineTests(unittest.TestCase):
                 )
 
         self.assertEqual(exc_info.exception.code, "thinking_unsupported")
+
+    def test_rejects_file_input_when_model_does_not_advertise_it(self) -> None:
+        settings = AppSettings(
+            service=ServiceSettings(),
+            engine=EngineSettings(
+                backend="ct2",
+                models={
+                    "local-model": ModelSettings(model_path="/models/ct2"),
+                },
+            ),
+        )
+
+        class FakeCt2Engine:
+            def __init__(self, scoped_settings):
+                self._models = {name: object() for name in scoped_settings.engine.models}
+
+            def complete(self, request: ResponseRequest) -> EngineResult:
+                return EngineResult(text=request.model)
+
+        with mock.patch.object(engine_module, "Ct2Engine", FakeCt2Engine):
+            engine = ModelRouterEngine(settings)
+            with self.assertRaises(engine_module.RequestAdmissionError) as exc_info:
+                engine.complete(
+                    ResponseRequest(
+                        model="local-model",
+                        input=[
+                            FileContent(
+                                file=FileSpec(
+                                    filename="paper.pdf",
+                                    file_data="data:application/pdf;base64,JVBERi0=",
+                                )
+                            )
+                        ],
+                    )
+                )
+
+        self.assertEqual(exc_info.exception.code, "file_input_unsupported")
 
     def test_dispatches_openai_remote_backend_with_remote_admission(self) -> None:
         settings = AppSettings(

@@ -20,6 +20,7 @@ class ServiceSettings:
 
 
 _ALLOWED_MODALITIES = ("text", "image")
+_REMOTE_FILE_MODES = ("chat_completions_inline", "files_extract")
 
 
 @dataclass(frozen=True)
@@ -57,6 +58,8 @@ class ModelSettings:
     remote_health_check: str = "config_only"
     remote_max_retries: int = 0
     remote_thinking: str | None = None
+    remote_file_mode: str | None = None
+    remote_file_purpose: str | None = None
     llama_server_binary: str = "llama-server"
     llama_server_host: str = "127.0.0.1"
     llama_server_port: int | None = None
@@ -210,6 +213,14 @@ def load_settings(path: str | Path | None = None) -> AppSettings:
         remote_thinking = _coerce_optional_str(model_payload.get("remote_thinking"))
         if remote_thinking is not None:
             remote_thinking = remote_thinking.lower()
+        remote_file_mode = _coerce_optional_str(model_payload.get("remote_file_mode"))
+        if remote_file_mode is not None:
+            remote_file_mode = remote_file_mode.lower()
+            if remote_file_mode not in _REMOTE_FILE_MODES:
+                raise ValueError(
+                    "remote_file_mode must be one of "
+                    f"{', '.join(repr(value) for value in _REMOTE_FILE_MODES)}"
+                )
         models[str(model_name)] = ModelSettings(
             model_path=model_path,
             backend=backend,
@@ -248,6 +259,10 @@ def load_settings(path: str | Path | None = None) -> AppSettings:
             remote_health_check=remote_health_check,
             remote_max_retries=int(model_payload.get("remote_max_retries", 0)),
             remote_thinking=remote_thinking,
+            remote_file_mode=remote_file_mode,
+            remote_file_purpose=_coerce_optional_str(
+                model_payload.get("remote_file_purpose")
+            ),
             llama_server_binary=(
                 str(model_payload.get("llama_server_binary", "llama-server") or "llama-server").strip()
                 or "llama-server"

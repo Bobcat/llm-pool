@@ -93,6 +93,8 @@ _BACKEND_MODEL_DEFINITION_FIELDS = {
         "remote_health_check",
         "remote_max_retries",
         "remote_thinking",
+        "remote_file_mode",
+        "remote_file_purpose",
     ),
     "vllm": (
         "vllm_model",
@@ -165,12 +167,16 @@ _OVERRIDE_THINKING_MODES = ("default", "enabled", "disabled")
 
 def _model_supports_multi_turn(backend: str, prompt_format: str | None) -> bool:
     normalized_backend = backend.strip().lower()
-    if normalized_backend in {"llama_server", "vllm", "vllm_serve"}:
+    if normalized_backend in {"llama_server", "openai_remote", "vllm", "vllm_serve"}:
         return True
     if normalized_backend == "llama_cpp":
         normalized_prompt_format = (prompt_format or "").strip().lower()
         return normalized_prompt_format in _GGUF_MULTI_TURN_PROMPT_FORMATS
     return False
+
+
+def _model_supports_file_inputs(backend: str, remote_file_mode: str | None) -> bool:
+    return backend.strip().lower() == "openai_remote" and remote_file_mode is not None
 
 
 def _model_thinking_modes(

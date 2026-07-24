@@ -33,6 +33,8 @@ if HAS_PYDANTIC:
     from app.engine.stub import StubEngine
     from app.schemas import ImageContent
     from app.schemas import ImageUrlSpec
+    from app.schemas import FileContent
+    from app.schemas import FileSpec
     from app.schemas import ModalityUnsupportedError
     from app.schemas import ResponseRequest
     from app.schemas import TextContent
@@ -59,6 +61,7 @@ class ResponseRequestSchemaTests(unittest.TestCase):
         self.assertEqual(request.input, "Hello world")
         self.assertEqual(request.thinking, "default")
         self.assertFalse(request.has_image_content)
+        self.assertFalse(request.has_file_content)
         self.assertEqual(request.text_input_or_raise(), "Hello world")
 
     def test_request_accepts_thinking_override_modes(self) -> None:
@@ -96,6 +99,23 @@ class ResponseRequestSchemaTests(unittest.TestCase):
             ResponseRequest.model_validate(
                 {"model": "m", "input": [{"type": "audio", "audio": "..."}]}
             )
+
+    def test_file_content_marks_has_file_content_and_raises_on_text_only(self) -> None:
+        request = ResponseRequest(
+            model="m",
+            input=[
+                TextContent(text="Summarize this file."),
+                FileContent(
+                    file=FileSpec(
+                        filename="paper.pdf",
+                        file_data="data:application/pdf;base64,JVBERi0=",
+                    )
+                ),
+            ],
+        )
+        self.assertTrue(request.has_file_content)
+        with self.assertRaises(ModalityUnsupportedError):
+            request.text_input_or_raise()
 
     def test_image_url_parses_from_json_payload(self) -> None:
         request = ResponseRequest.model_validate(
@@ -352,6 +372,7 @@ class AdminCapabilitiesExposureTests(unittest.TestCase):
             entry["capabilities"],
             {
                 "modalities": ["text"],
+                "file_inputs": False,
                 "multi_turn": False,
                 "thinking_modes": ["default"],
             },
@@ -377,6 +398,7 @@ class AdminCapabilitiesExposureTests(unittest.TestCase):
             entry["capabilities"],
             {
                 "modalities": ["text", "image"],
+                "file_inputs": False,
                 "multi_turn": False,
                 "thinking_modes": ["default"],
             },
@@ -402,6 +424,7 @@ class AdminCapabilitiesExposureTests(unittest.TestCase):
             entry["capabilities"],
             {
                 "modalities": ["text"],
+                "file_inputs": False,
                 "multi_turn": True,
                 "thinking_modes": ["default"],
             },
@@ -427,6 +450,7 @@ class AdminCapabilitiesExposureTests(unittest.TestCase):
             entry["capabilities"],
             {
                 "modalities": ["text"],
+                "file_inputs": False,
                 "multi_turn": True,
                 "thinking_modes": ["default", "enabled", "disabled"],
             },
@@ -452,6 +476,7 @@ class AdminCapabilitiesExposureTests(unittest.TestCase):
             entry["capabilities"],
             {
                 "modalities": ["text"],
+                "file_inputs": False,
                 "multi_turn": True,
                 "thinking_modes": ["default", "enabled", "disabled"],
             },
@@ -477,7 +502,33 @@ class AdminCapabilitiesExposureTests(unittest.TestCase):
             entry["capabilities"],
             {
                 "modalities": ["text"],
+                "file_inputs": False,
                 "multi_turn": False,
+                "thinking_modes": ["default"],
+            },
+        )
+
+    def test_stub_admin_payload_reports_remote_file_inputs(self) -> None:
+        settings = AppSettings(
+            engine=EngineSettings(
+                backend="openai_remote",
+                models={
+                    "m": ModelSettings(
+                        model_path=None,
+                        enabled=True,
+                        remote_file_mode="chat_completions_inline",
+                    ),
+                },
+            ),
+        )
+        engine = StubEngine(settings)
+        entry = engine.admin_models_payload(settings)["models"][0]
+        self.assertEqual(
+            entry["capabilities"],
+            {
+                "modalities": ["text"],
+                "file_inputs": True,
+                "multi_turn": True,
                 "thinking_modes": ["default"],
             },
         )

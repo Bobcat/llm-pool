@@ -20,6 +20,7 @@ from .common import _exception_message
 from .common import _load_constraints_for_backend
 from .common import _load_recommendations_for_backend
 from .common import _model_definition_payload
+from .common import _model_supports_file_inputs
 from .common import _model_supports_multi_turn
 from .common import _model_thinking_modes
 from .common import _normalize_gguf_cache_type_name
@@ -87,6 +88,15 @@ class ModelRouterEngine:
                     code="remote_execution_disallowed",
                     status_code=403,
                     message="remote execution is not allowed for this request",
+                )
+            if request.has_file_content and not _model_supports_file_inputs(
+                state.resolved_backend,
+                model_settings.remote_file_mode,
+            ):
+                raise RequestAdmissionError(
+                    code="file_input_unsupported",
+                    status_code=400,
+                    message=f"model {request.model!r} does not support file inputs",
                 )
             thinking_modes = _model_thinking_modes(
                 state.resolved_backend,
@@ -338,6 +348,10 @@ class ModelRouterEngine:
             "load_override": dict(state.load_override),
             "capabilities": {
                 "modalities": list(model_settings.modalities),
+                "file_inputs": _model_supports_file_inputs(
+                    state.resolved_backend,
+                    model_settings.remote_file_mode,
+                ),
                 "multi_turn": _model_supports_multi_turn(
                     state.resolved_backend,
                     model_settings.prompt_format,
