@@ -93,6 +93,7 @@ _BACKEND_MODEL_DEFINITION_FIELDS = {
         "remote_health_check",
         "remote_max_retries",
         "remote_thinking",
+        "remote_prompt_cache_key_enabled",
         "remote_file_mode",
         "remote_file_purpose",
     ),

@@ -58,6 +58,7 @@ class ModelSettings:
     remote_health_check: str = "config_only"
     remote_max_retries: int = 0
     remote_thinking: str | None = None
+    remote_prompt_cache_key_enabled: bool = False
     remote_file_mode: str | None = None
     remote_file_purpose: str | None = None
     llama_server_binary: str = "llama-server"
@@ -259,6 +260,9 @@ def load_settings(path: str | Path | None = None) -> AppSettings:
             remote_health_check=remote_health_check,
             remote_max_retries=int(model_payload.get("remote_max_retries", 0)),
             remote_thinking=remote_thinking,
+            remote_prompt_cache_key_enabled=bool(
+                model_payload.get("remote_prompt_cache_key_enabled", False)
+            ),
             remote_file_mode=remote_file_mode,
             remote_file_purpose=_coerce_optional_str(
                 model_payload.get("remote_file_purpose")

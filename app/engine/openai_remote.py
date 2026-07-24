@@ -91,7 +91,9 @@ class OpenAIRemoteEngine:
         wall_s = max(0.0, time.perf_counter() - started)
 
         text = self._extract_text(response_payload)
-        prompt_tokens, output_tokens = self._extract_usage(response_payload)
+        prompt_tokens, output_tokens, cached_prompt_tokens = self._extract_usage(
+            response_payload
+        )
         tokens_per_second = None
         if output_tokens is not None and wall_s > 0.0:
             tokens_per_second = output_tokens / wall_s
@@ -99,6 +101,7 @@ class OpenAIRemoteEngine:
             text=text,
             metrics=ResponseMetrics(
                 engine_prompt_tokens=prompt_tokens,
+                engine_cached_prompt_tokens=cached_prompt_tokens,
                 engine_output_tokens=output_tokens,
                 engine_tokens_per_second=tokens_per_second,
             ),
@@ -205,6 +208,11 @@ class OpenAIRemoteEngine:
             payload["stop"] = decoding.stop
         if remote_thinking is not None:
             payload["thinking"] = {"type": remote_thinking}
+        if (
+            runtime.config.remote_prompt_cache_key_enabled
+            and request.prompt_cache_key is not None
+        ):
+            payload["prompt_cache_key"] = request.prompt_cache_key
         return payload
 
     @staticmethod
@@ -660,16 +668,20 @@ class OpenAIRemoteEngine:
             message="upstream chat completion message content was not text",
         )
 
-    def _extract_usage(self, payload: dict[str, object]) -> tuple[int | None, int | None]:
+    def _extract_usage(
+        self,
+        payload: dict[str, object],
+    ) -> tuple[int | None, int | None, int | None]:
         usage = payload.get("usage")
         if not isinstance(usage, dict):
-            return None, None
+            return None, None, None
         prompt_tokens = self._coerce_int(usage.get("prompt_tokens"))
         output_tokens = self._coerce_int(usage.get("completion_tokens"))
+        cached_prompt_tokens = self._coerce_int(usage.get("cached_tokens"))
         total_tokens = self._coerce_int(usage.get("total_tokens"))
         if output_tokens is None and prompt_tokens is not None and total_tokens is not None:
             output_tokens = max(0, total_tokens - prompt_tokens)
-        return prompt_tokens, output_tokens
+        return prompt_tokens, output_tokens, cached_prompt_tokens
 
     def _log_unsupported_decoding(self, request: ResponseRequest) -> None:
         ignored: dict[str, object] = {}

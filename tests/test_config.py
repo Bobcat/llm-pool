@@ -268,6 +268,7 @@ class ConfigTests(unittest.TestCase):
                     '        "remote_timeout_s": 45.5,\n'
                     '        "remote_health_check": "config_only",\n'
                     '        "remote_thinking": "DISABLED",\n'
+                    '        "remote_prompt_cache_key_enabled": true,\n'
                     '        "remote_file_mode": "FILES_EXTRACT",\n'
                     '        "remote_file_purpose": "file-extract",\n'
                     '        "target_inflight": 3,\n'
@@ -293,6 +294,7 @@ class ConfigTests(unittest.TestCase):
         self.assertEqual(model.remote_health_check, "config_only")
         self.assertEqual(model.remote_max_retries, 0)
         self.assertEqual(model.remote_thinking, "disabled")
+        self.assertTrue(model.remote_prompt_cache_key_enabled)
         self.assertEqual(model.remote_file_mode, "files_extract")
         self.assertEqual(model.remote_file_purpose, "file-extract")
         self.assertEqual(model.target_inflight, 3)

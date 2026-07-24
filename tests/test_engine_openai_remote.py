@@ -76,6 +76,7 @@ class OpenAIRemoteEngineTests(unittest.TestCase):
                         remote_model="provider-model",
                         remote_timeout_s=12.5,
                         remote_thinking="disabled",
+                        remote_prompt_cache_key_enabled=True,
                     ),
                 },
             ),
@@ -98,6 +99,7 @@ class OpenAIRemoteEngineTests(unittest.TestCase):
                     ],
                     "usage": {
                         "prompt_tokens": 12,
+                        "cached_tokens": 8,
                         "completion_tokens": 5,
                         "total_tokens": 17,
                     },
@@ -115,6 +117,7 @@ class OpenAIRemoteEngineTests(unittest.TestCase):
                         input="Hello",
                         instructions="Be brief.",
                         allow_remote=True,
+                        prompt_cache_key="chat-123",
                         decoding=DecodingParams(
                             beam_size=2,
                             top_k=7,
@@ -134,6 +137,7 @@ class OpenAIRemoteEngineTests(unittest.TestCase):
 
         self.assertEqual(result.text, "done")
         self.assertEqual(result.metrics.engine_prompt_tokens, 12)
+        self.assertEqual(result.metrics.engine_cached_prompt_tokens, 8)
         self.assertEqual(result.metrics.engine_output_tokens, 5)
         self.assertIsNotNone(result.metrics.engine_tokens_per_second)
         self.assertEqual(captured["url"], "https://api.example.com/v1/chat/completions")
@@ -152,8 +156,44 @@ class OpenAIRemoteEngineTests(unittest.TestCase):
                 "max_tokens": 9,
                 "stop": ["DONE"],
                 "thinking": {"type": "disabled"},
+                "prompt_cache_key": "chat-123",
             },
         )
+
+    def test_prompt_cache_key_requires_model_opt_in(self) -> None:
+        engine = openai_remote_module.OpenAIRemoteEngine.__new__(
+            openai_remote_module.OpenAIRemoteEngine
+        )
+        runtime = openai_remote_module.OpenAIRemoteModelRuntime(
+            config=ModelSettings(
+                model_path=None,
+                backend="openai_remote",
+            ),
+            base_url="https://api.example.com/v1",
+            api_key_env="EXAMPLE_API_KEY",
+            remote_model="provider-model",
+            timeout_s=1.0,
+        )
+
+        payload = engine._chat_completions_payload(
+            runtime=runtime,
+            request=ResponseRequest(
+                model="remote-model",
+                input="Hello",
+                prompt_cache_key="chat-123",
+            ),
+            decoding=ResolvedDecoding(
+                beam_size=1,
+                top_k=1,
+                top_p=1.0,
+                temperature=0.2,
+                repetition_penalty=1.0,
+                max_tokens=16,
+                stop=[],
+            ),
+        )
+
+        self.assertNotIn("prompt_cache_key", payload)
 
     def test_inline_file_input_is_forwarded_in_multi_turn_chat(self) -> None:
         engine = openai_remote_module.OpenAIRemoteEngine.__new__(

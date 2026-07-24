@@ -181,6 +181,7 @@ Response:
     "gpu_generate_total_ms": 138.4,
     "gpu_decode_after_first_token_ms": null,
     "engine_prompt_tokens": 47,
+    "engine_cached_prompt_tokens": null,
     "engine_output_tokens": 23,
     "engine_tokens_per_second": 166.2
   }
@@ -207,6 +208,7 @@ This is not yet guaranteed to be backend-native live token streaming for every r
 | `source_lang_code` | `string \| null` | no | `null` | Source language for translation models. For `translategemma_template`, omit it or use `"auto"`/`"mixed"` to translate mixed-source input. |
 | `target_lang_code` | `string \| null` | no | `null` | Required for `prompt_format: "translategemma_template"`. |
 | `allow_remote` | `boolean` | no | `false` | Must be `true` for `openai_remote` remote models. |
+| `prompt_cache_key` | `string \| null` | no | `null` | Stable conversation or task key used as a remote prompt-cache hint. It is forwarded only when the selected remote model opts in. It does not replace `messages`. |
 | `stream` | `boolean` | no | `false` | `false` returns one JSON response; `true` returns SSE events. |
 | `thinking` | `"default" \| "enabled" \| "disabled"` | no | `"default"` | Request-level thinking override. Accepted values are advertised per model in `capabilities.thinking_modes`. |
 | `decoding` | `object` | no | `{}` | Omitted subfields fall back to `engine.decoding` defaults. |
@@ -340,7 +342,7 @@ Backends add their own fields:
 - `llama_server`: binary, host, port, library path, context, GPU layers, flash attention, `mmproj`, image token budget, MTP/speculative decoding, reasoning, and extra native args
 - vLLM: model id/path, dtype, KV cache, model length, tensor parallelism, multimodal limits, processor kwargs, speculative decoding
 - `vllm_serve`: the same vLLM model/runtime fields plus binary path, host, port, library path, environment, API key, timeout, and extra CLI args
-- remote OpenAI-compatible: base URL, API key env var, upstream model name, timeout, retry, thinking, and provider-specific file settings
+- remote OpenAI-compatible: base URL, API key env var, upstream model name, timeout, retry, thinking, prompt-cache opt-in, and provider-specific file settings
 
 Minimal local override example:
 
@@ -760,7 +762,48 @@ Notes:
 - callers must set `allow_remote: true`
 - `target_inflight` controls local submission concurrency, not upstream provider capacity
 - `remote_thinking` can set a provider-specific Chat Completions `thinking` field when supported
+- `remote_prompt_cache_key_enabled` opts a model into forwarding request-level `prompt_cache_key` values
 - remote calls may incur provider costs; this repo currently provides a request-level allow gate, not a full cost ledger
+
+### Remote prompt caching
+
+`prompt_cache_key` is a cache-affinity hint, not server-side conversation state. Clients must still send the complete relevant `messages` history on every Chat Completions request. Reusing one stable key and preserving an unchanged message prefix can improve cache-hit rates when the provider supports prompt caching.
+
+Prompt-cache forwarding is disabled by default because OpenAI-compatible APIs do not all accept the same cache fields. Enable it per model:
+
+```json
+{
+  "remote_prompt_cache_key_enabled": true
+}
+```
+
+The client can then include a stable key:
+
+```json
+{
+  "model": "frontier-large",
+  "prompt_cache_key": "chat-session-7f24c8",
+  "messages": [
+    { "role": "user", "content": "Remember that my preferred language is Dutch." },
+    { "role": "assistant", "content": "Understood." },
+    { "role": "user", "content": "What is my preferred language?" }
+  ],
+  "allow_remote": true
+}
+```
+
+Cache keys should be opaque and unique per conversation or task. Do not put usernames, email addresses, document names, or other identifying data in them.
+
+The Kimi K2.6 model definition enables this option. Moonshot recommends `prompt_cache_key` for multi-turn agents and returns cache usage as `usage.cached_tokens`; see its [Chat Completions API reference](https://platform.kimi.ai/docs/api/chat). `llm-pool` exposes that value as `metrics.engine_cached_prompt_tokens`. The current Workbench chat client keeps one random key for the in-memory conversation, replaces it when the user clears the chat, and shows reported input and cached token counts.
+
+Current limits and possible optimizations:
+
+| Current limit | Effect | Possible optimization |
+| --- | --- | --- |
+| The upstream provider controls cache admission, retention, and eviction. | A stable key improves affinity but does not guarantee a hit. | Keep system prompts and earlier messages byte-stable. Monitor `engine_cached_prompt_tokens` instead of assuming a hit. |
+| The complete relevant history is still sent and still counts toward the context window. Cached input may be cheaper, but it is not free. | Long conversations continue to grow in request size and cost. | Add explicit history trimming or summarization after a configurable token threshold. This trades detail for lower input use. |
+| Cached-token extraction currently reads Moonshot's top-level `usage.cached_tokens` field. | Providers that report cache usage in another response shape return `engine_cached_prompt_tokens: null`. | Add a documented usage adapter when another provider and response shape are configured. |
+| `files_extract` uploads and extracts every file item present in the submitted history on each request. | Repeated document questions add file-API work, and the extracted text remains model input. | Add a bounded extracted-content cache keyed by a file digest. It needs explicit size, lifetime, deletion, and user-isolation rules. Prompt caching or history compaction is still required to reduce model-input cost. |
 
 ### Remote file input
 
@@ -822,11 +865,14 @@ Additional fields may include:
 - `gpu_generate_total_ms`
 - `gpu_decode_after_first_token_ms`
 - `engine_prompt_tokens`
+- `engine_cached_prompt_tokens`
 - `engine_output_tokens`
 - `engine_tokens_per_second`
 - `engine_outside_backend_wall_ms`
 
 Some fields are backend-dependent and may be `null`.
+
+`engine_cached_prompt_tokens` is the cached subset of `engine_prompt_tokens` reported by the upstream provider. It is not an additional token count.
 
 `engine_tokens_per_second` is generated output tokens divided by the measured generation wall time available to the pool. For vision requests, backend image/prompt processing and warmup behavior can strongly affect apparent throughput.
 

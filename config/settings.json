@@ -536,6 +536,7 @@
         "remote_health_check": "config_only",
         "remote_max_retries": 0,
         "remote_thinking": "disabled",
+        "remote_prompt_cache_key_enabled": true,
         "remote_file_mode": "files_extract",
         "remote_file_purpose": "file-extract",
         "target_inflight": 1,

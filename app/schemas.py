@@ -87,6 +87,7 @@ class ResponseRequest(BaseModel):
         description="Target language code for translation models.",
     )
     allow_remote: bool = False
+    prompt_cache_key: str | None = Field(default=None, min_length=1)
     stream: bool = False
     thinking: ThinkingMode = "default"
     decoding: DecodingParams = Field(default_factory=DecodingParams)
@@ -164,6 +165,7 @@ class ResponseMetrics(BaseModel):
     gpu_generate_total_ms: float | None = None
     gpu_decode_after_first_token_ms: float | None = None
     engine_prompt_tokens: int | None = None
+    engine_cached_prompt_tokens: int | None = None
     engine_output_tokens: int | None = None
     engine_tokens_per_second: float | None = None
 
