@@ -9,7 +9,11 @@ It is intentionally a design note, not an implementation spec.
 Current reality note:
 
 - `llm-pool` already has a first in-process scheduler/executor layer
-- requests are already queue-backed per public model
+- requests are queue-backed per public model
+- each executor uses per-key FIFO buckets and weighted least-served slot-time;
+  see [client-fairness-notes.md](client-fairness-notes.md)
+- bounded per-key and per-executor pending limits return distinct HTTP `429`
+  errors before enqueue
 - the runtime admin API already uses the scheduler boundary for load/unload semantics
 - `llama_server` and `vllm_serve` now run through the same scheduler path, while their native subprocess lifecycles remain backend-owned
 - scheduler-visible capacity for most local backends is still conservative; `vllm_serve` uses configured `target_inflight` because its HTTP runtime and vLLM scheduler support concurrent requests
@@ -37,7 +41,10 @@ The key design goal is to keep those policy decisions outside backend-specific c
 
 ## Current Behavior
 
-Today there is already a first scheduler layer in front of the engines, but not yet the fuller backend-native design described below.
+The implemented scheduler sits in front of every engine. Each public model owns
+one executor, one fairness queue with per-key FIFO buckets, and one shared
+fairness history across its replicas. The fuller backend-native adapter design
+below remains future-facing.
 
 ### CT2
 
@@ -382,4 +389,7 @@ For now the main architectural idea is:
 - external queue and scheduler are still useful
 - ExLlamaV3 should use one loaded model with multiple in-flight jobs, not multiple reloaded runtimes
 - the scheduler should talk to a small runtime adapter interface, not to backend internals
-Note: public-model replica routing is described separately in `model-replica-routing-notes.md`. The scheduler note here still applies at the per-loaded-runtime boundary.
+Public-model replica routing is described separately in
+`model-replica-routing-notes.md`. Scheduling and fairness operate at the public
+model executor boundary; replica selection happens after the scheduler chooses
+a job.

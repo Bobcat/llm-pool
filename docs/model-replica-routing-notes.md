@@ -11,6 +11,8 @@ Current reality note:
 - admin remains aggregate per public model
 - local runtime capability is still clamped to one in-flight request per replica except where a backend explicitly reports more capacity
 - `vllm_serve` reports configured `target_inflight` as scheduler capacity; most other local backends, including `llama_server`, remain effectively single-request per replica
+- one public model's replicas share the same per-key fairness queue and
+  slot-time history
 - live resizing, per-replica admin rows, and per-replica unload remain out of scope
 
 This is separate from `runtime-scheduler-notes.md` because replicas affect more than scheduler internals:
@@ -171,6 +173,8 @@ Suggested additional admin fields:
   aggregate inflight across loaded replicas
 - `queue_depth`
   public-model queue depth
+- `fairness`
+  bounded per-key pending, active, weight, score, and rejection diagnostics
 
 ### UI semantics
 
@@ -223,20 +227,22 @@ This avoids ambiguous aggregate states such as partially loaded models in the fi
 
 ### Scheduler ownership
 
-The scheduler queue should remain attached to the public model, not to individual replicas.
+The scheduler's fairness queue is attached to the public model, not to
+individual replicas.
 
 Flow:
 
 1. request arrives for public model `X`
-2. request is queued on `X`
-3. scheduler picks one eligible loaded replica of `X`
-4. request is submitted to that replica
+2. request enters its `fairness_key` FIFO bucket on `X`
+3. scheduler chooses the next key and pops that key's oldest request
+4. scheduler picks one eligible loaded replica of `X`
+5. request is submitted to that replica
 
 ### Replica selection policy
 
 The scheduler is replica-aware for both single-request runtimes and runtimes with `effective_target_inflight > 1`.
 
-Proposed rule:
+Current rule:
 
 - choose the eligible replica with the lowest current inflight count
 - if multiple replicas tie, use round-robin tie-breaking
@@ -260,6 +266,7 @@ This note assumes the scheduler note direction still holds:
 - scheduler policy remains outside backend internals
 - runtime adapters remain per loaded runtime
 - queue ownership remains in the scheduler layer
+- fairness state is shared across every replica of one public model
 
 The scheduler note should therefore be read together with this replica-routing note.
 

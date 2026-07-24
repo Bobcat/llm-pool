@@ -71,6 +71,23 @@ class ResponseRequestSchemaTests(unittest.TestCase):
         with self.assertRaises(Exception):  # pydantic ValidationError
             ResponseRequest(model="m", input="Hello world", thinking="maybe")
 
+    def test_fairness_key_is_optional_and_normalized(self) -> None:
+        anonymous = ResponseRequest(model="m", input="Hello world")
+        keyed = ResponseRequest(
+            model="m",
+            input="Hello world",
+            fairness_key="  translation-service:image  ",
+        )
+
+        self.assertIsNone(anonymous.fairness_key)
+        self.assertEqual(keyed.fairness_key, "translation-service:image")
+
+    def test_fairness_key_rejects_blank_or_overlong_values(self) -> None:
+        with self.assertRaises(Exception):  # pydantic ValidationError
+            ResponseRequest(model="m", input="Hello world", fairness_key=" \t ")
+        with self.assertRaises(Exception):  # pydantic ValidationError
+            ResponseRequest(model="m", input="Hello world", fairness_key="x" * 129)
+
     def test_text_only_content_list_joins_to_plain_text(self) -> None:
         request = ResponseRequest(
             model="m",

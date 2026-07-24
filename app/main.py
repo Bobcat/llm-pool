@@ -27,7 +27,7 @@ from app.schemas import ResponseMetrics
 from app.schemas import ResponseRequest
 
 
-LOGGER = logging.getLogger("llm_pool.metrics")
+LOGGER = logging.getLogger("uvicorn.error.llm_pool.metrics")
 
 
 def _chunk_text(text: str, *, size: int = 24) -> list[str]:
@@ -76,6 +76,7 @@ def _log_inference(response_id: str, request: ResponseRequest, metrics: Response
         "event": "llm_pool.inference",
         "request_id": response_id,
         "model": request.model,
+        "fairness_key": request.fairness_key or "anonymous",
         "stream": request.stream,
         "metrics": _metrics_payload(metrics),
     }

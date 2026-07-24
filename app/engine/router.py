@@ -44,7 +44,7 @@ class ModelRouterEngine:
         self._model_engines: dict[str, object] = {}
         self._loaded_replica_ids: dict[str, list[str]] = {}
         self._model_states: dict[str, ModelRuntimeState] = {}
-        self._scheduler = RuntimeScheduler()
+        self._scheduler = RuntimeScheduler(settings.engine.fairness)
         self._state_lock = threading.RLock()
         self._state_changed = threading.Condition(self._state_lock)
         if not self._configured_models:
@@ -339,6 +339,22 @@ class ModelRouterEngine:
             "runtime_inflight": executor_snapshot.runtime_inflight,
             "configured_target_inflight": executor_snapshot.configured_target_inflight,
             "effective_target_inflight": executor_snapshot.effective_target_inflight,
+            "fairness": {
+                "rejected_per_key_limit": executor_snapshot.fairness_rejected_per_key_limit,
+                "rejected_executor_limit": executor_snapshot.fairness_rejected_executor_limit,
+                "keys": [
+                    {
+                        "fairness_key": key_snapshot.fairness_key,
+                        "pending": key_snapshot.pending,
+                        "active": key_snapshot.active,
+                        "weight": key_snapshot.weight,
+                        "score": key_snapshot.score,
+                        "rejected_per_key_limit": key_snapshot.rejected_per_key_limit,
+                        "rejected_executor_limit": key_snapshot.rejected_executor_limit,
+                    }
+                    for key_snapshot in executor_snapshot.fairness_keys
+                ],
+            },
             "last_error": state.last_error,
             "vram_estimate_mib": vram_estimate_mib,
             "vram_estimate_replica_count": vram_estimate_replica_count,

@@ -76,6 +76,20 @@ class ApiTests(unittest.TestCase):
         self.assertIn("pool_total_wall_ms", payload["metrics"])
         self.assertIn("gpu_generate_total_ms", payload["metrics"])
 
+    def test_inference_log_includes_normalized_fairness_key(self) -> None:
+        main = importlib.import_module("app.main")
+        request = main.ResponseRequest(
+            model="test-model",
+            input="Hello",
+            fairness_key="translation-service:image",
+        )
+
+        with mock.patch.object(main.LOGGER, "info") as log_info:
+            main._log_inference("resp_test", request, main.ResponseMetrics())
+
+        log_payload = json.loads(log_info.call_args.args[1])
+        self.assertEqual(log_payload["fairness_key"], "translation-service:image")
+
     def test_response_endpoint_maps_request_admission_errors(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             settings_path = Path(tmpdir) / "settings.json"
@@ -217,6 +231,14 @@ class ApiTests(unittest.TestCase):
         self.assertEqual(enabled_model["runtime_inflight"], 0)
         self.assertEqual(enabled_model["configured_target_inflight"], 1)
         self.assertEqual(enabled_model["effective_target_inflight"], 1)
+        self.assertEqual(
+            enabled_model["fairness"],
+            {
+                "rejected_per_key_limit": 0,
+                "rejected_executor_limit": 0,
+                "keys": [],
+            },
+        )
         self.assertIsNone(enabled_model["last_error"])
         self.assertIn("vram_estimate_mib", enabled_model)
         self.assertIn("vram_estimate_source", enabled_model)
@@ -241,6 +263,14 @@ class ApiTests(unittest.TestCase):
         self.assertEqual(disabled_model["runtime_inflight"], 0)
         self.assertEqual(disabled_model["configured_target_inflight"], 1)
         self.assertEqual(disabled_model["effective_target_inflight"], 1)
+        self.assertEqual(
+            disabled_model["fairness"],
+            {
+                "rejected_per_key_limit": 0,
+                "rejected_executor_limit": 0,
+                "keys": [],
+            },
+        )
         self.assertIsNone(disabled_model["last_error"])
         self.assertIn("vram_estimate_mib", disabled_model)
         self.assertIn("vram_estimate_source", disabled_model)

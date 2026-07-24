@@ -9,6 +9,7 @@ from typing import Union
 
 from pydantic import BaseModel
 from pydantic import Field
+from pydantic import field_validator
 from pydantic import model_validator
 
 
@@ -75,6 +76,7 @@ class ResponseRequest(BaseModel):
     input: str | list[ContentItem] | None = None
     messages: list[Message] | None = None
     instructions: str | None = None
+    fairness_key: str | None = Field(default=None, max_length=128)
     source_lang_code: str | None = Field(
         default=None,
         description=(
@@ -91,6 +93,18 @@ class ResponseRequest(BaseModel):
     stream: bool = False
     thinking: ThinkingMode = "default"
     decoding: DecodingParams = Field(default_factory=DecodingParams)
+
+    @field_validator("fairness_key", mode="before")
+    @classmethod
+    def _normalize_fairness_key(cls, value: object) -> object:
+        if value is None:
+            return None
+        if not isinstance(value, str):
+            raise ValueError("fairness_key must be a string")
+        normalized = value.strip()
+        if normalized == "":
+            raise ValueError("fairness_key must not be blank")
+        return normalized
 
     @model_validator(mode="after")
     def _require_input_or_messages(self) -> "ResponseRequest":
@@ -213,6 +227,22 @@ class ModelCapabilities(BaseModel):
     thinking_modes: list[ThinkingMode] = Field(default_factory=lambda: ["default"])
 
 
+class AdminFairnessKeyEntry(BaseModel):
+    fairness_key: str | None = None
+    pending: int = Field(default=0, ge=0)
+    active: int = Field(default=0, ge=0)
+    weight: float = Field(default=1.0, gt=0.0)
+    score: float = Field(default=0.0, ge=0.0)
+    rejected_per_key_limit: int = Field(default=0, ge=0)
+    rejected_executor_limit: int = Field(default=0, ge=0)
+
+
+class AdminFairnessSnapshot(BaseModel):
+    rejected_per_key_limit: int = Field(default=0, ge=0)
+    rejected_executor_limit: int = Field(default=0, ge=0)
+    keys: list[AdminFairnessKeyEntry] = Field(default_factory=list)
+
+
 class AdminModelEntry(BaseModel):
     name: str
     resolved_backend: str
@@ -227,6 +257,7 @@ class AdminModelEntry(BaseModel):
     runtime_inflight: int = Field(default=0, ge=0)
     configured_target_inflight: int = Field(default=1, ge=1)
     effective_target_inflight: int = Field(default=1, ge=1)
+    fairness: AdminFairnessSnapshot = Field(default_factory=AdminFairnessSnapshot)
     last_error: str | None = None
     vram_estimate_mib: int | None = Field(default=None, ge=0)
     vram_estimate_replica_count: int | None = Field(default=None, ge=1)

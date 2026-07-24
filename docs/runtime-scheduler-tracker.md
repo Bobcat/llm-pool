@@ -9,6 +9,9 @@ Current reality note:
 
 - the first in-process scheduler/executor layer is implemented
 - public-model replica routing is implemented at aggregate admin/API level
+- per-model weighted client fairness is implemented with per-key FIFO buckets,
+  measured slot-time, and a work-conserving soft inflight cap
+- per-key and per-executor pending limits provide bounded backpressure
 - local runtime capability is still effectively `1` in-flight request per replica except for `openai_remote` and `vllm_serve`, which can use configured `target_inflight`
 - `llama_server` and `vllm_serve` use the same scheduler/executor path; their native subprocess lifecycles are backend-owned, not the general runtime-subprocess design from `runtime-subprocess-notes.md`
 - `vllm_serve` high-throughput tuning is currently expressed through model config and upstream flags, not through scheduler-native adaptive concurrency
@@ -20,9 +23,12 @@ Current reality note:
 - `done`
 - `deferred`
 
-## Current MVP Boundary
+## Original MVP Boundary
 
 Status: `done`
+
+This section records the first scheduler cut. Client fairness and bounded
+backpressure were added later.
 
 Included in the first scheduler MVP:
 
@@ -94,8 +100,8 @@ not:
 
 In the current in-process implementation, a model executor is a parent-side object that owns:
 
-- one loaded runtime
-- one pending queue
+- one or more identical loaded runtime replicas
+- one pending fairness queue with per-key FIFO buckets
 - one driver loop
 - one configured scheduler capacity
 - one effective scheduler capacity
@@ -185,9 +191,10 @@ When unload starts for one model executor:
 - let already submitted runtime work drain
 - only then clean up runtime resources and remove the executor
 
-### 8. Initial Implementation Bias
+### 8. Original Implementation Bias
 
-The first implementation should bias toward correctness over backend ambition:
+The first implementation deliberately biased toward correctness over backend
+ambition:
 
 - preserve current API behavior
 - preserve current model state semantics
@@ -309,3 +316,22 @@ Status: `done`
 - public model load/unload is aggregate
 - replica selection uses least-inflight with round-robin tie-breaking
 - admin remains aggregate per public model rather than per replica
+
+### 2026-07-25: Per-Model Client Fairness Implemented
+
+Status: `done`
+
+- `ResponseRequest.fairness_key` identifies a stable scheduling identity
+- omitted keys share one anonymous bucket
+- every public model executor owns per-key FIFO buckets
+- weighted least-served selection charges measured backend slot-time
+- active elapsed time affects selection before completion
+- a soft per-key inflight cap prevents monopoly while allowing unused capacity
+  to be borrowed
+- per-key and per-executor pending limits reject before enqueue with distinct
+  HTTP `429` codes
+- fairness state and rejection counters are visible through the bounded admin
+  snapshot
+- replica completion reports slot-time to the shared public-model fairness
+  queue
+- unload drains all pending key buckets and lets active work finish

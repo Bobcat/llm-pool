@@ -13,6 +13,18 @@
       "repetition_penalty": 1.0,
       "max_tokens": 256
     },
+    "fairness": {
+      "default_weight": 1.0,
+      "weights": {
+        "translation-service:image": 1.0,
+        "translation-service:pdf": 1.0,
+        "workbench": 1.0
+      },
+      "soft_max_inflight_per_key": 1,
+      "max_pending_per_key": 32,
+      "max_pending_per_executor": 128,
+      "idle_state_ttl_s": 300
+    },
     "models": {
       "eurollm-9b-ct2-int8": {
         "model_path": "/home/gunnar/models/EuroLLM-9B-Instruct-ct2-int8",

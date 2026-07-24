@@ -1,6 +1,6 @@
 # llm-pool
 
-FastAPI service that exposes a single `POST /v1/responses` API across local and remote LLM backends. It provides runtime model loading, unloading, queueing, replica routing, multimodal input, timing metrics, and an admin surface for model state, load/unload, runtime load overrides, and GPU memory estimates, used by a workbench UI.
+FastAPI service that exposes one `POST /v1/responses` API across local and remote LLM backends. It owns model lifecycle, multimodal input, replica routing, timing metrics, and the admin surface used by a workbench UI. Its per-model scheduler provides weighted client fairness, bounded queues, and backpressure before work reaches a backend.
 
 ![The Workbench loaded-models view, listing each loaded model with its state, backend, and VRAM use](docs/images/wb-llm-pool-models.png)
 
@@ -27,6 +27,7 @@ FastAPI service that exposes a single `POST /v1/responses` API across local and 
 
 - [Runtime Model](#runtime-model)
 - [Configuration](#configuration)
+- [Client Fairness](#client-fairness)
 - [In-process Backends](#in-process-backends) — CT2, ExLlamaV3, llama_cpp, vLLM
 - [Pool-managed Backends](#pool-managed-backends) — llama_server, vllm_serve
 - [Remote Backends](#remote-backends) — openai_remote
@@ -56,7 +57,7 @@ FastAPI service that exposes a single `POST /v1/responses` API across local and 
 - returns JSON responses or service-side SSE events from the same endpoint
 - includes per-request timing and token metrics when the selected backend can report them
 - exposes admin endpoints for model state, load/unload, runtime load overrides, and GPU memory estimates
-- routes requests through an in-process scheduler with per-model queues, loaded runtime state, and optional identical replicas
+- routes requests through an in-process scheduler with per-model weighted client fairness, bounded queues, loaded runtime state, and optional identical replicas
 
 ## Repository Role
 
@@ -88,7 +89,7 @@ The names above describe the local project family. This repo should remain usabl
 | `app/schemas.py` | Request, response, admin, metrics, and capability schemas. |
 | `app/config.py` | Settings model, JSON loading, local override merge, and config coercion. |
 | `app/engine/router.py` | Runtime registry, load/unload orchestration, scheduler integration, admin payloads. |
-| `app/engine/scheduler.py` | Per-model queue and target-inflight scheduling. |
+| `app/engine/scheduler.py` | Per-model weighted fairness queues, target-inflight scheduling, and replica dispatch. |
 | `app/engine/common.py` | Shared backend metadata, capability helpers, stop strings, GPU memory helpers. |
 | `app/engine/ct2.py` | CTranslate2 runtime adapter. |
 | `app/engine/exllamav3.py` | ExLlamaV3 runtime adapter. |
@@ -127,7 +128,7 @@ The managed subprocess backends are useful when native upstream dependencies, CU
 
 | Endpoint | Purpose |
 | --- | --- |
-| `POST /v1/responses` | Run inference. `stream: false` returns one JSON envelope; `stream: true` returns Server-Sent Events. |
+| `POST /v1/responses` | Run inference through the per-model fairness scheduler. `stream: false` returns one JSON envelope; `stream: true` returns Server-Sent Events. |
 | `GET /v1/models` | List currently loaded public model ids. |
 | `GET /v1/admin/models` | List all configured models plus runtime state, queue state, replica state, capabilities, load constraints, and model definition metadata. |
 | `GET /v1/admin/gpu-memory` | Return current GPU memory usage and approximate per-model VRAM estimates. |
@@ -145,6 +146,7 @@ Request:
   "model": "google_gemma-4-26B-A4B-it-Q4_K_M-gguf",
   "input": "The weather is pleasant today, and I would like to take a walk in the park after lunch.",
   "instructions": "Translate to Dutch. Return only the translation.",
+  "fairness_key": "workbench",
   "stream": false,
   "decoding": {
     "beam_size": 1,
@@ -208,10 +210,15 @@ This is not yet guaranteed to be backend-native live token streaming for every r
 | `source_lang_code` | `string \| null` | no | `null` | Source language for translation models. For `translategemma_template`, omit it or use `"auto"`/`"mixed"` to translate mixed-source input. |
 | `target_lang_code` | `string \| null` | no | `null` | Required for `prompt_format: "translategemma_template"`. |
 | `allow_remote` | `boolean` | no | `false` | Must be `true` for `openai_remote` remote models. |
+| `fairness_key` | `string \| null` | no | `null` | Stable scheduling identity, trimmed and limited to 128 characters. Omitted requests share the anonymous bucket. |
 | `prompt_cache_key` | `string \| null` | no | `null` | Stable conversation or task key used as a remote prompt-cache hint. It is forwarded only when the selected remote model opts in. It does not replace `messages`. |
 | `stream` | `boolean` | no | `false` | `false` returns one JSON response; `true` returns SSE events. |
 | `thinking` | `"default" \| "enabled" \| "disabled"` | no | `"default"` | Request-level thinking override. Accepted values are advertised per model in `capabilities.thinking_modes`. |
 | `decoding` | `object` | no | `{}` | Omitted subfields fall back to `engine.decoding` defaults. |
+
+`fairness_key` affects only admission and scheduling inside `llm-pool`. Backends
+never receive it. Use one stable key for one scheduling identity; do not create
+a new key per request.
 
 Supported `decoding` fields:
 
@@ -320,6 +327,7 @@ Top-level settings can define:
 - `service.log_level`
 - `engine.backend`
 - `engine.decoding`
+- `engine.fairness`
 - `engine.models`
 
 Common model fields:
@@ -390,6 +398,41 @@ TranslateGemma mixed-source request example:
 ```
 
 For mixed-source TranslateGemma input, omit `source_lang_code` or set it to `"auto"` or `"mixed"`. The service keeps the official TranslateGemma structured request format, uses a valid internal source-language fallback, and prepends a short instruction asking the model to detect each segment's source language. This is intended for text that may contain multiple source languages in one request; it is not a separate raw Gemma prompt/tokenizer path.
+
+## Client Fairness
+
+Each loaded public model has one independent fairness queue shared by all of its replicas. Callers identify their work with `fairness_key`; callers that omit it share one anonymous identity.
+
+The scheduler preserves FIFO order within each key and selects the key with the least normalized backend slot-time. Weights are owned by the pool, not by requests. A key with weight `2.0` receives about twice the slot-time of a continuously backlogged key with weight `1.0`. Active elapsed time already counts before a request completes.
+
+The per-key inflight cap is soft. A waiting key gets access to the next free slot, but one key may borrow unused capacity when no other key can run. This keeps the model work-conserving.
+
+Configure the pool-wide policy under `engine.fairness`:
+
+```json
+{
+  "engine": {
+    "fairness": {
+      "default_weight": 1.0,
+      "weights": {
+        "translation-service:image": 1.0,
+        "translation-service:pdf": 1.0,
+        "workbench": 1.0
+      },
+      "soft_max_inflight_per_key": 1,
+      "max_pending_per_key": 32,
+      "max_pending_per_executor": 128,
+      "idle_state_ttl_s": 300
+    }
+  }
+}
+```
+
+Queue limits count pending work, not active calls. Rejections use HTTP `429` with code `fairness_key_queue_full` or `executor_queue_full`. `GET /v1/admin/models` exposes aggregate rejection counts and bounded per-key diagnostics: pending, active, configured weight, current score, and rejection counts.
+
+With the checked-in equal weights, `translation-service:image` and `translation-service:pdf` target roughly equal normalized slot-time under sustained contention. This keeps a small image workload from sitting behind a large PDF batch. It is not strict priority: active work is never preempted, and PDF work may borrow every unused slot.
+
+V1 schedules flat identities, not service hierarchies. Using both `translation-service:image` and `translation-service:pdf` gives translation-services two independently scheduled shares while both are backlogged. That tradeoff is intentional for the current trusted fleet. Authentication of keys, hierarchical fairness, cross-model fairness, preemption, and reserved slots are outside V1. See [client-fairness-notes.md](docs/client-fairness-notes.md) for the policy rationale.
 
 ## In-process Backends
 
@@ -966,9 +1009,12 @@ See [deploy/systemd/README.md](deploy/systemd/README.md).
 
 ## Design Notes
 
-[runtime-admin-api.md](docs/runtime-admin-api.md) is kept current and documents the admin API and live load overrides in detail.
+Current contracts:
 
-The rest are design notes, trackers, and backend investigations. They record intent and exploration and can lag behind the current code, so treat this README and `runtime-admin-api.md` as the source of truth:
+- [runtime-admin-api.md](docs/runtime-admin-api.md): admin API and live load overrides
+- [client-fairness-notes.md](docs/client-fairness-notes.md): implemented per-model client-fairness policy
+
+The remaining design notes, trackers, and backend investigations record intent and exploration. They can lag behind the current code, so treat this README and the two current contracts above as the source of truth:
 
 - [runtime-scheduler-notes.md](docs/runtime-scheduler-notes.md): broader scheduler design
 - [runtime-scheduler-tracker.md](docs/runtime-scheduler-tracker.md): scheduler MVP status

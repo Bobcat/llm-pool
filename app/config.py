@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from dataclasses import field
 import json
+import math
 import os
 from pathlib import Path
 
@@ -123,10 +124,21 @@ class DecodingDefaults:
 
 
 @dataclass(frozen=True)
+class FairnessSettings:
+    default_weight: float = 1.0
+    weights: dict[str, float] = field(default_factory=dict)
+    soft_max_inflight_per_key: int = 1
+    max_pending_per_key: int = 32
+    max_pending_per_executor: int = 128
+    idle_state_ttl_s: float = 300.0
+
+
+@dataclass(frozen=True)
 class EngineSettings:
     backend: str = "stub"
     models: dict[str, ModelSettings] = field(default_factory=dict)
     decoding: DecodingDefaults = field(default_factory=DecodingDefaults)
+    fairness: FairnessSettings = field(default_factory=FairnessSettings)
 
 
 @dataclass(frozen=True)
@@ -153,6 +165,9 @@ def load_settings(path: str | Path | None = None) -> AppSettings:
     engine_payload = payload.get("engine", {}) if isinstance(payload, dict) else {}
     models_payload = engine_payload.get("models", {}) if isinstance(engine_payload, dict) else {}
     decoding_payload = engine_payload.get("decoding", {}) if isinstance(engine_payload, dict) else {}
+    fairness_payload = engine_payload.get("fairness", {}) if isinstance(engine_payload, dict) else {}
+    if not isinstance(fairness_payload, dict):
+        raise ValueError("engine.fairness must be an object")
     if not isinstance(service_payload, dict):
         service_payload = {}
     if not isinstance(engine_payload, dict):
@@ -377,6 +392,29 @@ def load_settings(path: str | Path | None = None) -> AppSettings:
                 max_tokens=int(decoding_payload.get("max_tokens", 256)),
                 stop=_coerce_stop_tokens(decoding_payload.get("stop"), default=[]),
             ),
+            fairness=FairnessSettings(
+                default_weight=_coerce_positive_float(
+                    fairness_payload.get("default_weight", 1.0),
+                    "engine.fairness.default_weight",
+                ),
+                weights=_coerce_fairness_weights(fairness_payload.get("weights", {})),
+                soft_max_inflight_per_key=_coerce_positive_int(
+                    fairness_payload.get("soft_max_inflight_per_key", 1),
+                    "engine.fairness.soft_max_inflight_per_key",
+                ),
+                max_pending_per_key=_coerce_positive_int(
+                    fairness_payload.get("max_pending_per_key", 32),
+                    "engine.fairness.max_pending_per_key",
+                ),
+                max_pending_per_executor=_coerce_positive_int(
+                    fairness_payload.get("max_pending_per_executor", 128),
+                    "engine.fairness.max_pending_per_executor",
+                ),
+                idle_state_ttl_s=_coerce_positive_float(
+                    fairness_payload.get("idle_state_ttl_s", 300.0),
+                    "engine.fairness.idle_state_ttl_s",
+                ),
+            ),
         ),
     )
 
@@ -443,6 +481,47 @@ def _coerce_optional_float(value: object) -> float | None:
     if value is None or value == "":
         return None
     return float(value)
+
+
+def _coerce_positive_float(value: object, field_name: str) -> float:
+    try:
+        parsed = float(value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"{field_name} must be a finite number greater than 0") from exc
+    if not math.isfinite(parsed) or parsed <= 0:
+        raise ValueError(f"{field_name} must be a finite number greater than 0")
+    return parsed
+
+
+def _coerce_positive_int(value: object, field_name: str) -> int:
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"{field_name} must be an integer greater than 0") from exc
+    if isinstance(value, float) and not value.is_integer():
+        raise ValueError(f"{field_name} must be an integer greater than 0")
+    if parsed <= 0:
+        raise ValueError(f"{field_name} must be an integer greater than 0")
+    return parsed
+
+
+def _coerce_fairness_weights(value: object) -> dict[str, float]:
+    if not isinstance(value, dict):
+        raise ValueError("engine.fairness.weights must be an object of {fairness_key: weight}")
+    parsed: dict[str, float] = {}
+    for raw_key, raw_weight in value.items():
+        key = str(raw_key).strip()
+        if key == "":
+            raise ValueError("engine.fairness.weights keys must not be blank")
+        if len(key) > 128:
+            raise ValueError("engine.fairness.weights keys must be at most 128 characters")
+        if key in parsed:
+            raise ValueError(f"duplicate normalized fairness weight key: {key}")
+        parsed[key] = _coerce_positive_float(
+            raw_weight,
+            f"engine.fairness.weights['{key}']",
+        )
+    return parsed
 
 
 def _coerce_str_tuple(value: object, field_name: str) -> tuple[str, ...]:

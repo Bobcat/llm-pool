@@ -170,6 +170,11 @@ Suggested response shape:
       "runtime_inflight": 0,
       "configured_target_inflight": 1,
       "effective_target_inflight": 1,
+      "fairness": {
+        "rejected_per_key_limit": 0,
+        "rejected_executor_limit": 0,
+        "keys": []
+      },
       "last_error": null,
       "vram_estimate_mib": 57200,
       "vram_estimate_replica_count": 3,
@@ -264,6 +269,8 @@ Notes:
 - `runtime_inflight` is aggregate inflight work across loaded replicas of the public model
 - `configured_target_inflight` is the configured per-replica inflight target
 - `effective_target_inflight` is the currently honest per-replica scheduler target after capability clamping
+- `fairness.keys` reports bounded per-key pending work, active work, configured weight, normalized score, and queue-limit rejection counts; a `null` key is the anonymous bucket
+- `fairness.rejected_per_key_limit` and `fairness.rejected_executor_limit` are aggregate counters for the current loaded executor and reset on unload
 - `vram_estimate_mib` is an approximate per-model VRAM estimate
 - `vram_estimate_replica_count` is the replica count that the VRAM estimate was measured or derived for
 - `vram_estimate_source` is either `observed_load_delta`, `model_artifact_size`, or `unavailable`
@@ -818,6 +825,11 @@ Suggested response shape:
   "runtime_inflight": 0,
   "configured_target_inflight": 1,
   "effective_target_inflight": 1,
+  "fairness": {
+    "rejected_per_key_limit": 0,
+    "rejected_executor_limit": 0,
+    "keys": []
+  },
   "last_error": null,
   "vram_estimate_mib": 12340,
   "vram_estimate_replica_count": 3,
@@ -952,6 +964,11 @@ Suggested response shape:
   "runtime_inflight": 0,
   "configured_target_inflight": 1,
   "effective_target_inflight": 1,
+  "fairness": {
+    "rejected_per_key_limit": 0,
+    "rejected_executor_limit": 0,
+    "keys": []
+  },
   "last_error": null,
   "vram_estimate_mib": 12340,
   "vram_estimate_replica_count": 4,

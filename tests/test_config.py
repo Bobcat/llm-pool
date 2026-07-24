@@ -65,6 +65,12 @@ class ConfigTests(unittest.TestCase):
         self.assertEqual(settings.engine.decoding.repetition_penalty, 1.1)
         self.assertEqual(settings.engine.decoding.max_tokens, 300)
         self.assertEqual(settings.engine.decoding.stop, ["</stop>"])
+        self.assertEqual(settings.engine.fairness.default_weight, 1.0)
+        self.assertEqual(settings.engine.fairness.weights, {})
+        self.assertEqual(settings.engine.fairness.soft_max_inflight_per_key, 1)
+        self.assertEqual(settings.engine.fairness.max_pending_per_key, 32)
+        self.assertEqual(settings.engine.fairness.max_pending_per_executor, 128)
+        self.assertEqual(settings.engine.fairness.idle_state_ttl_s, 300.0)
 
     def test_load_settings_applies_local_json_override(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -171,6 +177,65 @@ class ConfigTests(unittest.TestCase):
             settings = load_settings(path)
 
         self.assertEqual(settings.engine.decoding.stop, [])
+
+    def test_load_settings_reads_fairness_configuration(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = Path(tmpdir) / "settings.json"
+            path.write_text(
+                (
+                    "{\n"
+                    '  "engine": {\n'
+                    '    "fairness": {\n'
+                    '      "default_weight": 2.0,\n'
+                    '      "weights": {" image ": 3.0, "pdf": 0.5},\n'
+                    '      "soft_max_inflight_per_key": 2,\n'
+                    '      "max_pending_per_key": 12,\n'
+                    '      "max_pending_per_executor": 40,\n'
+                    '      "idle_state_ttl_s": 90\n'
+                    "    },\n"
+                    '    "models": {}\n'
+                    "  }\n"
+                    "}\n"
+                ),
+                encoding="utf-8",
+            )
+
+            settings = load_settings(path)
+
+        self.assertEqual(settings.engine.fairness.default_weight, 2.0)
+        self.assertEqual(settings.engine.fairness.weights, {"image": 3.0, "pdf": 0.5})
+        self.assertEqual(settings.engine.fairness.soft_max_inflight_per_key, 2)
+        self.assertEqual(settings.engine.fairness.max_pending_per_key, 12)
+        self.assertEqual(settings.engine.fairness.max_pending_per_executor, 40)
+        self.assertEqual(settings.engine.fairness.idle_state_ttl_s, 90.0)
+
+    def test_load_settings_rejects_invalid_fairness_configuration(self) -> None:
+        invalid_fairness_values = (
+            '{"default_weight": 0}',
+            '{"weights": {"pdf": "nan"}}',
+            '{"soft_max_inflight_per_key": 0}',
+            '{"max_pending_per_key": 1.5}',
+            '{"max_pending_per_executor": -1}',
+            '{"idle_state_ttl_s": "inf"}',
+        )
+        for fairness_json in invalid_fairness_values:
+            with self.subTest(fairness_json=fairness_json):
+                with tempfile.TemporaryDirectory() as tmpdir:
+                    path = Path(tmpdir) / "settings.json"
+                    path.write_text(
+                        (
+                            "{\n"
+                            '  "engine": {\n'
+                            f'    "fairness": {fairness_json},\n'
+                            '    "models": {}\n'
+                            "  }\n"
+                            "}\n"
+                        ),
+                        encoding="utf-8",
+                    )
+
+                    with self.assertRaises(ValueError):
+                        load_settings(path)
 
     def test_load_settings_reads_model_backend_specific_fields(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:

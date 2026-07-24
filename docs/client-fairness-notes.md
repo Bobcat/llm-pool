@@ -4,43 +4,42 @@ Companion to [runtime-scheduler-notes.md](runtime-scheduler-notes.md). That note
 assigns fairness and priority to the scheduler but defers the policy. This note
 defines the first per-client policy.
 
-It is a design note, not an implementation spec.
+Status: implemented in the per-model scheduler. This note records the V1 policy,
+its tradeoffs, and its test contract.
 
 ## Scope
 
-This design covers fairness between calling services inside one loaded model's
-executor.
+This design covers fairness between scheduling identities inside one loaded
+model's executor.
 
 Each loaded model has its own executor, pending work, replicas, and runtime
 slots. Calls to different model ids do not share an executor. This policy
 therefore acts independently for every model.
 
-V1 identifies a client by a stable service name such as:
+V1 identifies work by a stable scheduling identity such as:
 
-- `translation-service`
+- `translation-service:image`
+- `translation-service:pdf`
 - `workbench`
-- `realtime`
 
 It does not provide fairness between users, document runs, or sessions behind
 one service. That would require trusted sub-client identity or hierarchical
 fairness.
 
-The key is a stable scheduling identity, and a caller may present more than one —
-for example a coarse task-class split such as `translation-service:image` and
-`translation-service:pdf`. The pool schedules between keys, not between originating
-services, so a caller that uses more keys gets a larger aggregate share under
-contention. That is the caller's choice; V1 does not attribute keys back to a
-service. translation-services takes exactly this flat-key path (see its
-request-class note), accepting that its aggregate share scales with how many of its
-classes are active.
+A caller may present more than one stable scheduling identity. For example,
+translation-services uses the coarse task classes
+`translation-service:image` and `translation-service:pdf`. The pool schedules
+between keys, not originating services. A caller with more active keys therefore
+gets a larger aggregate share under contention. V1 accepts this flat-key
+tradeoff and does not attribute keys back to a service.
 
 Fairness across model executors is out of scope. Different executors can still
 compete for the same GPU outside this policy.
 
-## Current problem
+## Original problem
 
-`LoadedModelExecutor` currently stores pending jobs in one `deque`.
-`_run_loop` always takes its head with `popleft`.
+Before V1, `LoadedModelExecutor` stored pending jobs in one `deque` and
+`_run_loop` always took its head with `popleft`.
 
 A service that submits a large batch occupies consecutive queue positions. A
 later interactive call to the same model waits behind that batch, even if it is
@@ -67,7 +66,7 @@ The policy is non-preemptive. It cannot reclaim a slot from an active call.
 
 ## Request identity
 
-Add this optional field to `ResponseRequest`:
+`ResponseRequest` accepts this optional field:
 
 ```python
 fairness_key: str | None = None
@@ -77,7 +76,7 @@ A supplied key must:
 
 - contain non-whitespace text;
 - be trimmed before use;
-- have a small maximum length, such as 128 characters.
+- contain at most 128 characters after trimming.
 
 An omitted key maps to one internal anonymous key. Anonymous work joins the same
 fair scheduler with the default weight. It does not enter a lower-priority
@@ -100,7 +99,7 @@ same scheduling contract behind that gateway.
 Requests declare identity, not scheduling power. A request must not carry its
 own weight.
 
-V1 should add one pool-wide mapping under `engine.fairness`:
+V1 uses one pool-wide mapping under `engine.fairness`:
 
 ```json
 {
@@ -108,9 +107,14 @@ V1 should add one pool-wide mapping under `engine.fairness`:
     "fairness": {
       "default_weight": 1.0,
       "weights": {
-        "translation-service": 1.0,
-        "workbench": 2.0
-      }
+        "translation-service:image": 1.0,
+        "translation-service:pdf": 1.0,
+        "workbench": 1.0
+      },
+      "soft_max_inflight_per_key": 1,
+      "max_pending_per_key": 32,
+      "max_pending_per_executor": 128,
+      "idle_state_ttl_s": 300
     }
   }
 }
@@ -159,16 +163,16 @@ service_ms = backend_finished_at - backend_started_at
 charge = service_ms / weight
 ```
 
-The scheduler already measures these timestamps around `_complete_fn`. It must
-charge from that stopwatch directly.
+The scheduler measures these timestamps around `_complete_fn` and charges from
+that stopwatch directly.
 
 Do not charge `engine_total_wall_ms`. That value is created after the scheduler
 future completes and includes queue wait. Charging it would penalize a client
 for time during which it received no service.
 
-Charge elapsed slot-time in `finally`, including backend failures and active
-cancellations. A job cancelled before runtime submission consumed no slot-time
-and receives no charge.
+Charge elapsed slot-time in `finally`, including backend failures. A job
+cancelled before runtime submission consumed no slot-time and receives no
+charge.
 
 With four concurrent slots, total charged service can grow by four milliseconds
 per millisecond of wall time. That is intentional: the unit is sequence-slot
@@ -210,12 +214,12 @@ Keep idle key state for a bounded grace period. This prevents a bursty client
 from resetting its history between consecutive calls. After the grace period,
 discard the state. A returning key then re-enters at the current minimum.
 
-V1 does not need exponential decay. The activation baseline prevents a new-key
-windfall, while idle-state expiry removes old history. The exact grace period is
-a tuning value.
+V1 does not use exponential decay. The activation baseline prevents a new-key
+windfall, while idle-state expiry removes old history. The checked-in grace
+period is 300 seconds and remains configurable.
 
-Counters can be rebased occasionally by subtracting a common minimum. This does
-not change selection order and prevents unbounded numeric growth.
+The implementation does not currently rebase counters. A future rebase may
+subtract a common minimum without changing selection order.
 
 ## Soft per-key inflight cap
 
@@ -272,14 +276,14 @@ V1 needs both:
 
 The total limit still protects the pool if a caller generates fresh keys.
 
-Reject before enqueue when either limit is reached. Return HTTP `429` with a
-stable error code that distinguishes the per-key and total limits. Rate limiting
-is a separate policy and is outside V1.
+Reject before enqueue when either limit is reached. The per-key limit returns
+HTTP `429` with code `fairness_key_queue_full`. The total executor limit returns
+HTTP `429` with code `executor_queue_full`. Rate limiting is a separate policy
+and is outside V1.
 
 ## Shutdown and lifecycle
 
-Replacing one deque with key buckets must preserve current model lifecycle
-behavior.
+The key buckets preserve the existing model lifecycle behavior.
 
 On unload:
 
@@ -289,8 +293,8 @@ On unload:
 - let active jobs release normally;
 - remove idle fairness state with the executor.
 
-`queue_depth` remains the sum of every pending bucket. Empty buckets and expired
-idle state must be pruned.
+`queue_depth` remains the sum of every pending bucket. Idle state expires after
+the configured TTL and disappears with the executor on unload.
 
 ## Observability
 
@@ -300,7 +304,8 @@ Aggregate admin fields remain valid:
 - total runtime inflight;
 - configured and effective inflight capacity.
 
-Add enough per-key state to explain scheduling decisions:
+The bounded admin snapshot exposes active and queued keys with enough state to
+explain scheduling decisions:
 
 - pending count;
 - active count;
@@ -308,11 +313,11 @@ Add enough per-key state to explain scheduling decisions:
 - current normalized score;
 - rejected count by limit.
 
-Expose this through structured diagnostics or a bounded admin view. Do not add
-unbounded metric labels if keys can have high cardinality.
+This is exposed through the bounded admin view. It does not add metric labels
+with per-key cardinality.
 
-Inference logs should include the normalized fairness key. This makes a retry
-storm attributable to its calling service.
+Inference logs include the normalized fairness key. This makes a retry storm
+attributable to its scheduling identity.
 
 ## Relationship to asr-pool
 
@@ -331,14 +336,15 @@ storm attributable to its calling service.
 
 The `asr-pool` burst counter is therefore not copied into V1.
 
-## Implementation hooks
+## Implementation boundary
 
-All changes remain inside the request contract and per-model scheduler boundary:
+The implementation remains inside the request contract and per-model scheduler
+boundary:
 
-- `ResponseRequest` gains the optional `fairness_key`;
-- configuration gains `engine.fairness`;
+- `ResponseRequest` accepts the optional `fairness_key`;
+- configuration provides `engine.fairness`;
 - `SchedulerJob` retains the normalized key;
-- `LoadedModelExecutor` replaces `_pending_jobs` with per-key FIFO buckets;
+- `LoadedModelExecutor` owns per-key FIFO buckets;
 - `_run_loop` applies the admission procedure;
 - replica completion reports the key and measured slot-time back to the parent
   executor;
@@ -347,9 +353,9 @@ All changes remain inside the request contract and per-model scheduler boundary:
 
 Backends do not interpret the fairness key.
 
-## Required tests
+## Implemented test coverage
 
-The implementation is not complete without deterministic scheduler tests for:
+`tests/test_scheduler_fairness.py` covers:
 
 - FIFO order within one key;
 - alternating tie-breaks between equal keys;
@@ -367,7 +373,7 @@ The implementation is not complete without deterministic scheduler tests for:
 - multi-replica active counts;
 - unload draining and failing every pending future.
 
-Tests should cover effective capacities `1` and `4`. Capacity `4` exposes the
+The tests cover effective capacities `1` and `4`. Capacity `4` exposes the
 multi-slot cases that a serial executor cannot.
 
 ## Out of scope
@@ -379,5 +385,3 @@ multi-slot cases that a serial executor cannot.
 - fairness between users or jobs behind one service;
 - per-model weight overrides;
 - request rate limiting;
-- exact defaults for weights, queue limits, idle-state expiry, and the soft
-  inflight cap.
