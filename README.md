@@ -32,8 +32,16 @@ capacity between clients and limits how much work may wait in a queue.
 - [Configuration](#configuration)
 - [Client Fairness](#client-fairness)
 - [In-process Backends](#in-process-backends) — CT2, ExLlamaV3, llama_cpp, vLLM
+  - [CT2 (CTranslate2)](#ct2-ctranslate2)
+  - [ExLlamaV3](#exllamav3)
+  - [llama_cpp (in-process GGUF)](#llama_cpp-in-process-gguf)
+  - [vLLM](#vllm)
 - [Pool-managed Backends](#pool-managed-backends) — llama_server, vllm_serve
+  - [llama_server](#llama_server)
+  - [vllm_serve](#vllm_serve)
 - [Remote Backends](#remote-backends) — openai_remote
+  - [Remote prompt caching](#remote-prompt-caching)
+  - [Remote file input](#remote-file-input)
 - [Replicas](#replicas)
 
 **Performance & Operations**
