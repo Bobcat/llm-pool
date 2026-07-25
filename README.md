@@ -1,6 +1,9 @@
 # llm-pool
 
-FastAPI service that exposes one `POST /v1/responses` API across local and remote LLM backends. It owns model lifecycle, multimodal input, replica routing, timing metrics, and the admin surface used by a workbench UI. Its per-model scheduler provides weighted client fairness, bounded queues, and backpressure before work reaches a backend.
+`llm-pool` is a FastAPI service for running local and remote language models
+through one API. It loads and unloads models, accepts text, images, and supported
+document files, and reports model and GPU status. Its scheduler shares model
+capacity between clients and limits how much work may wait in a queue.
 
 ![The Workbench loaded-models view, listing each loaded model with its state, backend, and VRAM use](docs/images/wb-llm-pool-models.png)
 
@@ -51,13 +54,13 @@ FastAPI service that exposes one `POST /v1/responses` API across local and remot
 
 - exposes one inference API for multiple model runtimes
 - supports local CT2, ExLlamaV3, `llama_cpp`/GGUF, managed native `llama-server`, in-process vLLM, and managed `vllm serve` backends
-- supports OpenAI-compatible remote Chat Completions backends behind an explicit `allow_remote` request gate
+- calls remote OpenAI-compatible models only when a request explicitly allows remote execution
 - accepts text input everywhere, image input on models that advertise image support, and document files on explicitly configured remote models
 - supports single-turn `input` requests and backend-dependent multi-turn `messages` requests
 - returns JSON responses or service-side SSE events from the same endpoint
 - includes per-request timing and token metrics when the selected backend can report them
 - exposes admin endpoints for model state, load/unload, runtime load overrides, and GPU memory estimates
-- routes requests through an in-process scheduler with per-model weighted client fairness, bounded queues, loaded runtime state, and optional identical replicas
+- queues requests per model, shares capacity between clients, and limits how many requests may wait
 
 ## Repository Role
 
@@ -112,7 +115,7 @@ At runtime:
 
 - `POST /v1/admin/models/{model_name}/load` loads a known configured model.
 - `POST /v1/admin/models/{model_name}/unload` unloads a loaded model.
-- load/unload changes are live-only and do not write back to JSON config files.
+- load and unload changes are temporary; they do not modify the JSON configuration.
 - a model must be known in the merged settings before the admin API can load it.
 - backend-specific load overrides are accepted for supported runtime knobs, but are temporary.
 
@@ -128,11 +131,11 @@ The managed subprocess backends are useful when native upstream dependencies, CU
 
 | Endpoint | Purpose |
 | --- | --- |
-| `POST /v1/responses` | Run inference through the per-model fairness scheduler. `stream: false` returns one JSON envelope; `stream: true` returns Server-Sent Events. |
+| `POST /v1/responses` | Run inference with per-model queueing and client fairness. `stream: false` returns one JSON envelope; `stream: true` returns Server-Sent Events. |
 | `GET /v1/models` | List currently loaded public model ids. |
 | `GET /v1/admin/models` | List all configured models plus runtime state, queue state, replica state, capabilities, load constraints, and model definition metadata. |
 | `GET /v1/admin/gpu-memory` | Return current GPU memory usage and approximate per-model VRAM estimates. |
-| `POST /v1/admin/models/{model_name}/load` | Load one configured model at runtime with optional live-only backend overrides. |
+| `POST /v1/admin/models/{model_name}/load` | Load one configured model with optional temporary settings. |
 | `POST /v1/admin/models/{model_name}/unload` | Gracefully unload one loaded model. |
 
 See [runtime-admin-api.md](docs/runtime-admin-api.md) for the full admin API shape.
@@ -210,15 +213,15 @@ This is not yet guaranteed to be backend-native live token streaming for every r
 | `source_lang_code` | `string \| null` | no | `null` | Source language for translation models. For `translategemma_template`, omit it or use `"auto"`/`"mixed"` to translate mixed-source input. |
 | `target_lang_code` | `string \| null` | no | `null` | Required for `prompt_format: "translategemma_template"`. |
 | `allow_remote` | `boolean` | no | `false` | Must be `true` for `openai_remote` remote models. |
-| `fairness_key` | `string \| null` | no | `null` | Stable scheduling identity, trimmed and limited to 128 characters. Omitted requests share the anonymous bucket. |
+| `fairness_key` | `string \| null` | no | `null` | Stable client or work-category name. It is trimmed and limited to 128 characters. Requests without a key share one queue. |
 | `prompt_cache_key` | `string \| null` | no | `null` | Stable conversation or task key used as a remote prompt-cache hint. It is forwarded only when the selected remote model opts in. It does not replace `messages`. |
 | `stream` | `boolean` | no | `false` | `false` returns one JSON response; `true` returns SSE events. |
 | `thinking` | `"default" \| "enabled" \| "disabled"` | no | `"default"` | Request-level thinking override. Accepted values are advertised per model in `capabilities.thinking_modes`. |
 | `decoding` | `object` | no | `{}` | Omitted subfields fall back to `engine.decoding` defaults. |
 
-`fairness_key` affects only admission and scheduling inside `llm-pool`. Backends
-never receive it. Use one stable key for one scheduling identity; do not create
-a new key per request.
+`fairness_key` is used only for queueing inside `llm-pool`. The selected model
+never receives it. Use a small, stable set of keys; do not create a new key for
+every request.
 
 Supported `decoding` fields:
 
@@ -265,7 +268,7 @@ File data must be a base64 data URL. File support is currently limited to `opena
 
 Important behavior:
 
-- `capabilities.modalities` on `GET /v1/admin/models` is the source of truth for each model.
+- Use `capabilities.modalities` from `GET /v1/admin/models` to determine which input types a model accepts.
 - `capabilities.file_inputs` tells clients whether a remote model accepts `file` content items.
 - A model declares image support with `"modalities": ["text", "image"]`; the default is `["text"]`.
 - Text-only models reject image content with `modality_unsupported`.
@@ -401,13 +404,39 @@ For mixed-source TranslateGemma input, omit `source_lang_code` or set it to `"au
 
 ## Client Fairness
 
-Each loaded public model has one independent fairness queue shared by all of its replicas. Callers identify their work with `fairness_key`; callers that omit it share one anonymous identity.
+Several services can send work to the same model. Without fairness, one busy
+client could keep filling every available place while other clients wait.
 
-The scheduler preserves FIFO order within each key and selects the key with the least normalized backend slot-time. Weights are owned by the pool, not by requests. A key with weight `2.0` receives about twice the slot-time of a continuously backlogged key with weight `1.0`. Active elapsed time already counts before a request completes.
+Each request may include a stable `fairness_key`, such as:
 
-The per-key inflight cap is soft. A waiting key gets access to the next free slot, but one key may borrow unused capacity when no other key can run. This keeps the model work-conserving.
+- `interactive-client`
+- `batch-worker`
+- `workbench`
 
-Configure the pool-wide policy under `engine.fairness`:
+Requests with the same key keep their arrival order. Requests without a key
+share one anonymous queue. A key's name is only a label; words such as
+`interactive` do not grant priority by themselves.
+
+An active slot is one request currently running for a model. If a model has four
+slots, fairness behaves like this:
+
+- If only batch requests are waiting, they may use all four slots.
+- If an interactive request arrives, running batch requests are not interrupted.
+- The interactive request gets the next slot that becomes free.
+- If no other key is waiting, batch work may immediately use that slot again.
+
+Fairness only compares clients while they need the same model at the same time.
+A client may use all available capacity while nobody else is waiting. When
+another client joins under its own key, the first client is not penalized for
+the work it completed while it was alone. From then on, the available capacity
+is shared according to the configured weights.
+
+The scheduler records how long requests from each key have been running.
+Configured weights control the long-term split when several queues stay busy. A
+key with weight `2.0` gets about twice as much running time as a key with weight
+`1.0`. Requests cannot choose their own weight.
+
+Configure fairness under `engine.fairness`:
 
 ```json
 {
@@ -415,8 +444,8 @@ Configure the pool-wide policy under `engine.fairness`:
     "fairness": {
       "default_weight": 1.0,
       "weights": {
-        "translation-service:image": 1.0,
-        "translation-service:pdf": 1.0,
+        "interactive-client": 1.0,
+        "batch-worker": 1.0,
         "workbench": 1.0
       },
       "soft_max_inflight_per_key": 1,
@@ -428,11 +457,28 @@ Configure the pool-wide policy under `engine.fairness`:
 }
 ```
 
-Queue limits count pending work, not active calls. Rejections use HTTP `429` with code `fairness_key_queue_full` or `executor_queue_full`. `GET /v1/admin/models` exposes aggregate rejection counts and bounded per-key diagnostics: pending, active, configured weight, current score, and rejection counts.
+The settings mean:
 
-With the checked-in equal weights, `translation-service:image` and `translation-service:pdf` target roughly equal normalized slot-time under sustained contention. This keeps a small image workload from sitting behind a large PDF batch. It is not strict priority: active work is never preempted, and PDF work may borrow every unused slot.
+| Setting | Meaning |
+| --- | --- |
+| `default_weight` | Weight for anonymous or unlisted keys. |
+| `weights` | Configured weight for known keys. |
+| `soft_max_inflight_per_key` | Preferred number of active requests per key while another key waits. It is not a hard limit. |
+| `max_pending_per_key` | Hard limit on waiting requests for one key. |
+| `max_pending_per_executor` | Hard limit on all waiting requests for one model. |
+| `idle_state_ttl_s` | How long the scheduler remembers how much running time a key has used after it has no active or waiting requests. |
 
-V1 schedules flat identities, not service hierarchies. Using both `translation-service:image` and `translation-service:pdf` gives translation-services two independently scheduled shares while both are backlogged. That tradeoff is intentional for the current trusted fleet. Authentication of keys, hierarchical fairness, cross-model fairness, preemption, and reserved slots are outside V1. See [client-fairness-notes.md](docs/client-fairness-notes.md) for the policy rationale.
+When two keys have weight `1.0` and both queues stay busy, they receive roughly
+equal running time. This prevents one busy client from pushing every other
+client to the back of one shared queue. It is not strict priority.
+
+Queue limits count waiting work, not active requests. Rejections use HTTP `429`
+with code `fairness_key_queue_full` or `executor_queue_full`.
+`GET /v1/admin/models` shows active and waiting counts per key.
+
+Each key gets a separate share. Keep the set of keys small and stable. See
+[client-fairness-notes.md](docs/client-fairness-notes.md) for implementation
+details and limitations.
 
 ## In-process Backends
 
@@ -623,7 +669,7 @@ Example definition:
 
 Notes:
 
-- `model_path`, `llama_server_binary`, `llama_server_mmproj_path`, draft model path, host, port, library path, and extra args are config fields, not live admin overrides in v1.
+- `model_path`, `llama_server_binary`, `llama_server_mmproj_path`, draft model path, host, port, library path, and extra args can only be changed in configuration files.
 - `llama_server_library_path` is prepended to `LD_LIBRARY_PATH` for the subprocess. Use it when the native `llama-server` build needs CUDA or GGML libraries outside the default dynamic linker path.
 - `llama_server_mmproj_path` enables vision for GGUF models that require a multimodal projector.
 - `llama_server_image_max_tokens` maps to upstream `--image-max-tokens`. It caps the per-image dynamic-resolution token budget. It affects prompt/context pressure, not loaded model weight VRAM directly.
@@ -698,7 +744,7 @@ Notes:
 - For concurrent `vllm_serve` routes, align scheduler `target_inflight` with vLLM `--max-num-seqs`. The KV-cache budget and request lengths still determine whether all configured sequences fit at once.
 - For single-user Workbench models, keep `--max-num-seqs` small. vLLM can otherwise infer broad CUDA graph capture sizes that reserve much more VRAM than the explicit KV-cache budget suggests.
 - Live admin overrides currently include `vllm_max_model_len`, `vllm_kv_cache_dtype`, `vllm_kv_cache_memory_bytes`, `vllm_max_pixels`, `vllm_speculative_method`, `vllm_speculative_model`, `vllm_speculative_moe_backend`, `vllm_speculative_attention_backend`, and `vllm_num_speculative_tokens`.
-- vLLM sleep mode is intentionally not used in v1; load/unload uses subprocess start/termination.
+- vLLM sleep mode is not used; load and unload start and stop the subprocess.
 
 Qwen 3.6 NVFP4 through `vllm_serve` currently needs an upstream vLLM build with the relevant Qwen 3.5/3.6, ModelOpt, MTP, and backend support. The local config keeps that runtime isolated by pointing `vllm_serve_binary` at that separate executable and by passing the required CUDA library directories through `vllm_serve_library_path`.
 
@@ -871,7 +917,7 @@ Moonshot exposes an OpenAI-style API, but its native file-based question-answeri
 
 `llm-pool` performs those steps and makes a best-effort deletion of the temporary upstream file after extraction. See Moonshot's [file-based Q&A guide](https://platform.kimi.ai/docs/guide/use-kimi-api-for-file-based-qa) and [Files API reference](https://platform.kimi.ai/docs/api/files-upload).
 
-The important compatibility boundary is that “OpenAI-compatible” does not guarantee support for Chat Completions file items, the Files API, or the Responses API. Many providers implement only the core Chat Completions request shape. File handling must therefore be selected per remote model:
+An “OpenAI-compatible” API does not necessarily support Chat Completions file items, the Files API, or the Responses API. Many providers implement only core Chat Completions. File handling must therefore be selected per remote model:
 
 | `remote_file_mode` | Upstream handling |
 | --- | --- |
@@ -1009,15 +1055,15 @@ See [deploy/systemd/README.md](deploy/systemd/README.md).
 
 ## Design Notes
 
-Current contracts:
+For current behavior, see:
 
 - [runtime-admin-api.md](docs/runtime-admin-api.md): admin API and live load overrides
 - [client-fairness-notes.md](docs/client-fairness-notes.md): implemented per-model client-fairness policy
 
-The remaining design notes, trackers, and backend investigations record intent and exploration. They can lag behind the current code, so treat this README and the two current contracts above as the source of truth:
+The remaining files record design decisions, implementation history, and backend investigations:
 
 - [runtime-scheduler-notes.md](docs/runtime-scheduler-notes.md): broader scheduler design
-- [runtime-scheduler-tracker.md](docs/runtime-scheduler-tracker.md): scheduler MVP status
+- [runtime-scheduler-tracker.md](docs/runtime-scheduler-tracker.md): scheduler implementation history
 - [model-replica-routing-notes.md](docs/model-replica-routing-notes.md): public model id and replica semantics
 - [remote-openai-compatible-backend-notes.md](docs/remote-openai-compatible-backend-notes.md): remote backend shape and cost-control notes
 - [gemma4-mtp-vllm-notes.md](docs/gemma4-mtp-vllm-notes.md): vLLM and Gemma 4 MTP investigation
