@@ -20,6 +20,7 @@ from .common import _exception_message
 from .common import _load_constraints_for_backend
 from .common import _load_recommendations_for_backend
 from .common import _model_definition_payload
+from .common import _model_response_formats
 from .common import _model_supports_file_inputs
 from .common import _model_supports_multi_turn
 from .common import _model_thinking_modes
@@ -108,6 +109,16 @@ class ModelRouterEngine:
                     code="thinking_unsupported",
                     status_code=400,
                     message=f"model {request.model!r} does not support request-level thinking",
+                )
+            response_formats = _model_response_formats(state.resolved_backend)
+            if (
+                request.response_format is not None
+                and request.response_format.type not in response_formats
+            ):
+                raise RequestAdmissionError(
+                    code="response_format_unsupported",
+                    status_code=400,
+                    message=f"model {request.model!r} does not support response_format",
                 )
             executor = self._scheduler.get(request.model)
             if executor is None:
@@ -377,6 +388,7 @@ class ModelRouterEngine:
                     model_settings.prompt_format,
                     model_settings.remote_thinking,
                 ),
+                "response_formats": _model_response_formats(state.resolved_backend),
             },
             "definition": _model_definition_payload(
                 model_settings,

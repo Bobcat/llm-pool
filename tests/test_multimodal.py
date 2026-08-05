@@ -153,6 +153,34 @@ class ResponseRequestSchemaTests(unittest.TestCase):
         self.assertIsInstance(image_item, ImageContent)
         self.assertEqual(image_item.image_url.detail, "auto")
 
+    def test_json_schema_response_format_parses_and_rejects_streaming(self) -> None:
+        payload = {
+            "model": "m",
+            "input": "Translate this.",
+            "response_format": {
+                "type": "json_schema",
+                "json_schema": {
+                    "name": "translation_result",
+                    "strict": True,
+                    "schema": {
+                        "type": "object",
+                        "properties": {"translation": {"type": "string"}},
+                        "required": ["translation"],
+                        "additionalProperties": False,
+                    },
+                },
+            },
+        }
+        request = ResponseRequest.model_validate(payload)
+        self.assertEqual(
+            request.response_format.model_dump(by_alias=True)["json_schema"]["schema"]["type"],
+            "object",
+        )
+
+        payload["stream"] = True
+        with self.assertRaises(Exception):  # pydantic ValidationError
+            ResponseRequest.model_validate(payload)
+
 
 @unittest.skipUnless(HAS_PYDANTIC, "pydantic not installed")
 class ConfigModalitiesTests(unittest.TestCase):
@@ -392,6 +420,7 @@ class AdminCapabilitiesExposureTests(unittest.TestCase):
                 "file_inputs": False,
                 "multi_turn": False,
                 "thinking_modes": ["default"],
+                "response_formats": ["text"],
             },
         )
 
@@ -418,6 +447,7 @@ class AdminCapabilitiesExposureTests(unittest.TestCase):
                 "file_inputs": False,
                 "multi_turn": False,
                 "thinking_modes": ["default"],
+                "response_formats": ["text"],
             },
         )
 
@@ -444,6 +474,7 @@ class AdminCapabilitiesExposureTests(unittest.TestCase):
                 "file_inputs": False,
                 "multi_turn": True,
                 "thinking_modes": ["default"],
+                "response_formats": ["text"],
             },
         )
 
@@ -470,6 +501,7 @@ class AdminCapabilitiesExposureTests(unittest.TestCase):
                 "file_inputs": False,
                 "multi_turn": True,
                 "thinking_modes": ["default", "enabled", "disabled"],
+                "response_formats": ["text"],
             },
         )
 
@@ -496,6 +528,7 @@ class AdminCapabilitiesExposureTests(unittest.TestCase):
                 "file_inputs": False,
                 "multi_turn": True,
                 "thinking_modes": ["default", "enabled", "disabled"],
+                "response_formats": ["text"],
             },
         )
 
@@ -522,6 +555,7 @@ class AdminCapabilitiesExposureTests(unittest.TestCase):
                 "file_inputs": False,
                 "multi_turn": False,
                 "thinking_modes": ["default"],
+                "response_formats": ["text"],
             },
         )
 
@@ -547,8 +581,26 @@ class AdminCapabilitiesExposureTests(unittest.TestCase):
                 "file_inputs": True,
                 "multi_turn": True,
                 "thinking_modes": ["default"],
+                "response_formats": ["text"],
             },
         )
+
+    def test_stub_admin_payload_reports_vllm_serve_json_schema(self) -> None:
+        settings = AppSettings(
+            engine=EngineSettings(
+                backend="vllm_serve",
+                models={
+                    "m": ModelSettings(
+                        model_path=None,
+                        enabled=True,
+                        vllm_model="/tmp/m",
+                    ),
+                },
+            ),
+        )
+        engine = StubEngine(settings)
+        entry = engine.admin_models_payload(settings)["models"][0]
+        self.assertEqual(entry["capabilities"]["response_formats"], ["text", "json_schema"])
 
 
 if __name__ == "__main__":

@@ -8,6 +8,7 @@ from typing import Literal
 from typing import Union
 
 from pydantic import BaseModel
+from pydantic import ConfigDict
 from pydantic import Field
 from pydantic import field_validator
 from pydantic import model_validator
@@ -57,6 +58,23 @@ ContentItem = Annotated[
     Field(discriminator="type"),
 ]
 ThinkingMode = Literal["default", "enabled", "disabled"]
+ResponseFormatName = Literal["text", "json_schema"]
+
+
+class JsonSchemaDefinition(BaseModel):
+    model_config = ConfigDict(populate_by_name=True, extra="forbid")
+
+    name: str = Field(min_length=1)
+    description: str | None = None
+    schema_definition: dict[str, Any] = Field(alias="schema")
+    strict: bool = True
+
+
+class JsonSchemaResponseFormat(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    type: Literal["json_schema"]
+    json_schema: JsonSchemaDefinition
 
 
 class Message(BaseModel):
@@ -92,6 +110,7 @@ class ResponseRequest(BaseModel):
     prompt_cache_key: str | None = Field(default=None, min_length=1)
     stream: bool = False
     thinking: ThinkingMode = "default"
+    response_format: JsonSchemaResponseFormat | None = None
     decoding: DecodingParams = Field(default_factory=DecodingParams)
 
     @field_validator("fairness_key", mode="before")
@@ -108,6 +127,8 @@ class ResponseRequest(BaseModel):
 
     @model_validator(mode="after")
     def _require_input_or_messages(self) -> "ResponseRequest":
+        if self.response_format is not None and self.stream:
+            raise ValueError("response_format is not supported with stream=true")
         if self.messages is not None:
             if len(self.messages) == 0:
                 raise ValueError("messages must not be empty")
@@ -225,6 +246,7 @@ class ModelCapabilities(BaseModel):
     file_inputs: bool = False
     multi_turn: bool = False
     thinking_modes: list[ThinkingMode] = Field(default_factory=lambda: ["default"])
+    response_formats: list[ResponseFormatName] = Field(default_factory=lambda: ["text"])
 
 
 class AdminFairnessKeyEntry(BaseModel):

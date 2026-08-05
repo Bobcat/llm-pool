@@ -149,6 +149,19 @@ class VllmServeEngineTests(unittest.TestCase):
                         ImageContent(image_url=ImageUrlSpec(url="data:image/png;base64,abc")),
                     ],
                     instructions="Be terse.",
+                    response_format={
+                        "type": "json_schema",
+                        "json_schema": {
+                            "name": "result",
+                            "strict": True,
+                            "schema": {
+                                "type": "object",
+                                "properties": {"answer": {"type": "string"}},
+                                "required": ["answer"],
+                                "additionalProperties": False,
+                            },
+                        },
+                    },
                     decoding=DecodingParams(
                         top_p=0.8,
                         temperature=0.2,
@@ -227,6 +240,19 @@ class VllmServeEngineTests(unittest.TestCase):
                 "top_p": 0.8,
                 "max_tokens": 9,
                 "stop": ["DONE"],
+                "response_format": {
+                    "type": "json_schema",
+                    "json_schema": {
+                        "name": "result",
+                        "strict": True,
+                        "schema": {
+                            "type": "object",
+                            "properties": {"answer": {"type": "string"}},
+                            "required": ["answer"],
+                            "additionalProperties": False,
+                        },
+                    },
+                },
             },
         )
         self.assertEqual(result.text, "looks good")

@@ -23,6 +23,7 @@ capacity between clients and limits how much work may wait in a queue.
 - [API Surface](#api-surface)
 - [Inference Example](#inference-example)
 - [Request Fields](#request-fields)
+- [Structured JSON Output](#structured-json-output)
 - [Multimodal Input](#multimodal-input)
 - [Multi-turn Conversations](#multi-turn-conversations)
 
@@ -225,6 +226,7 @@ This is not yet guaranteed to be backend-native live token streaming for every r
 | `prompt_cache_key` | `string \| null` | no | `null` | Stable conversation or task key used as a remote prompt-cache hint. It is forwarded only when the selected remote model opts in. It does not replace `messages`. |
 | `stream` | `boolean` | no | `false` | `false` returns one JSON response; `true` returns SSE events. |
 | `thinking` | `"default" \| "enabled" \| "disabled"` | no | `"default"` | Request-level thinking override. Accepted values are advertised per model in `capabilities.thinking_modes`. |
+| `response_format` | `object \| null` | no | `null` | Strict JSON Schema output. Supported only by non-streaming `vllm_serve` requests. |
 | `decoding` | `object` | no | `{}` | Omitted subfields fall back to `engine.decoding` defaults. |
 
 `fairness_key` is used only for queueing inside `llm-pool`. The selected model
@@ -244,6 +246,46 @@ Supported `decoding` fields:
 | `stop` | `list[string]` | Extra stop strings merged with model-format stop strings where applicable. |
 
 Remote OpenAI-compatible models map `temperature`, `top_p`, `max_tokens`, and `stop` to upstream Chat Completions requests. Other decoding fields are accepted for schema compatibility and ignored.
+
+## Structured JSON Output
+
+Non-streaming `vllm_serve` requests can constrain generated output with a strict
+JSON Schema:
+
+```json
+{
+  "model": "local-model",
+  "input": "Translate this text.",
+  "stream": false,
+  "response_format": {
+    "type": "json_schema",
+    "json_schema": {
+      "name": "translation_result",
+      "strict": true,
+      "schema": {
+        "type": "object",
+        "properties": {
+          "translation": { "type": "string" },
+          "preserved_source_terms": {
+            "type": "array",
+            "items": { "type": "string" }
+          }
+        },
+        "required": ["translation", "preserved_source_terms"],
+        "additionalProperties": false
+      }
+    }
+  }
+}
+```
+
+The generated JSON remains a string in `output_text`. The caller parses that
+string according to the submitted schema.
+
+This field is intentionally limited to `vllm_serve`. Other backends return
+`response_format_unsupported`. Structured output cannot be combined with
+`stream: true`. Clients can inspect `capabilities.response_formats`; supported
+`vllm_serve` models report `["text", "json_schema"]`.
 
 ## Multimodal Input
 

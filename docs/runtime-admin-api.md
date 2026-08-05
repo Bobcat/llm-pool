@@ -135,6 +135,11 @@ accepted only when the selected model advertises those values in
 `capabilities.thinking_modes`; otherwise the request is rejected with
 `400 thinking_unsupported`.
 
+`response_format` accepts strict JSON Schema output for non-streaming
+`vllm_serve` requests. Other backends reject it with
+`400 response_format_unsupported`. Models advertise accepted formats through
+`capabilities.response_formats`.
+
 ## TranslateGemma Request Notes
 
 llama_cpp models configured with `prompt_format: "translategemma_template"` use the official structured TranslateGemma request shape internally. They remain single-turn text models and continue to report `capabilities.multi_turn: false`.
@@ -277,6 +282,7 @@ Notes:
 - `capabilities.modalities` lists which input modalities the model accepts (`["text"]` or `["text", "image"]`); a UI can use it to decide whether to allow image input for a model
 - `capabilities.multi_turn` reports whether the model accepts a multi-turn `messages` array on `POST /v1/responses`; this is `true` for `llama_server`, `vllm`, and `vllm_serve` models and for supported text-only `llama_cpp` chat prompt formats (`generic`, `mistral_template`, `qwen3_template`, `gemma4_template`), but remains `false` for `llama_cpp` `translategemma_template`
 - `capabilities.thinking_modes` lists accepted values for request-level `thinking`; models without a safe per-request control report only `["default"]`, while supported vLLM Gemma4/Qwen3, `llama_cpp` Gemma4, ExLlamaV3 Gemma4/Qwen3, CT2 Qwen3, and configured remote models report `["default", "enabled", "disabled"]`
+- `capabilities.response_formats` is `["text", "json_schema"]` for `vllm_serve` and `["text"]` for other backends
 - `load_constraints` describes backend-specific live-load fields for UI controls
 - `load_recommendations` describes service-curated recommended presets and pairings for UI defaults
 - `load_override` reports the runtime-only override currently active on a loaded model

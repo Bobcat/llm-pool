@@ -290,6 +290,12 @@ class VllmServeEngine:
         }
         if decoding.stop:
             payload["stop"] = decoding.stop
+        if request.response_format is not None:
+            payload["response_format"] = request.response_format.model_dump(
+                mode="python",
+                by_alias=True,
+                exclude_none=True,
+            )
         return payload
 
     def _chat_messages(self, request: ResponseRequest) -> list[dict[str, object]]:

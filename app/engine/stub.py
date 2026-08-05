@@ -9,6 +9,7 @@ from .common import _estimate_model_artifact_size_mib
 from .common import _load_constraints_for_backend
 from .common import _load_recommendations_for_backend
 from .common import _model_definition_payload
+from .common import _model_response_formats
 from .common import _model_supports_file_inputs
 from .common import _model_supports_multi_turn
 from .common import _model_thinking_modes
@@ -93,6 +94,7 @@ class StubEngine:
                             model_settings.prompt_format,
                             model_settings.remote_thinking,
                         ),
+                        "response_formats": _model_response_formats(settings.engine.backend),
                     },
                     "definition": _model_definition_payload(
                         model_settings,

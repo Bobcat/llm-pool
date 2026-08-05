@@ -164,6 +164,8 @@ _THINKING_CONTROL_PROMPT_FORMATS = {
 }
 _DEFAULT_THINKING_MODES = ("default",)
 _OVERRIDE_THINKING_MODES = ("default", "enabled", "disabled")
+_DEFAULT_RESPONSE_FORMATS = ("text",)
+_VLLM_SERVE_RESPONSE_FORMATS = ("text", "json_schema")
 
 
 def _model_supports_multi_turn(backend: str, prompt_format: str | None) -> bool:
@@ -197,6 +199,12 @@ def _model_thinking_modes(
     if normalized_prompt_format in prompt_formats:
         return list(_OVERRIDE_THINKING_MODES)
     return list(_DEFAULT_THINKING_MODES)
+
+
+def _model_response_formats(backend: str) -> list[str]:
+    if backend.strip().lower() == "vllm_serve":
+        return list(_VLLM_SERVE_RESPONSE_FORMATS)
+    return list(_DEFAULT_RESPONSE_FORMATS)
 
 
 def _resolve_request_enable_thinking(request, default: bool | None) -> bool | None:

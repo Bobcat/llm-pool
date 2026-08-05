@@ -178,6 +178,43 @@ class ModelRouterEngineTests(unittest.TestCase):
 
         self.assertEqual(exc_info.exception.code, "file_input_unsupported")
 
+    def test_rejects_json_schema_for_non_vllm_serve_backend(self) -> None:
+        settings = AppSettings(
+            service=ServiceSettings(),
+            engine=EngineSettings(
+                backend="ct2",
+                models={"local-model": ModelSettings(model_path="/models/ct2")},
+            ),
+        )
+
+        class FakeCt2Engine:
+            def __init__(self, scoped_settings):
+                self._models = {name: object() for name in scoped_settings.engine.models}
+
+            def complete(self, request: ResponseRequest) -> EngineResult:
+                raise AssertionError("unsupported request must not reach the backend")
+
+        with mock.patch.object(engine_module, "Ct2Engine", FakeCt2Engine):
+            engine = ModelRouterEngine(settings)
+            with self.assertRaises(engine_module.RequestAdmissionError) as exc_info:
+                engine.complete(
+                    ResponseRequest.model_validate(
+                        {
+                            "model": "local-model",
+                            "input": "hello",
+                            "response_format": {
+                                "type": "json_schema",
+                                "json_schema": {
+                                    "name": "result",
+                                    "schema": {"type": "object"},
+                                },
+                            },
+                        }
+                    )
+                )
+
+        self.assertEqual(exc_info.exception.code, "response_format_unsupported")
+
     def test_dispatches_openai_remote_backend_with_remote_admission(self) -> None:
         settings = AppSettings(
             service=ServiceSettings(),
