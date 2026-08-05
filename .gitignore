@@ -5,6 +5,7 @@ __pycache__/
 .venv/
 config/llm-pool-dev.code-workspace
 llm-pool-dev.code-workspace
+llm-pool.code-workspace
 config/local.json
 *.egg-info/
 logs/
