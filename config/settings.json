@@ -176,6 +176,61 @@
         },
         "enabled": false
       },
+      "gemma-4-e4b-it-unsloth-nvfp4-vllm-serve": {
+        "backend": "vllm_serve",
+        "model_path": null,
+        "prompt_format": "gemma4_template",
+        "enable_thinking": false,
+        "target_inflight": 4,
+        "modalities": [
+          "text",
+          "image",
+          "audio"
+        ],
+        "vllm_model": "/home/gunnar/models/unsloth/gemma-4-E4B-it-NVFP4",
+        "vllm_dtype": "auto",
+        "vllm_gpu_memory_utilization": 0.01,
+        "vllm_kv_cache_memory_bytes": 1073741824,
+        "vllm_max_model_len": 16384,
+        "vllm_trust_remote_code": true,
+        "vllm_limit_mm_per_prompt": {
+          "image": 1,
+          "audio": 1
+        },
+        "vllm_speculative_method": "mtp",
+        "vllm_speculative_model": "/home/gunnar/models/google/gemma-4-E4B-it-assistant",
+        "vllm_num_speculative_tokens": 4,
+        "vllm_serve_binary": "/home/gunnar/.cache/llm-pool/vllm-v025-cu130/bin/vllm",
+        "vllm_serve_model_alias": "gemma-4-e4b-it-unsloth-nvfp4-vllm-serve",
+        "vllm_serve_start_timeout_s": 900.0,
+        "vllm_serve_library_path": [
+          "/home/gunnar/.cache/llm-pool/vllm-v025-cu130/lib/python3.13/site-packages/nvidia/cu13/lib",
+          "/home/gunnar/.cache/llm-pool/vllm-v025-cu130/lib/python3.13/site-packages/nvidia/cudnn/lib",
+          "/home/gunnar/.cache/llm-pool/vllm-v025-cu130/lib/python3.13/site-packages/nvidia/cusparselt/lib",
+          "/home/gunnar/.cache/llm-pool/vllm-v025-cu130/lib/python3.13/site-packages/nvidia/nccl/lib",
+          "/home/gunnar/.cache/llm-pool/vllm-v025-cu130/lib/python3.13/site-packages/nvidia/nvshmem/lib"
+        ],
+        "vllm_serve_env": {
+          "CUDA_HOME": "/home/gunnar/.cache/llm-pool/vllm-v025-cu130/lib/python3.13/site-packages/nvidia/cu13",
+          "CUDA_PATH": "/home/gunnar/.cache/llm-pool/vllm-v025-cu130/lib/python3.13/site-packages/nvidia/cu13",
+          "FLASHINFER_EXTRA_CUDAFLAGS": "",
+          "MAX_JOBS": "1",
+          "VLLM_USE_FLASHINFER_SAMPLER": "0"
+        },
+        "vllm_serve_extra_args": [
+          "--max-num-seqs",
+          "4",
+          "--max-num-batched-tokens",
+          "8192",
+          "--reasoning-parser",
+          "gemma4",
+          "--mm-processor-kwargs",
+          "{\"max_soft_tokens\": 280, \"audio_kwargs\": {\"padding\": \"longest\", \"max_length\": 480000, \"truncation\": true, \"pad_to_multiple_of\": 128}}",
+          "--default-chat-template-kwargs",
+          "{\"enable_thinking\": false}"
+        ],
+        "enabled": false
+      },
       "gemma-4-12b-it-vllm": {
         "backend": "vllm",
         "model_path": null,

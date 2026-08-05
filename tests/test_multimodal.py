@@ -1,8 +1,8 @@
-"""Tests for the Phase 1 multimodal-input extension.
+"""Tests for multimodal input handling.
 
 Covers:
 - Polymorphic ResponseRequest.input (string vs list[ContentItem])
-- text_input_or_raise / has_image_content helpers
+- text_input_or_raise / modality helpers
 - Backwards-compat of string-input path
 - Config parsing for modalities
 - OpenAI-compatible payload shape for both string and list input
@@ -31,6 +31,8 @@ if HAS_PYDANTIC:
     from app.engine import BackendExecutionError
     import app.engine.openai_remote as openai_remote_module
     from app.engine.stub import StubEngine
+    from app.schemas import AudioContent
+    from app.schemas import AudioUrlSpec
     from app.schemas import ImageContent
     from app.schemas import ImageUrlSpec
     from app.schemas import FileContent
@@ -61,6 +63,7 @@ class ResponseRequestSchemaTests(unittest.TestCase):
         self.assertEqual(request.input, "Hello world")
         self.assertEqual(request.thinking, "default")
         self.assertFalse(request.has_image_content)
+        self.assertFalse(request.has_audio_content)
         self.assertFalse(request.has_file_content)
         self.assertEqual(request.text_input_or_raise(), "Hello world")
 
@@ -114,8 +117,23 @@ class ResponseRequestSchemaTests(unittest.TestCase):
     def test_content_item_discriminator_rejects_unknown_type(self) -> None:
         with self.assertRaises(Exception):  # pydantic ValidationError
             ResponseRequest.model_validate(
-                {"model": "m", "input": [{"type": "audio", "audio": "..."}]}
+                {
+                    "model": "m",
+                    "input": [{"type": "video_url", "video_url": {"url": "..."}}],
+                }
             )
+
+    def test_audio_content_marks_has_audio_content_and_raises_on_text_only(self) -> None:
+        request = ResponseRequest(
+            model="m",
+            input=[
+                AudioContent(audio_url=AudioUrlSpec(url="data:audio/wav;base64,abc")),
+                TextContent(text="Transcribe this audio."),
+            ],
+        )
+        self.assertTrue(request.has_audio_content)
+        with self.assertRaises(ModalityUnsupportedError):
+            request.text_input_or_raise()
 
     def test_file_content_marks_has_file_content_and_raises_on_text_only(self) -> None:
         request = ResponseRequest(
@@ -252,7 +270,7 @@ class ConfigModalitiesTests(unittest.TestCase):
             settings = load_settings(settings_path)
         self.assertEqual(settings.engine.models["m"].modalities, ("text", "image"))
 
-    def test_invalid_modality_raises(self) -> None:
+    def test_audio_modality_is_accepted(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             settings_path = Path(tmpdir) / "settings.json"
             settings_path.write_text(
@@ -265,6 +283,29 @@ class ConfigModalitiesTests(unittest.TestCase):
                                     "model_path": "/tmp/m",
                                     "enabled": True,
                                     "modalities": ["audio"],
+                                }
+                            },
+                        }
+                    }
+                ),
+                encoding="utf-8",
+            )
+            settings = load_settings(settings_path)
+        self.assertEqual(settings.engine.models["m"].modalities, ("text", "audio"))
+
+    def test_invalid_modality_raises(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            settings_path = Path(tmpdir) / "settings.json"
+            settings_path.write_text(
+                json.dumps(
+                    {
+                        "engine": {
+                            "backend": "stub",
+                            "models": {
+                                "m": {
+                                    "model_path": "/tmp/m",
+                                    "enabled": True,
+                                    "modalities": ["video"],
                                 }
                             },
                         }

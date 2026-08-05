@@ -43,6 +43,15 @@ class ImageContent(BaseModel):
     image_url: ImageUrlSpec
 
 
+class AudioUrlSpec(BaseModel):
+    url: str
+
+
+class AudioContent(BaseModel):
+    type: Literal["audio_url"] = "audio_url"
+    audio_url: AudioUrlSpec
+
+
 class FileSpec(BaseModel):
     filename: str = Field(min_length=1)
     file_data: str = Field(min_length=1)
@@ -54,7 +63,7 @@ class FileContent(BaseModel):
 
 
 ContentItem = Annotated[
-    Union[TextContent, ImageContent, FileContent],
+    Union[TextContent, ImageContent, AudioContent, FileContent],
     Field(discriminator="type"),
 ]
 ThinkingMode = Literal["default", "enabled", "disabled"]
@@ -82,7 +91,7 @@ class Message(BaseModel):
 
     The system prompt is carried by ``ResponseRequest.instructions``, so only
     dialogue roles appear here. ``content`` mirrors ``input``: plain text or a
-    list of text/image content items.
+    list of text/image/audio content items.
     """
 
     role: Literal["user", "assistant"]
@@ -146,6 +155,13 @@ class ResponseRequest(BaseModel):
         )
 
     @property
+    def has_audio_content(self) -> bool:
+        return any(
+            isinstance(item, AudioContent)
+            for item in self._content_items()
+        )
+
+    @property
     def has_file_content(self) -> bool:
         return any(
             isinstance(item, FileContent)
@@ -176,7 +192,7 @@ class ResponseRequest(BaseModel):
             return self.input
         text_parts: list[str] = []
         for item in self.input:
-            if isinstance(item, (ImageContent, FileContent)):
+            if isinstance(item, (ImageContent, AudioContent, FileContent)):
                 raise ModalityUnsupportedError(
                     f"{item.type} content is not supported by this model"
                 )
@@ -242,7 +258,9 @@ class AdminLoadRequest(BaseModel):
 
 
 class ModelCapabilities(BaseModel):
-    modalities: list[Literal["text", "image"]] = Field(default_factory=lambda: ["text"])
+    modalities: list[Literal["text", "image", "audio"]] = Field(
+        default_factory=lambda: ["text"]
+    )
     file_inputs: bool = False
     multi_turn: bool = False
     thinking_modes: list[ThinkingMode] = Field(default_factory=lambda: ["default"])

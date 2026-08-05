@@ -13,6 +13,7 @@ from urllib.request import urlopen
 
 from app.config import AppSettings
 from app.config import ModelSettings
+from app.schemas import AudioContent
 from app.schemas import DecodingParams
 from app.schemas import EngineResult
 from app.schemas import ImageContent
@@ -233,9 +234,19 @@ class VllmServeEngine:
 
     @staticmethod
     def _subprocess_env(settings: ModelSettings) -> dict[str, str] | None:
-        if not settings.vllm_serve_library_path and not settings.vllm_serve_env:
+        binary_dir = os.path.dirname(settings.vllm_serve_binary)
+        if (
+            not binary_dir
+            and not settings.vllm_serve_library_path
+            and not settings.vllm_serve_env
+        ):
             return None
         env = os.environ.copy()
+        if binary_dir:
+            existing_path = env.get("PATH", "")
+            env["PATH"] = os.pathsep.join(
+                item for item in (binary_dir, existing_path) if item
+            )
         if settings.vllm_serve_library_path:
             existing_library_path = env.get("LD_LIBRARY_PATH", "")
             path_items = [*settings.vllm_serve_library_path]
@@ -285,6 +296,7 @@ class VllmServeEngine:
             "model": runtime.remote_model,
             "messages": self._chat_messages(request),
             "temperature": decoding.temperature,
+            "top_k": decoding.top_k,
             "top_p": decoding.top_p,
             "max_tokens": decoding.max_tokens,
         }
@@ -322,7 +334,7 @@ class VllmServeEngine:
 
     def _content_payload(
         self,
-        content: str | list[TextContent | ImageContent] | None,
+        content: str | list[TextContent | ImageContent | AudioContent] | None,
     ) -> str | list[dict[str, object]]:
         if content is None:
             return ""
@@ -331,7 +343,9 @@ class VllmServeEngine:
         return [self._content_item_payload(item) for item in content]
 
     @staticmethod
-    def _content_item_payload(item: TextContent | ImageContent) -> dict[str, object]:
+    def _content_item_payload(
+        item: TextContent | ImageContent | AudioContent,
+    ) -> dict[str, object]:
         if hasattr(item, "model_dump"):
             return item.model_dump(mode="python")
         return item.dict()
@@ -469,8 +483,6 @@ class VllmServeEngine:
         ignored: dict[str, object] = {}
         if request.decoding.beam_size is not None:
             ignored["beam_size"] = request.decoding.beam_size
-        if request.decoding.top_k is not None:
-            ignored["top_k"] = request.decoding.top_k
         if request.decoding.repetition_penalty is not None:
             ignored["repetition_penalty"] = request.decoding.repetition_penalty
         if not ignored:

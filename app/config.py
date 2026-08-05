@@ -20,7 +20,7 @@ class ServiceSettings:
     log_level: str = "info"
 
 
-_ALLOWED_MODALITIES = ("text", "image")
+_ALLOWED_MODALITIES = ("text", "image", "audio")
 _REMOTE_FILE_MODES = ("chat_completions_inline", "files_extract")
 
 

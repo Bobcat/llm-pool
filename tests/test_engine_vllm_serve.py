@@ -13,6 +13,8 @@ if HAS_PYDANTIC:
     from app.config import EngineSettings
     from app.config import ModelSettings
     import app.engine.vllm_serve as vllm_serve_module
+    from app.schemas import AudioContent
+    from app.schemas import AudioUrlSpec
     from app.schemas import DecodingParams
     from app.schemas import ImageContent
     from app.schemas import ImageUrlSpec
@@ -60,6 +62,21 @@ class FakeProcess:
 
 @unittest.skipUnless(HAS_PYDANTIC, "pydantic not installed")
 class VllmServeEngineTests(unittest.TestCase):
+    def test_chat_completion_payload_uses_default_top_k(self) -> None:
+        engine = vllm_serve_module.VllmServeEngine.__new__(
+            vllm_serve_module.VllmServeEngine
+        )
+        engine.decoding_defaults = DecodingDefaults(top_k=11)
+        request = ResponseRequest(model="gemma4", input="Hello")
+
+        payload = engine._chat_completions_payload(
+            runtime=mock.Mock(remote_model="gemma-local"),
+            request=request,
+            decoding=engine._resolve_decoding(request.decoding),
+        )
+
+        self.assertEqual(payload["top_k"], 11)
+
     def test_starts_vllm_serve_and_posts_multimodal_chat_completion(self) -> None:
         settings = AppSettings(
             engine=EngineSettings(
@@ -82,7 +99,7 @@ class VllmServeEngineTests(unittest.TestCase):
                         vllm_tensor_parallel_size=1,
                         vllm_trust_remote_code=True,
                         vllm_enforce_eager=True,
-                        vllm_limit_mm_per_prompt=(("image", 1),),
+                        vllm_limit_mm_per_prompt=(("image", 1), ("audio", 1)),
                         vllm_mm_processor_kwargs=(("max_soft_tokens", 560),),
                         vllm_speculative_method="mtp",
                         vllm_speculative_model="google/gemma-4-26B-A4B-it-assistant",
@@ -147,6 +164,7 @@ class VllmServeEngineTests(unittest.TestCase):
                     input=[
                         TextContent(text="Describe this."),
                         ImageContent(image_url=ImageUrlSpec(url="data:image/png;base64,abc")),
+                        AudioContent(audio_url=AudioUrlSpec(url="data:audio/wav;base64,abc")),
                     ],
                     instructions="Be terse.",
                     response_format={
@@ -163,6 +181,7 @@ class VllmServeEngineTests(unittest.TestCase):
                         },
                     },
                     decoding=DecodingParams(
+                        top_k=7,
                         top_p=0.8,
                         temperature=0.2,
                         max_tokens=9,
@@ -189,7 +208,7 @@ class VllmServeEngineTests(unittest.TestCase):
         self.assertIn("--enforce-eager", command)
         self.assertEqual(
             json.loads(command[command.index("--limit-mm-per-prompt") + 1]),
-            {"image": 1},
+            {"image": 1, "audio": 1},
         )
         self.assertEqual(
             json.loads(command[command.index("--mm-processor-kwargs") + 1]),
@@ -210,6 +229,7 @@ class VllmServeEngineTests(unittest.TestCase):
         self.assertIn("--reasoning-parser", command)
         self.assertIn("--enable-auto-tool-choice", command)
         popen_env = captured["popen_kwargs"]["env"]
+        self.assertTrue(popen_env["PATH"].startswith("/opt/vllm/bin"))
         self.assertTrue(popen_env["LD_LIBRARY_PATH"].startswith("/cuda/lib"))
         self.assertEqual(popen_env["VLLM_USE_FLASHINFER_SAMPLER"], "0")
         self.assertEqual(captured["chat_url"], "http://127.0.0.1:18090/v1/chat/completions")
@@ -233,10 +253,17 @@ class VllmServeEngineTests(unittest.TestCase):
                                     "detail": "auto",
                                 },
                             },
+                            {
+                                "type": "audio_url",
+                                "audio_url": {
+                                    "url": "data:audio/wav;base64,abc",
+                                },
+                            },
                         ],
                     },
                 ],
                 "temperature": 0.2,
+                "top_k": 7,
                 "top_p": 0.8,
                 "max_tokens": 9,
                 "stop": ["DONE"],
