@@ -1,24 +1,25 @@
 # Runtime Admin API
 
-This note defines a small admin API for loading, unloading, and inspecting models at runtime.
+This document describes the implemented admin API for loading, unloading, and
+inspecting models at runtime.
 
-The goal is to avoid editing `local.json` and restarting the service for routine model management.
+The API avoids edits to `local.json` and service restarts for routine model
+management.
 
-It is intentionally a v1 design:
+It controls live runtime state only:
 
-- live runtime control only
 - no automatic writes back to `settings.json` or `local.json`
 - no arbitrary model definitions via API
 - no force unload
 - no background job system for model loads
 
-Current reality note:
+Managed backend behavior:
 
 - this admin API is implemented and is the live control plane used by the workbench
 - runtime-only load overrides are implemented for `llama_cpp`, `exllamav3`, `vllm`, `vllm_serve`, and `llama_server`
-- `llama_server` load/unload starts and stops a managed native `llama-server` subprocess; binary path, model path, library path, `mmproj`, draft model path, host, port, and extra native args stay in model config in v1
-- `vllm_serve` load/unload starts and stops a managed local `vllm serve` subprocess; binary path, target model id/path, library path, environment, host, port, API key, and extra CLI args stay in model config in v1
-- the live `load_constraints` payload remains the source of truth for UI controls when this note and implementation details drift
+- `llama_server` load/unload starts and stops a managed native `llama-server` subprocess; binary path, model path, library path, `mmproj`, draft model path, host, port, and extra native args stay in model config
+- `vllm_serve` load/unload starts and stops a managed local `vllm serve` subprocess; binary path, target model id/path, library path, environment, host, port, API key, and extra CLI args stay in model config
+- clients use the live `load_constraints` payload to build backend-specific load controls
 
 ## Contents
 
@@ -33,6 +34,10 @@ Current reality note:
   - [`POST /v1/admin/models/{model_name}/load`](#post-v1adminmodelsmodel_nameload)
   - [`POST /v1/admin/models/{model_name}/unload`](#post-v1adminmodelsmodel_nameunload)
 - [Unload And In-Flight Requests](#unload-and-in-flight-requests)
+- [Scheduler Alignment](#scheduler-alignment)
+- [Resource Release Guarantees](#resource-release-guarantees)
+- [Documentation Expectations](#documentation-expectations)
+- [Out Of Scope](#out-of-scope)
 
 ## Purpose
 
@@ -60,7 +65,7 @@ This is static process input. It includes fields such as:
 - backend-specific settings
 - `enabled`
 
-This definition is not modified by the admin API in v1.
+This definition is not modified by the admin API.
 
 ### Runtime State
 
@@ -89,7 +94,7 @@ These states are runtime-only and may differ from the original `enabled` value i
 
 - a runtime load has started but is not complete yet
 - inference requests for this model are rejected
-- duplicate load requests should be treated as idempotent and return current state
+- duplicate load requests without load overrides are idempotent and return the current state
 
 ### `loaded`
 
@@ -105,7 +110,7 @@ These states are runtime-only and may differ from the original `enabled` value i
 ### `failed`
 
 - the last load attempt failed
-- `last_error` should be retained for inspection
+- `last_error` is retained for inspection
 - the model may be loaded again through the admin API
 
 ## Request Behavior By Runtime State
@@ -118,16 +123,22 @@ For `POST /v1/responses`:
 - `unloading`: reject
 - `failed`: reject
 
-The error should be explicit and machine-readable.
+Errors are explicit and machine-readable.
 
-Suggested error codes:
+Request error codes include:
 
 - `unknown_model`
 - `model_not_loaded`
 - `model_loading`
 - `model_unloading`
 - `model_failed`
+- `remote_execution_disallowed`
+- `file_input_unsupported`
+- `modality_unsupported`
 - `thinking_unsupported`
+- `response_format_unsupported`
+- `fairness_key_queue_full`
+- `executor_queue_full`
 
 Requests may optionally include `thinking: "default" | "enabled" | "disabled"`.
 `default` preserves the model configuration. `enabled` and `disabled` are
@@ -156,7 +167,7 @@ Returns all known models from merged config together with their live runtime sta
 
 This endpoint is the main UI source of truth.
 
-Suggested response shape:
+Example response:
 
 ```json
 {
@@ -241,13 +252,16 @@ Suggested response shape:
       "load_override": {},
       "capabilities": {
         "modalities": ["text"],
+        "file_inputs": false,
         "multi_turn": true,
-        "thinking_modes": ["default"]
+        "thinking_modes": ["default", "enabled", "disabled"],
+        "response_formats": ["text"]
       },
       "definition": {
         "model_path": "/home/gunnar/models/google_gemma-4-E2B-it-Q8_0/google_gemma-4-E2B-it-Q8_0.gguf",
         "backend": "llama_cpp",
         "prompt_format": "gemma4_template",
+        "enable_thinking": null,
         "enabled": true,
         "replicas": 3,
         "replica_max": 4,
@@ -279,8 +293,9 @@ Notes:
 - `vram_estimate_mib` is an approximate per-model VRAM estimate
 - `vram_estimate_replica_count` is the replica count that the VRAM estimate was measured or derived for
 - `vram_estimate_source` is either `observed_load_delta`, `model_artifact_size`, or `unavailable`
-- `capabilities.modalities` lists which input modalities the model accepts (`["text"]` or `["text", "image"]`); a UI can use it to decide whether to allow image input for a model
-- `capabilities.multi_turn` reports whether the model accepts a multi-turn `messages` array on `POST /v1/responses`; this is `true` for `llama_server`, `vllm`, and `vllm_serve` models and for supported text-only `llama_cpp` chat prompt formats (`generic`, `mistral_template`, `qwen3_template`, `gemma4_template`), but remains `false` for `llama_cpp` `translategemma_template`
+- `capabilities.modalities` lists the accepted input modalities: `text`, `image`, and `audio`; a model may advertise any configured combination, with `text` added by default
+- `capabilities.file_inputs` reports whether the model accepts `file` content items; this is currently limited to `openai_remote` models with `remote_file_mode` configured
+- `capabilities.multi_turn` reports whether the model accepts a multi-turn `messages` array on `POST /v1/responses`; this is `true` for `llama_server`, `openai_remote`, `vllm`, and `vllm_serve` models and for supported text-only `llama_cpp` chat prompt formats (`generic`, `mistral_template`, `qwen3_template`, `gemma4_template`), but remains `false` for `llama_cpp` `translategemma_template`
 - `capabilities.thinking_modes` lists accepted values for request-level `thinking`; models without a safe per-request control report only `["default"]`, while supported vLLM Gemma4/Qwen3, `llama_cpp` Gemma4, ExLlamaV3 Gemma4/Qwen3, CT2 Qwen3, and configured remote models report `["default", "enabled", "disabled"]`
 - `capabilities.response_formats` is `["text", "json_schema"]` for `vllm_serve` and `["text"]` for other backends
 - `load_constraints` describes backend-specific live-load fields for UI controls
@@ -506,6 +521,18 @@ vLLM and vLLM Serve:
     "default": null,
     "examples": ["google/gemma-4-26B-A4B-it-assistant"]
   },
+  "vllm_speculative_moe_backend": {
+    "kind": "string_or_null",
+    "format": "vllm_moe_backend",
+    "default": null,
+    "examples": ["triton", "marlin"]
+  },
+  "vllm_speculative_attention_backend": {
+    "kind": "string_or_null",
+    "format": "vllm_attention_backend",
+    "default": null,
+    "examples": ["triton_attn", "flashinfer"]
+  },
   "vllm_num_speculative_tokens": {
     "kind": "integer",
     "minimum": 1,
@@ -589,7 +616,7 @@ CT2, `openai_remote`, and stub:
 
 Returns current GPU memory usage (from `nvidia-smi`) and per-model VRAM estimates.
 
-Suggested response shape:
+Example response:
 
 ```json
 {
@@ -654,7 +681,7 @@ Supported load override fields:
 - public model: `replicas`
 - `llama_cpp`: `gguf_n_ctx`, `gguf_flash_attn`, `gguf_type_k`, `gguf_type_v`
 - ExLlamaV3: `exllama_cache_size`, `exllama_cache_quant`, `exllama_cache_k_bits`, `exllama_cache_v_bits`, `exllama_max_rq_tokens`
-- vLLM and vLLM Serve: `vllm_max_model_len`, `vllm_kv_cache_dtype`, `vllm_kv_cache_memory_bytes`, `vllm_max_pixels`, `vllm_speculative_method`, `vllm_speculative_model`, `vllm_num_speculative_tokens`
+- vLLM and vLLM Serve: `vllm_max_model_len`, `vllm_kv_cache_dtype`, `vllm_kv_cache_memory_bytes`, `vllm_max_pixels`, `vllm_speculative_method`, `vllm_speculative_model`, `vllm_speculative_moe_backend`, `vllm_speculative_attention_backend`, `vllm_num_speculative_tokens`
 - llama-server: `llama_server_n_ctx`, `llama_server_image_max_tokens`, `llama_server_spec_type`, `llama_server_spec_draft_n_max`, `llama_server_spec_draft_p_min`
 
 Example load bodies:
@@ -733,6 +760,8 @@ Example load bodies:
   "vllm_max_pixels": 4014080,
   "vllm_speculative_method": "mtp",
   "vllm_speculative_model": "google/gemma-4-26B-A4B-it-assistant",
+  "vllm_speculative_moe_backend": "triton",
+  "vllm_speculative_attention_backend": "triton_attn",
   "vllm_num_speculative_tokens": 1
 }
 ```
@@ -758,8 +787,10 @@ vLLM and vLLM Serve load override notes:
 - `vllm_max_pixels` caps the vision-token budget per image for vision-language models; it is merged into the model's `vllm_mm_processor_kwargs` as `max_pixels`.
 - `vllm_speculative_method` selects the vLLM speculative path for this load, for example `mtp`, `draft_model`, or `mlp_speculator`. `null` disables the configured speculative path for that load.
 - `vllm_speculative_model` is the assistant/draft/speculator checkpoint or local path passed through vLLM's `speculative_config.model`. For Gemma 4 MTP this is the Gemma 4 assistant checkpoint, not a generic smaller draft model.
+- `vllm_speculative_moe_backend` maps to vLLM `speculative_config.moe_backend`. `null` clears the configured override for this load.
+- `vllm_speculative_attention_backend` maps to vLLM `speculative_config.attention_backend`. `null` clears the configured override for this load.
 - `vllm_num_speculative_tokens` maps to vLLM `speculative_config.num_speculative_tokens`.
-- For `vllm_serve`, target model id/path, binary path, library path, environment, host, port, API key, and extra CLI args are configured in the model definition, not overridden through the admin load body in v1.
+- For `vllm_serve`, target model id/path, binary path, library path, environment, host, port, API key, and extra CLI args are configured in the model definition, not overridden through the admin load body.
 - Loading a `vllm_serve` model starts a local `vllm serve` subprocess. Unloading terminates that subprocess, so VRAM is released by the server process rather than by Python object cleanup alone.
 
 llama-server load override notes:
@@ -767,9 +798,9 @@ llama-server load override notes:
 - `llama_server_n_ctx` maps to the native `llama-server -c/--ctx-size` flag for this load.
 - `llama_server_image_max_tokens` maps to native `--image-max-tokens` and controls the per-image vision token budget.
 - `llama_server_spec_type` currently accepts only `"draft-mtp"` or `null`.
-- `llama_server_spec_draft_n_max` maps to native `--spec-draft-n-max`; v1 constrains it to `1..6`.
-- `llama_server_spec_draft_p_min` maps to native `--spec-draft-p-min`; v1 constrains it to `0.0..1.0`.
-- Model path, binary path, library path, `mmproj`, draft model path, GPU layers, flash attention, reasoning, host, port, API key, and extra native args are configured in the model definition, not overridden through the admin load body in v1.
+- `llama_server_spec_draft_n_max` maps to native `--spec-draft-n-max`; the API constrains it to `1..6`.
+- `llama_server_spec_draft_p_min` maps to native `--spec-draft-p-min`; the API constrains it to `0.0..1.0`.
+- Model path, binary path, library path, `mmproj`, draft model path, GPU layers, flash attention, reasoning, host, port, API key, and extra native args are configured in the model definition, not overridden through the admin load body.
 - Loading a `llama_server` model starts a local `llama-server` subprocess. Unloading terminates that subprocess, so VRAM is released by the native server process rather than by Python object cleanup alone.
 
 `exllama_cache_quant` format:
@@ -811,10 +842,10 @@ These overrides are runtime-only:
 
 - they do not modify `settings.json`
 - they do not modify `local.json`
-- they should be surfaced separately from the configured definition in admin responses
+- they are returned separately from the configured definition in admin responses
 - `replicas` in the load request does not modify `definition.replicas`; it only selects the replica count for that one live load
 
-Suggested response shape:
+Example response:
 
 ```json
 {
@@ -845,6 +876,12 @@ Suggested response shape:
       "kind": "integer",
       "minimum": 1,
       "step": 1
+    },
+    "gguf_flash_attn": {
+      "kind": "enum",
+      "default": "auto",
+      "allowed_values": ["on", "off", "auto"],
+      "examples": ["auto", "on", "off"]
     },
     "gguf_type_k": {
       "kind": "string_or_null",
@@ -881,6 +918,10 @@ Suggested response shape:
           "gguf_type_k": "q4_0",
           "gguf_type_v": "q4_0"
         }
+      ],
+      "notes": [
+        "Service-curated presets for GGUF cache types.",
+        "Prefer symmetric GGUF K/V pairs by default; asymmetric pairs may reduce or disable GPU offload in upstream llama.cpp."
       ]
     }
   },
@@ -890,10 +931,18 @@ Suggested response shape:
     "gguf_type_k": "q8_0",
     "gguf_type_v": "q4_0"
   },
+  "capabilities": {
+    "modalities": ["text"],
+    "file_inputs": false,
+    "multi_turn": true,
+    "thinking_modes": ["default", "enabled", "disabled"],
+    "response_formats": ["text"]
+  },
   "definition": {
     "model_path": "/home/gunnar/models/google_gemma-4-E2B-it-Q8_0/google_gemma-4-E2B-it-Q8_0.gguf",
     "backend": "llama_cpp",
     "prompt_format": "gemma4_template",
+    "enable_thinking": null,
     "enabled": false,
     "replicas": 3,
     "replica_max": 4,
@@ -947,13 +996,15 @@ Rules:
 
 - `404` if `model_name` is unknown
 - `200` if already `unloaded`
+- `200` if already `failed`
 - `200` if already `unloading`
 - transition `loaded -> unloading -> unloaded`
 - unload stops all loaded replicas of the public model
 - new inference requests are rejected once `unloading` starts
 - in-flight requests are allowed to finish before resources are released
 
-Suggested response shape:
+Selected fields from an unloaded response; the complete object has the same
+`AdminModelEntry` shape as an item returned by `GET /v1/admin/models`:
 
 ```json
 {
@@ -994,44 +1045,35 @@ Suggested response shape:
 
 ## Unload And In-Flight Requests
 
-Unload must be graceful in v1.
+Unload is graceful.
 
-That means:
+The service:
 
-- mark the model as `unloading`
-- reject new inference requests for that model
-- wait for in-flight requests to finish
-- release runtime references and backend resources
-- mark the model as `unloaded`
+- marks the model as `unloading`
+- rejects new inference requests for that model
+- cancels requests still waiting in the scheduler queue
+- waits for active backend requests to finish
+- releases runtime references and backend resources
+- marks the model as `unloaded`
 
-The service should track `inflight_requests` per model so unload can wait safely.
+`inflight_requests` tracks admitted requests so unload can wait safely while
+queued requests are cancelled and active requests drain.
 
 ## Scheduler Alignment
 
-This admin API should stay compatible with a future external scheduler.
+The scheduler owns pending request queues. The runtime owns backend execution
+state.
 
-The intended split is:
-
-- scheduler owns external pending queues
-- runtime owns backend execution state
-
-That implies the following unload behavior:
-
-- queued but not yet submitted requests: cancel
-- already submitted or actively running requests: let them drain in v1
-
-So even after a scheduler exists, `unload` should not mean "kill active GPU work immediately".
-
-It should mean:
+On unload, the scheduler and runtime therefore:
 
 - stop new admissions
-- cancel scheduler-owned queued work
-- drain already submitted runtime work
-- then unload the model
+- cancel queued work with `model_unloading`
+- let active backend work drain
+- unload the model after no admitted requests remain
 
 ## Resource Release Guarantees
 
-For v1, "successful unload" should mean:
+A successful unload means:
 
 - no runtime remains registered for the model
 - no new requests can reach that runtime
@@ -1039,13 +1081,13 @@ For v1, "successful unload" should mean:
 - backend-owned objects are dereferenced
 - memory becomes reusable for later loads
 
-The implementation should not promise that every allocator reports zero immediately after unload.
+The API does not promise that every allocator reports zero immediately after unload.
 
 The guarantee is functional reuse, not cosmetic memory counters.
 
 ## Documentation Expectations
 
-This API is intended to support a UI, so the implementation should expose:
+The API supports UI clients through:
 
 - stable response models
 - OpenAPI descriptions on every admin endpoint
@@ -1060,7 +1102,7 @@ The UI should be able to render:
 
 ## Out Of Scope
 
-This v1 note does not define:
+The admin API does not define:
 
 - writes back to config files
 - force unload

@@ -1,9 +1,10 @@
 # llm-pool
 
 `llm-pool` is a FastAPI service for running local and remote language models
-through one API. It loads and unloads models, accepts text, images, and supported
-document files, and reports model and GPU status. Its scheduler shares model
-capacity between clients and limits how much work may wait in a queue.
+through one API. It loads and unloads models and reports model and GPU status.
+Requests can carry text, model-dependent image or audio input, and supported
+document files. Its scheduler shares model capacity between clients and limits
+how much work may wait in a queue.
 
 ![The Workbench loaded-models view, listing each loaded model with its state, backend, and VRAM use](docs/images/wb-llm-pool-models.png)
 
@@ -55,8 +56,7 @@ capacity between clients and limits how much work may wait in a queue.
 
 **Reference**
 
-- [Design Notes](#design-notes)
-- [Acknowledgments](#acknowledgments)
+- [Upstream Projects](#upstream-projects)
 - [License](#license)
 
 ## What It Does
@@ -64,7 +64,7 @@ capacity between clients and limits how much work may wait in a queue.
 - exposes one inference API for multiple model runtimes
 - supports local CT2, ExLlamaV3, `llama_cpp`/GGUF, managed native `llama-server`, in-process vLLM, and managed `vllm serve` backends
 - calls remote OpenAI-compatible models only when a request explicitly allows remote execution
-- accepts text input everywhere, image input on models that advertise image support, and document files on explicitly configured remote models
+- accepts text input everywhere, image and audio input on models that advertise those capabilities, and document files on explicitly configured remote models
 - supports single-turn `input` requests and backend-dependent multi-turn `messages` requests
 - returns JSON responses or service-side SSE events from the same endpoint
 - includes per-request timing and token metrics when the selected backend can report them
@@ -147,7 +147,9 @@ The managed subprocess backends are useful when native upstream dependencies, CU
 | `POST /v1/admin/models/{model_name}/load` | Load one configured model with optional temporary settings. |
 | `POST /v1/admin/models/{model_name}/unload` | Gracefully unload one loaded model. |
 
-See [runtime-admin-api.md](docs/runtime-admin-api.md) for the full admin API shape.
+See [runtime-admin-api.md](docs/runtime-admin-api.md) for the complete admin
+contract, including lifecycle states, response fields, load overrides, and
+errors.
 
 ## Inference Example
 
@@ -238,7 +240,7 @@ Supported `decoding` fields:
 | Field | Type | Notes |
 | --- | --- | --- |
 | `beam_size` | `int` | Used by CT2. Accepted but ignored by most sampling backends. |
-| `top_k` | `int` | Sampling control where supported. |
+| `top_k` | `int` | Used by CT2, ExLlamaV3, `llama_cpp`, vLLM, and `vllm_serve`; ignored by `llama_server` and `openai_remote`. |
 | `top_p` | `float` | Sampling control where supported. |
 | `temperature` | `float` | Sampling control where supported. |
 | `repetition_penalty` | `float` | Repetition penalty where supported. |
@@ -246,6 +248,9 @@ Supported `decoding` fields:
 | `stop` | `list[string]` | Extra stop strings merged with model-format stop strings where applicable. |
 
 Remote OpenAI-compatible models map `temperature`, `top_p`, `max_tokens`, and `stop` to upstream Chat Completions requests. Other decoding fields are accepted for schema compatibility and ignored.
+
+At `temperature: 0`, vLLM uses greedy decoding and disables top-k and top-p
+filtering, so `top_k` does not affect the result in that mode.
 
 ## Structured JSON Output
 
@@ -311,19 +316,22 @@ Content item types:
 
 - `{ "type": "text", "text": "..." }`
 - `{ "type": "image_url", "image_url": { "url": "...", "detail": "auto" } }`
+- `{ "type": "audio_url", "audio_url": { "url": "data:audio/wav;base64,..." } }`
 - `{ "type": "file", "file": { "filename": "paper.pdf", "file_data": "data:application/pdf;base64,..." } }`
 
 Image URLs may be `data:image/...;base64,...`, `file://...`, or `http(s)://...` depending on the backend's own loader support.
+Audio URL support also depends on the backend.
 File data must be a base64 data URL. File support is currently limited to `openai_remote` models with an explicit `remote_file_mode`.
 
 Important behavior:
 
 - Use `capabilities.modalities` from `GET /v1/admin/models` to determine which input types a model accepts.
 - `capabilities.file_inputs` tells clients whether a remote model accepts `file` content items.
-- A model declares image support with `"modalities": ["text", "image"]`; the default is `["text"]`.
+- A model declares image or audio support with values such as `"modalities": ["text", "image", "audio"]`; the default is `["text"]`.
 - Text-only models reject image content with `modality_unsupported`.
-- Models without configured file support reject file content with `modality_unsupported`.
+- Models without configured file support reject file content with `file_input_unsupported`.
 - `llama_server`, vLLM, `vllm_serve`, and remote OpenAI-compatible vision models are the current intended vision paths.
+- `vllm_serve` is the supported local audio path; clients should send audio only when the model advertises that modality.
 - In-process GGUF via `llama-cpp-python` remains text-only.
 - A text-only content array is accepted by text backends and concatenated into one prompt.
 
@@ -353,14 +361,15 @@ Rules:
 - `messages` may contain only `user` and `assistant` roles.
 - `instructions` carries the system prompt.
 - the final message must be a `user` message.
-- a message `content` may be a plain string or a text/image content array.
+- a message `content` may be a plain string or a text/image/audio content array.
 - `capabilities.multi_turn` tells clients whether the selected model accepts this path.
 
 Current support:
 
 - `llama_server`: multi-turn text and image, depending on model capabilities.
+- `openai_remote`: multi-turn text, image, and configured document-file input.
 - `vllm`: multi-turn text and image, depending on model capabilities.
-- `vllm_serve`: multi-turn text and image, depending on model capabilities.
+- `vllm_serve`: multi-turn text, image, and audio, depending on model capabilities.
 - `llama_cpp`: text-only multi-turn for selected prompt formats: `generic`, `mistral_template`, `qwen3_template`, and `gemma4_template`.
 - CT2 and ExLlamaV3: single-turn `input` only.
 
@@ -421,7 +430,10 @@ Minimal local override example:
 
 The base model definition can stay in `settings.json`, while `local.json` only decides what is enabled on a specific machine.
 
-Admin load overrides are temporary. They let a UI adjust supported runtime knobs before pressing load without editing config files. See [runtime-admin-api.md](docs/runtime-admin-api.md) for the exact allowed fields and constraints.
+Admin load overrides are temporary. They let a UI adjust supported runtime
+knobs before pressing load without editing config files. The live
+`load_constraints` object from `GET /v1/admin/models` defines the allowed fields
+and constraints.
 
 ![A model's expanded detail panel in the Workbench, exposing runtime load overrides such as max model length, KV cache size and dtype, max image pixels, and speculative-decoding settings before the model is loaded](docs/images/wb-llm-pool-models-detail.png)
 
@@ -665,7 +677,7 @@ Notes:
 - `vllm_kv_cache_memory_bytes`, when set, manually controls KV cache size and takes precedence over sizing derived from `vllm_gpu_memory_utilization`.
 - `vllm_limit_mm_per_prompt` caps multimodal items per request.
 - `vllm_mm_processor_kwargs` is passed through to the model processor. For some vision models this is where image token budgets are bounded.
-- vLLM speculative decoding fields are wired to `speculative_config`; Gemma 4 MTP remains tracked in [gemma4-mtp-vllm-notes.md](docs/gemma4-mtp-vllm-notes.md).
+- vLLM speculative decoding fields are wired to `speculative_config`.
 - vLLM dependencies are heavy and imported lazily only when a vLLM model is loaded.
 
 Blackwell runtime note:
@@ -783,12 +795,14 @@ Notes:
 - `vllm_model` is the Hugging Face model id or local target-model path passed to `vllm serve`.
 - `model_path` is not required for `vllm_serve`.
 - `vllm_*` fields map to vLLM engine arguments; `vllm_serve_*` fields control the subprocess, HTTP route, environment, and CLI extras.
+- `vllm_serve` forwards `temperature`, `top_k`, `top_p`, `max_tokens`, and `stop` to the upstream Chat Completions endpoint.
 - Prefer a very low `vllm_gpu_memory_utilization` and set `vllm_kv_cache_memory_bytes` explicitly, so `vllm serve` does not reserve most free VRAM just because it is available.
 - `vllm_speculative_method`, `vllm_speculative_model`, `vllm_speculative_moe_backend`, `vllm_speculative_attention_backend`, and `vllm_num_speculative_tokens` are serialized into `--speculative-config`.
 - For Gemma 4 MTP, `vllm_speculative_method: "mtp"` means `vllm_speculative_model` is the Gemma 4 assistant checkpoint passed through vLLM's `model` key; it is not generic `method: "draft_model"` speculation.
 - For Qwen 3.6 NVFP4 MTP, `vllm_speculative_method: "mtp"` uses the target model's own MTP path; configure the speculative MoE and attention backends instead of a separate draft-model checkpoint.
 - Do not mix the vLLM speculative methods: `draft_model`, `mlp_speculator`, and `mtp` are separate paths with different compatible checkpoints and different performance behavior.
 - `vllm_num_speculative_tokens` is the MTP speculative depth. It is conceptually close to a draft-token count, but it should be tuned separately from llama.cpp `--spec-draft-n-max`; vLLM's documented safe starting point is `1`, while this local Gemma 4 NVFP4 vision benchmark currently uses `8`.
+- The directory containing `vllm_serve_binary` is prepended to `PATH`, so subprocess helpers use the same isolated runtime.
 - `vllm_serve_library_path` is prepended to `LD_LIBRARY_PATH` for the subprocess.
 - `vllm_serve_extra_args` is an escape hatch for upstream CLI flags that are model-specific but should still live in config.
 - For concurrent `vllm_serve` routes, align scheduler `target_inflight` with vLLM `--max-num-seqs`. The KV-cache budget and request lengths still determine whether all configured sequences fit at once.
@@ -1056,6 +1070,19 @@ Document-structure OCR benchmark prompt:
 - compare first-run and warm-cache timings separately
 - suggested decoding: `temperature: 0`, `top_k: 1`, `max_tokens: 2048`
 
+MTP performance was strongly workload-dependent in warm, single-request checks
+at `temperature: 0` directly against the managed vLLM servers:
+
+| Workload | E4B without MTP | E4B with MTP depth `4` | 26B A4B without MTP | 26B A4B with MTP depth `8` |
+| --- | ---: | ---: | ---: | ---: |
+| 200-word story | about 202 tok/s | about 193 tok/s | about 170 tok/s | about 143 tok/s |
+| 524-word page translation | about 204-205 tok/s | about 271 tok/s | about 172-173 tok/s | about 330-333 tok/s |
+
+The page source contained about 1,258 prompt tokens and produced about 1,380
+output tokens. Four concurrent copies reached about 1,056-1,058 aggregate tok/s
+on E4B and about 1,111-1,187 aggregate tok/s on 26B A4B. MTP accelerated the
+predictable translation output but slowed the less predictable creative prompt.
+
 ## Development
 
 Basic local setup:
@@ -1103,25 +1130,9 @@ Current deployment shape:
 
 See [deploy/systemd/README.md](deploy/systemd/README.md).
 
-## Design Notes
+## Upstream Projects
 
-For current behavior, see:
-
-- [runtime-admin-api.md](docs/runtime-admin-api.md): admin API and live load overrides
-- [client-fairness-notes.md](docs/client-fairness-notes.md): implemented per-model client-fairness policy
-
-The remaining files record design decisions, implementation history, and backend investigations:
-
-- [runtime-scheduler-notes.md](docs/runtime-scheduler-notes.md): broader scheduler design
-- [runtime-scheduler-tracker.md](docs/runtime-scheduler-tracker.md): scheduler implementation history
-- [model-replica-routing-notes.md](docs/model-replica-routing-notes.md): public model id and replica semantics
-- [remote-openai-compatible-backend-notes.md](docs/remote-openai-compatible-backend-notes.md): remote backend shape and cost-control notes
-- [gemma4-mtp-vllm-notes.md](docs/gemma4-mtp-vllm-notes.md): vLLM and Gemma 4 MTP investigation
-- [gemma4-vllm-qat-notes.md](docs/gemma4-vllm-qat-notes.md): Gemma 4 QAT/vLLM notes
-
-## Acknowledgments
-
-This pool builds on excellent upstream projects:
+`llm-pool` uses these upstream projects:
 
 - FastAPI
 - Uvicorn
