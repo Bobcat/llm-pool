@@ -149,17 +149,11 @@ class _FairPendingQueue:
         candidates = [state for state in self._states.values() if state.pending_jobs]
         if not candidates:
             return None
-        below_soft_cap = [
-            state
-            for state in candidates
-            if len(state.active_started_at) < self._settings.soft_max_inflight_per_key
-        ]
-        if below_soft_cap:
-            candidates = below_soft_cap
         selected_state = min(
             candidates,
             key=lambda state: (
                 self._score(state, now),
+                len(state.active_started_at) >= self._settings.soft_max_inflight_per_key,
                 state.last_selected_order,
                 state.activation_order,
             ),

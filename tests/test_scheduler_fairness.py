@@ -75,6 +75,24 @@ class FairPendingQueueTests(unittest.TestCase):
 
         self.assertEqual(selected, ["a", "b", "a"])
 
+    def test_weighted_score_remains_primary_over_soft_cap(self) -> None:
+        queue = self._queue(
+            weights={"a": 10.0, "b": 1.0},
+            soft_max_inflight_per_key=1,
+        )
+        jobs = (("a", "a1"), ("a", "a2"), ("b", "b1"), ("b", "b2"))
+        for key, text in jobs:
+            self._enqueue(queue, key=key, text=text)
+
+        active_a = queue.pop_next(now=0.0)
+        active_b = queue.pop_next(now=0.0)
+        queue.complete(active_b, service_ms=100.0, now=0.1)
+
+        active_keys = (active_a.fairness_key, active_b.fairness_key)
+        self.assertEqual(active_keys, ("a", "b"))
+        self.assertLess(queue.score("a", now=0.1), queue.score("b", now=0.1))
+        self.assertEqual(queue.pop_next(now=0.1).fairness_key, "a")
+
     def test_weighted_long_run_tracks_slot_time_with_unequal_job_durations(self) -> None:
         queue = self._queue(weights={"a": 2.0, "b": 1.0})
         for index in range(2):
@@ -127,7 +145,8 @@ class FairPendingQueueTests(unittest.TestCase):
         first = queue.pop_next(now=0.0)
         self._enqueue(queue, key="b", text="b1", now=0.01)
 
-        second = queue.pop_next(now=0.02)
+        self.assertEqual(queue.score("a", now=0.01), queue.score("b", now=0.01))
+        second = queue.pop_next(now=0.01)
 
         self.assertEqual(first.fairness_key, "a")
         self.assertEqual(second.fairness_key, "b")

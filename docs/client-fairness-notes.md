@@ -192,8 +192,9 @@ score(key, now) =
 When a slot is free, choose a queued key with the lowest score. Take the oldest
 job from that key's FIFO bucket.
 
-Use round-robin order to break equal scores. Equal scores are common when an
-executor fills several slots before any job has completed.
+For equal scores, prefer a key below the soft inflight cap. Use round-robin
+order to break remaining ties. Equal scores are common when an executor fills
+several slots before any job has completed.
 
 On completion:
 
@@ -223,25 +224,26 @@ subtract a common minimum without changing selection order.
 
 ## Soft per-key inflight cap
 
-The score controls admission order. A soft inflight cap prevents one key from
-holding every slot when another key is already waiting.
+The score controls admission order. The soft inflight cap is a tie-breaker that
+helps spread equal-score starts between keys.
 
 Let `N` be the configured soft maximum active jobs per key, with a minimum of
-one. Selection works in two passes:
+one. Selection works as follows:
 
-1. consider queued keys whose active count is below `N`;
-2. if that set is empty while a slot is free, consider every queued key.
+1. compare every queued key by score;
+2. among keys with the same score, prefer keys whose active count is below `N`;
+3. use round-robin order to break remaining ties.
 
-The second pass is borrowing. It keeps the executor work-conserving. The cap is
-an anti-monopoly preference, not a hard quota or reserved capacity.
+The score remains primary, so the cap cannot override configured weights. The
+cap is an anti-monopoly preference, not a hard quota or reserved capacity.
 
 Example with four slots and `N = 1`:
 
 - one active key may borrow all four slots;
-- when a second key queues while the first holds three slots, the second key is
-  the only below-cap candidate for the remaining slot;
-- when both keys reach the soft cap and slots remain, the score decides who
-  borrows them.
+- when equal-score keys A and B are both queued, each gets a slot before either
+  key wins another equal-score tie;
+- a key with a lower score can still receive another slot after reaching `N`;
+- if no other key is waiting, one key may continue using every slot.
 
 The cap applies across all replicas of the public model.
 
@@ -255,10 +257,10 @@ design.
 For each free runtime slot:
 
 1. collect keys with non-empty pending buckets;
-2. apply the first soft-cap pass;
-3. fall back to borrowing if the first pass has no candidates;
-4. compute each candidate's score including active elapsed time;
-5. choose the lowest score, using round-robin for ties;
+2. compute each candidate's score including active elapsed time;
+3. choose the lowest score;
+4. for equal scores, prefer a key below the soft inflight cap;
+5. use round-robin order for remaining ties;
 6. pop the oldest job from that key;
 7. record its active start time;
 8. submit it to the selected replica.
