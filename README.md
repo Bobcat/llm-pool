@@ -122,6 +122,7 @@ At startup the service loads `config/settings.json`, merges `config/local.json` 
 
 At runtime:
 
+- `POST /v1/admin/settings/reload` rereads `settings.json` and `local.json` without loading or unloading models. Its response reports whether service changes still require a restart.
 - `POST /v1/admin/models/{model_name}/load` loads a known configured model.
 - `POST /v1/admin/models/{model_name}/unload` unloads a loaded model.
 - load and unload changes are temporary; they do not modify the JSON configuration.
@@ -144,6 +145,7 @@ The managed subprocess backends are useful when native upstream dependencies, CU
 | `GET /v1/models` | List currently loaded public model ids. |
 | `GET /v1/admin/models` | List all configured models plus runtime state, queue state, replica state, capabilities, load constraints, and model definition metadata. |
 | `GET /v1/admin/gpu-memory` | Return current GPU memory usage and approximate per-model VRAM estimates. |
+| `POST /v1/admin/settings/reload` | Reread the merged model catalog and report whether service settings require a restart. |
 | `POST /v1/admin/models/{model_name}/load` | Load one configured model with optional temporary settings. |
 | `POST /v1/admin/models/{model_name}/unload` | Gracefully unload one loaded model. |
 

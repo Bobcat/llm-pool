@@ -113,20 +113,18 @@ class ApiTests(unittest.TestCase):
                 main = importlib.import_module("app.main")
 
                 class FakeEngine:
-                    def admin_models_payload(self, settings) -> dict[str, object]:
-                        del settings
+                    def admin_models_payload(self) -> dict[str, object]:
                         return {"models": []}
 
-                    def admin_gpu_memory_payload(self, settings) -> dict[str, object]:
-                        del settings
+                    def admin_gpu_memory_payload(self) -> dict[str, object]:
                         return {"gpus": [], "models": [], "error": None}
 
-                    def load_model(self, model_name: str, settings, load_request=None) -> dict[str, object]:
-                        del model_name, settings, load_request
+                    def load_model(self, model_name: str, load_request=None) -> dict[str, object]:
+                        del model_name, load_request
                         raise AssertionError("load_model should not be called in this test")
 
-                    def unload_model(self, model_name: str, settings) -> dict[str, object]:
-                        del model_name, settings
+                    def unload_model(self, model_name: str) -> dict[str, object]:
+                        del model_name
                         raise AssertionError("unload_model should not be called in this test")
 
                     def complete(self, request):
@@ -281,6 +279,404 @@ class ApiTests(unittest.TestCase):
         self.assertNotIn("exllama_cache_size", disabled_model["definition"])
         self.assertNotIn("gguf_n_ctx", disabled_model["definition"])
 
+    def test_admin_settings_reload_updates_unloaded_model_catalog(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            settings_path = Path(tmpdir) / "settings.json"
+            settings_path.write_text(
+                json.dumps(
+                    {
+                        "engine": {
+                            "backend": "stub",
+                            "models": {
+                                "old-model": {"model_path": "/tmp/old", "enabled": False},
+                                "changed-model": {"model_path": "/tmp/before", "enabled": False},
+                            },
+                        }
+                    }
+                ),
+                encoding="utf-8",
+            )
+            with mock.patch.dict(
+                os.environ,
+                {"LLM_POOL_SETTINGS_PATH": str(settings_path)},
+                clear=False,
+            ):
+                sys.modules.pop("app.main", None)
+                main = importlib.import_module("app.main")
+                client = TestClient(main.create_app(settings_path))
+
+            settings_path.write_text(
+                json.dumps(
+                    {
+                        "engine": {
+                            "backend": "stub",
+                            "models": {
+                                "changed-model": {"model_path": "/tmp/after", "enabled": False},
+                                "new-model": {"model_path": "/tmp/new", "enabled": True},
+                            },
+                        }
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            response = client.post("/v1/admin/settings/reload")
+
+            self.assertEqual(response.status_code, 200)
+            self.assertEqual(
+                response.json(),
+                {
+                    "added_models": ["new-model"],
+                    "removed_models": ["old-model"],
+                    "updated_models": ["changed-model"],
+                    "unchanged_models": [],
+                    "service_restart_required": False,
+                },
+            )
+            models = {
+                item["name"]: item
+                for item in client.get("/v1/admin/models").json()["models"]
+            }
+            self.assertEqual(set(models), {"changed-model", "new-model"})
+            self.assertEqual(models["changed-model"]["definition"]["model_path"], "/tmp/after")
+            self.assertEqual(models["new-model"]["runtime_state"], "unloaded")
+
+    def test_admin_settings_reload_rejects_loaded_model_definition_change(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            settings_path = Path(tmpdir) / "settings.json"
+            settings_path.write_text(
+                json.dumps(
+                    {
+                        "engine": {
+                            "backend": "stub",
+                            "models": {
+                                "loaded-model": {"model_path": "/tmp/before", "enabled": True}
+                            },
+                        }
+                    }
+                ),
+                encoding="utf-8",
+            )
+            with mock.patch.dict(
+                os.environ,
+                {"LLM_POOL_SETTINGS_PATH": str(settings_path)},
+                clear=False,
+            ):
+                sys.modules.pop("app.main", None)
+                main = importlib.import_module("app.main")
+                client = TestClient(main.create_app(settings_path))
+            settings_path.write_text(
+                json.dumps(
+                    {
+                        "engine": {
+                            "backend": "stub",
+                            "models": {
+                                "loaded-model": {"model_path": "/tmp/after", "enabled": True}
+                            },
+                        }
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            response = client.post("/v1/admin/settings/reload")
+
+            self.assertEqual(response.status_code, 409)
+            self.assertEqual(response.json()["detail"]["code"], "settings_reload_conflict")
+            self.assertEqual(
+                response.json()["detail"]["conflicts"],
+                ["engine.models.loaded-model"],
+            )
+            model = client.get("/v1/admin/models").json()["models"][0]
+            self.assertEqual(model["definition"]["model_path"], "/tmp/before")
+
+    def test_admin_settings_reload_rejects_invalid_json_without_changing_catalog(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            settings_path = Path(tmpdir) / "settings.json"
+            settings_path.write_text(
+                json.dumps(
+                    {
+                        "engine": {
+                            "backend": "stub",
+                            "models": {
+                                "known-model": {"model_path": "/tmp/known", "enabled": False}
+                            },
+                        }
+                    }
+                ),
+                encoding="utf-8",
+            )
+            with mock.patch.dict(
+                os.environ,
+                {"LLM_POOL_SETTINGS_PATH": str(settings_path)},
+                clear=False,
+            ):
+                sys.modules.pop("app.main", None)
+                main = importlib.import_module("app.main")
+                client = TestClient(main.create_app(settings_path))
+            settings_path.write_text("{not-json", encoding="utf-8")
+
+            response = client.post("/v1/admin/settings/reload")
+
+            self.assertEqual(response.status_code, 400)
+            self.assertEqual(response.json()["detail"]["code"], "invalid_settings")
+            models = client.get("/v1/admin/models").json()["models"]
+            self.assertEqual([model["name"] for model in models], ["known-model"])
+
+    def test_admin_settings_reload_validation_failure_is_atomic(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            settings_path = Path(tmpdir) / "settings.json"
+            settings_path.write_text(
+                json.dumps(
+                    {
+                        "engine": {
+                            "backend": "stub",
+                            "models": {
+                                "keep-model": {
+                                    "model_path": "/tmp/keep",
+                                    "backend": "stub",
+                                    "enabled": False,
+                                },
+                                "drop-model": {
+                                    "model_path": "/tmp/drop",
+                                    "backend": "stub",
+                                    "enabled": False,
+                                },
+                            },
+                        }
+                    }
+                ),
+                encoding="utf-8",
+            )
+            with mock.patch.dict(
+                os.environ,
+                {"LLM_POOL_SETTINGS_PATH": str(settings_path)},
+                clear=False,
+            ):
+                sys.modules.pop("app.main", None)
+                main = importlib.import_module("app.main")
+                client = TestClient(main.create_app(settings_path))
+
+            settings_path.write_text(
+                json.dumps(
+                    {
+                        "engine": {
+                            "backend": "",
+                            "models": {
+                                "keep-model": {
+                                    "model_path": "/tmp/keep",
+                                    "backend": "stub",
+                                    "enabled": False,
+                                },
+                                "added-model": {
+                                    "model_path": "/tmp/added",
+                                    "enabled": False,
+                                },
+                            },
+                        }
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            response = client.post("/v1/admin/settings/reload")
+
+            self.assertEqual(response.status_code, 400)
+            self.assertEqual(response.json()["detail"]["code"], "invalid_settings")
+            models = client.get("/v1/admin/models")
+            self.assertEqual(models.status_code, 200)
+            self.assertEqual(
+                [model["name"] for model in models.json()["models"]],
+                ["keep-model", "drop-model"],
+            )
+
+    def test_admin_settings_reload_populates_initially_empty_catalog(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            settings_path = Path(tmpdir) / "settings.json"
+            settings_path.write_text(
+                json.dumps({"engine": {"backend": "stub", "models": {}}}),
+                encoding="utf-8",
+            )
+            with mock.patch.dict(
+                os.environ,
+                {"LLM_POOL_SETTINGS_PATH": str(settings_path)},
+                clear=False,
+            ):
+                sys.modules.pop("app.main", None)
+                main = importlib.import_module("app.main")
+                client = TestClient(main.create_app(settings_path))
+
+            settings_path.write_text(
+                json.dumps(
+                    {
+                        "engine": {
+                            "backend": "stub",
+                            "models": {
+                                "fresh-model": {
+                                    "model_path": "/tmp/fresh",
+                                    "enabled": False,
+                                }
+                            },
+                        }
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            response = client.post("/v1/admin/settings/reload")
+
+            self.assertEqual(response.status_code, 200)
+            self.assertEqual(response.json()["added_models"], ["fresh-model"])
+            models = client.get("/v1/admin/models").json()["models"]
+            self.assertEqual([model["name"] for model in models], ["fresh-model"])
+            self.assertEqual(models[0]["runtime_state"], "unloaded")
+
+    def test_admin_settings_reload_accepts_service_changes_and_keeps_restart_flag(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            settings_path = Path(tmpdir) / "settings.json"
+            settings_path.write_text(
+                json.dumps(
+                    {
+                        "service": {"log_level": "info"},
+                        "engine": {"backend": "stub", "models": {}},
+                    }
+                ),
+                encoding="utf-8",
+            )
+            with mock.patch.dict(
+                os.environ,
+                {"LLM_POOL_SETTINGS_PATH": str(settings_path)},
+                clear=False,
+            ):
+                sys.modules.pop("app.main", None)
+                main = importlib.import_module("app.main")
+                client = TestClient(main.create_app(settings_path))
+
+            settings_path.write_text(
+                json.dumps(
+                    {
+                        "service": {"log_level": "debug"},
+                        "engine": {
+                            "backend": "stub",
+                            "models": {
+                                "new-model": {
+                                    "model_path": "/tmp/new",
+                                    "enabled": False,
+                                }
+                            },
+                        },
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            first_response = client.post("/v1/admin/settings/reload")
+            second_response = client.post("/v1/admin/settings/reload")
+
+            self.assertEqual(first_response.status_code, 200)
+            self.assertTrue(first_response.json()["service_restart_required"])
+            self.assertEqual(first_response.json()["added_models"], ["new-model"])
+            self.assertEqual(second_response.status_code, 200)
+            self.assertTrue(second_response.json()["service_restart_required"])
+
+    def test_admin_settings_reload_rereads_local_overrides(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            settings_path = Path(tmpdir) / "settings.json"
+            local_path = Path(tmpdir) / "local.json"
+            settings_path.write_text(
+                json.dumps(
+                    {
+                        "engine": {
+                            "backend": "stub",
+                            "models": {
+                                "local-model": {
+                                    "model_path": "/tmp/base",
+                                    "enabled": False,
+                                }
+                            },
+                        }
+                    }
+                ),
+                encoding="utf-8",
+            )
+            local_path.write_text("{}", encoding="utf-8")
+            with mock.patch.dict(
+                os.environ,
+                {
+                    "LLM_POOL_SETTINGS_PATH": str(settings_path),
+                    "LLM_POOL_LOCAL_SETTINGS_PATH": str(local_path),
+                },
+                clear=False,
+            ):
+                sys.modules.pop("app.main", None)
+                main = importlib.import_module("app.main")
+                client = TestClient(main.create_app(settings_path))
+                local_path.write_text(
+                    json.dumps(
+                        {
+                            "engine": {
+                                "models": {
+                                    "local-model": {"model_path": "/tmp/local"}
+                                }
+                            }
+                        }
+                    ),
+                    encoding="utf-8",
+                )
+                response = client.post("/v1/admin/settings/reload")
+
+            self.assertEqual(response.status_code, 200)
+            self.assertEqual(response.json()["updated_models"], ["local-model"])
+            model = client.get("/v1/admin/models").json()["models"][0]
+            self.assertEqual(model["definition"]["model_path"], "/tmp/local")
+
+    def test_admin_settings_reload_supports_unload_reload_load_cycle(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            settings_path = Path(tmpdir) / "settings.json"
+            initial_payload = {
+                "engine": {
+                    "backend": "stub",
+                    "models": {
+                        "changed-model": {
+                            "model_path": "/tmp/before",
+                            "enabled": True,
+                        },
+                        "other-model": {
+                            "model_path": "/tmp/other",
+                            "enabled": True,
+                        },
+                    },
+                }
+            }
+            settings_path.write_text(json.dumps(initial_payload), encoding="utf-8")
+            with mock.patch.dict(
+                os.environ,
+                {"LLM_POOL_SETTINGS_PATH": str(settings_path)},
+                clear=False,
+            ):
+                sys.modules.pop("app.main", None)
+                main = importlib.import_module("app.main")
+                client = TestClient(main.create_app(settings_path))
+
+            changed_payload = json.loads(json.dumps(initial_payload))
+            changed_payload["engine"]["models"]["changed-model"]["model_path"] = "/tmp/after"
+            settings_path.write_text(json.dumps(changed_payload), encoding="utf-8")
+
+            unload_response = client.post("/v1/admin/models/changed-model/unload")
+            reload_response = client.post("/v1/admin/settings/reload")
+            load_response = client.post("/v1/admin/models/changed-model/load")
+
+            self.assertEqual(unload_response.status_code, 200)
+            self.assertEqual(reload_response.status_code, 200)
+            self.assertEqual(load_response.status_code, 200)
+            models = {
+                model["name"]: model
+                for model in client.get("/v1/admin/models").json()["models"]
+            }
+            self.assertEqual(models["changed-model"]["definition"]["model_path"], "/tmp/after")
+            self.assertEqual(models["changed-model"]["runtime_state"], "loaded")
+            self.assertEqual(models["other-model"]["runtime_state"], "loaded")
+
     def test_admin_gpu_memory_endpoint_returns_envelope(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             settings_path = Path(tmpdir) / "settings.json"
@@ -304,12 +700,10 @@ class ApiTests(unittest.TestCase):
                 main = importlib.import_module("app.main")
 
                 class FakeEngine:
-                    def admin_models_payload(self, settings) -> dict[str, object]:
-                        del settings
+                    def admin_models_payload(self) -> dict[str, object]:
                         return {"models": []}
 
-                    def admin_gpu_memory_payload(self, settings) -> dict[str, object]:
-                        del settings
+                    def admin_gpu_memory_payload(self) -> dict[str, object]:
                         return {
                             "gpus": [
                                 {
@@ -332,12 +726,12 @@ class ApiTests(unittest.TestCase):
                             "error": None,
                         }
 
-                    def load_model(self, model_name: str, settings, load_request=None) -> dict[str, object]:
-                        del model_name, settings, load_request
+                    def load_model(self, model_name: str, load_request=None) -> dict[str, object]:
+                        del model_name, load_request
                         raise AssertionError("load_model should not be called in this test")
 
-                    def unload_model(self, model_name: str, settings) -> dict[str, object]:
-                        del model_name, settings
+                    def unload_model(self, model_name: str) -> dict[str, object]:
+                        del model_name
                         raise AssertionError("unload_model should not be called in this test")
 
                     def complete(self, request):
@@ -431,16 +825,13 @@ class ApiTests(unittest.TestCase):
                 captured: dict[str, object] = {}
 
                 class FakeEngine:
-                    def admin_models_payload(self, settings) -> dict[str, object]:
-                        del settings
+                    def admin_models_payload(self) -> dict[str, object]:
                         return {"models": []}
 
-                    def admin_gpu_memory_payload(self, settings) -> dict[str, object]:
-                        del settings
+                    def admin_gpu_memory_payload(self) -> dict[str, object]:
                         return {"gpus": [], "models": [], "error": None}
 
-                    def load_model(self, model_name: str, settings, load_request=None) -> dict[str, object]:
-                        del settings
+                    def load_model(self, model_name: str, load_request=None) -> dict[str, object]:
                         captured["model_name"] = model_name
                         captured["load_request"] = load_request
                         return {
@@ -548,8 +939,8 @@ class ApiTests(unittest.TestCase):
                             },
                         }
 
-                    def unload_model(self, model_name: str, settings) -> dict[str, object]:
-                        del model_name, settings
+                    def unload_model(self, model_name: str) -> dict[str, object]:
+                        del model_name
                         raise AssertionError("unload_model should not be called in this test")
 
                     def complete(self, request):
@@ -624,12 +1015,11 @@ class ApiTests(unittest.TestCase):
                 main = importlib.import_module("app.main")
 
                 class FakeFailingEngine:
-                    def admin_models_payload(self, settings) -> dict[str, object]:
-                        del settings
+                    def admin_models_payload(self) -> dict[str, object]:
                         return {"models": []}
 
-                    def load_model(self, model_name: str, settings, load_request=None) -> dict[str, object]:
-                        del settings, load_request
+                    def load_model(self, model_name: str, load_request=None) -> dict[str, object]:
+                        del load_request
                         raise RuntimeError(f"failed:{model_name}")
 
                     def complete(self, request):
@@ -680,20 +1070,18 @@ class ApiTests(unittest.TestCase):
                 main = importlib.import_module("app.main")
 
                 class FakeEngine:
-                    def admin_models_payload(self, settings) -> dict[str, object]:
-                        del settings
+                    def admin_models_payload(self) -> dict[str, object]:
                         return {"models": []}
 
-                    def admin_gpu_memory_payload(self, settings) -> dict[str, object]:
-                        del settings
+                    def admin_gpu_memory_payload(self) -> dict[str, object]:
                         return {"gpus": [], "models": [], "error": None}
 
-                    def load_model(self, model_name: str, settings, load_request=None) -> dict[str, object]:
-                        del model_name, settings, load_request
+                    def load_model(self, model_name: str, load_request=None) -> dict[str, object]:
+                        del model_name, load_request
                         raise ValueError("unsupported load override for llama_cpp backend: exllama_cache_size")
 
-                    def unload_model(self, model_name: str, settings) -> dict[str, object]:
-                        del model_name, settings
+                    def unload_model(self, model_name: str) -> dict[str, object]:
+                        del model_name
                         raise AssertionError("unload_model should not be called in this test")
 
                     def complete(self, request):

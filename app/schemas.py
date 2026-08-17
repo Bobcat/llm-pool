@@ -313,6 +313,14 @@ class AdminModelsEnvelope(BaseModel):
     models: list[AdminModelEntry] = Field(default_factory=list)
 
 
+class AdminSettingsReloadEnvelope(BaseModel):
+    added_models: list[str] = Field(default_factory=list)
+    removed_models: list[str] = Field(default_factory=list)
+    updated_models: list[str] = Field(default_factory=list)
+    unchanged_models: list[str] = Field(default_factory=list)
+    service_restart_required: bool = False
+
+
 class AdminGpuMemoryDevice(BaseModel):
     index: int
     name: str

@@ -16,11 +16,14 @@ from app.engine import build_engine
 from app.engine import BackendExecutionError
 from app.engine import ModelStateError
 from app.engine import RequestAdmissionError
+from app.engine import SettingsReloadConflictError
+from app.engine import SettingsReloadValidationError
 from app.engine import UnknownModelError
 from app.schemas import AdminModelEntry
 from app.schemas import AdminGpuMemoryEnvelope
 from app.schemas import AdminLoadRequest
 from app.schemas import AdminModelsEnvelope
+from app.schemas import AdminSettingsReloadEnvelope
 from app.schemas import OutputText
 from app.schemas import ResponseEnvelope
 from app.schemas import ResponseMetrics
@@ -113,7 +116,39 @@ def create_app(settings_path: str | Path | None = None) -> FastAPI:
         ),
     )
     def list_admin_models() -> dict[str, object]:
-        return engine.admin_models_payload(settings)
+        return engine.admin_models_payload()
+
+    @app.post(
+        "/v1/admin/settings/reload",
+        response_model=AdminSettingsReloadEnvelope,
+        tags=["admin"],
+        summary="Reload settings files",
+        description=(
+            "Reloads the merged settings.json and local.json model catalog without automatically "
+            "loading or unloading models. Changes that would invalidate a loaded runtime are rejected. "
+            "Service changes are accepted but require a process restart."
+        ),
+    )
+    def reload_runtime_settings() -> dict[str, object]:
+        try:
+            reloaded_settings = load_settings(settings_path)
+        except (OSError, TypeError, ValueError) as exc:
+            raise HTTPException(
+                status_code=400,
+                detail={"code": "invalid_settings", "message": str(exc)},
+            ) from exc
+        try:
+            return engine.reload_settings(reloaded_settings)
+        except SettingsReloadConflictError as exc:
+            raise HTTPException(
+                status_code=409,
+                detail={"code": "settings_reload_conflict", "conflicts": exc.conflicts},
+            ) from exc
+        except SettingsReloadValidationError as exc:
+            raise HTTPException(
+                status_code=400,
+                detail={"code": "invalid_settings", "message": str(exc)},
+            ) from exc
 
     @app.get(
         "/v1/admin/gpu-memory",
@@ -126,7 +161,7 @@ def create_app(settings_path: str | Path | None = None) -> FastAPI:
         ),
     )
     def get_gpu_memory() -> dict[str, object]:
-        return engine.admin_gpu_memory_payload(settings)
+        return engine.admin_gpu_memory_payload()
 
     @app.post(
         "/v1/admin/models/{model_name}/load",
@@ -141,7 +176,7 @@ def create_app(settings_path: str | Path | None = None) -> FastAPI:
     )
     def load_model(model_name: str, load_request: AdminLoadRequest | None = None) -> dict[str, object]:
         try:
-            return engine.load_model(model_name, settings, load_request)
+            return engine.load_model(model_name, load_request)
         except UnknownModelError as exc:
             raise HTTPException(
                 status_code=404,
@@ -183,7 +218,7 @@ def create_app(settings_path: str | Path | None = None) -> FastAPI:
     )
     def unload_model(model_name: str) -> dict[str, object]:
         try:
-            return engine.unload_model(model_name, settings)
+            return engine.unload_model(model_name)
         except UnknownModelError as exc:
             raise HTTPException(
                 status_code=404,

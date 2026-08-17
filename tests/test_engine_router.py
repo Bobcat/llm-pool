@@ -14,6 +14,7 @@ HAS_PYDANTIC = importlib.util.find_spec("pydantic") is not None
 if HAS_PYDANTIC:
     from app.config import AppSettings
     from app.config import EngineSettings
+    from app.config import FairnessSettings
     from app.config import ModelSettings
     from app.config import ServiceSettings
     import app.engine as engine_module
@@ -293,7 +294,7 @@ class ModelRouterEngineTests(unittest.TestCase):
         with mock.patch.object(engine_module, "LlamaServerEngine", FakeLlamaServerEngine):
             engine = ModelRouterEngine(settings)
             result = engine.complete(ResponseRequest(model="llama-model", input="hello"))
-            entry = engine.unload_model("llama-model", settings)
+            entry = engine.unload_model("llama-model")
 
         self.assertEqual(result.text, "llama-server:llama-model#1")
         self.assertEqual(entry["runtime_state"], "unloaded")
@@ -333,7 +334,7 @@ class ModelRouterEngineTests(unittest.TestCase):
             engine = ModelRouterEngine(settings)
             result = engine.complete(ResponseRequest(model="vllm-model", input="hello"))
             model = engine.admin_models_payload()["models"][0]
-            entry = engine.unload_model("vllm-model", settings)
+            entry = engine.unload_model("vllm-model")
 
         self.assertEqual(result.text, "vllm-serve:vllm-model#1")
         self.assertEqual(model["effective_target_inflight"], 3)
@@ -356,6 +357,18 @@ class ModelRouterEngineTests(unittest.TestCase):
 
         self.assertIsInstance(engine, ModelRouterEngine)
         router_init.assert_called_once_with(settings)
+
+    def test_build_engine_uses_model_router_for_empty_stub_catalog(self) -> None:
+        settings = AppSettings(
+            service=ServiceSettings(),
+            engine=EngineSettings(backend="stub", models={}),
+        )
+
+        engine = build_engine(settings)
+
+        self.assertIsInstance(engine, ModelRouterEngine)
+        self.assertEqual(engine.admin_models_payload(), {"models": []})
+        engine.close()
 
     def test_admin_models_payload_reports_loaded_failed_and_unloaded(self) -> None:
         settings = AppSettings(
@@ -810,7 +823,7 @@ class ModelRouterEngineTests(unittest.TestCase):
                 queued_error["code"] = exc.code
 
         def run_unload() -> None:
-            unload_result["entry"] = engine.unload_model("ct2-model", settings)
+            unload_result["entry"] = engine.unload_model("ct2-model")
 
         first_thread = threading.Thread(target=run_first)
         second_thread = threading.Thread(target=run_second)
@@ -858,7 +871,7 @@ class ModelRouterEngineTests(unittest.TestCase):
 
         with mock.patch.object(engine_module, "Ct2Engine", FakeCt2Engine):
             engine = ModelRouterEngine(settings)
-            entry = engine.load_model("disabled-model", settings)
+            entry = engine.load_model("disabled-model")
 
         self.assertEqual(entry["name"], "disabled-model")
         self.assertEqual(entry["runtime_state"], "loaded")
@@ -893,7 +906,7 @@ class ModelRouterEngineTests(unittest.TestCase):
 
         with mock.patch.object(engine_module, "Ct2Engine", FakeCt2Engine):
             engine = ModelRouterEngine(settings)
-            entry = engine.load_model("replica-model", settings)
+            entry = engine.load_model("replica-model")
 
         self.assertEqual(entry["runtime_state"], "loaded")
         self.assertEqual(entry["replicas"], 2)
@@ -928,7 +941,7 @@ class ModelRouterEngineTests(unittest.TestCase):
 
         with mock.patch.object(engine_module, "Ct2Engine", FakeCt2Engine):
             engine = ModelRouterEngine(settings)
-            entry = engine.load_model("replica-model", settings, AdminLoadRequest(replicas=2))
+            entry = engine.load_model("replica-model", AdminLoadRequest(replicas=2))
 
         self.assertEqual(entry["replicas"], 2)
         self.assertEqual(entry["replica_max"], 3)
@@ -1040,7 +1053,6 @@ class ModelRouterEngineTests(unittest.TestCase):
         with mock.patch.object(engine, "_build_backend_engine", side_effect=fake_build_backend):
             entry = engine.load_model(
                 "gguf-model",
-                settings,
                 AdminLoadRequest(
                     gguf_n_ctx=32768,
                     gguf_flash_attn="AUTO",
@@ -1101,7 +1113,6 @@ class ModelRouterEngineTests(unittest.TestCase):
         with mock.patch.object(engine, "_build_backend_engine", side_effect=fake_build_backend):
             entry = engine.load_model(
                 "exl-model",
-                settings,
                 AdminLoadRequest(
                     exllama_cache_size=16384,
                     exllama_cache_k_bits=8,
@@ -1169,7 +1180,6 @@ class ModelRouterEngineTests(unittest.TestCase):
         with mock.patch.object(engine, "_build_backend_engine", side_effect=fake_build_backend):
             entry = engine.load_model(
                 "llama-model",
-                settings,
                 AdminLoadRequest(
                     llama_server_n_ctx=8192,
                     llama_server_image_max_tokens=512,
@@ -1251,7 +1261,6 @@ class ModelRouterEngineTests(unittest.TestCase):
         with mock.patch.object(engine, "_build_backend_engine", side_effect=fake_build_backend):
             entry = engine.load_model(
                 "vllm-model",
-                settings,
                 AdminLoadRequest(
                     vllm_max_model_len=8192,
                     vllm_kv_cache_dtype="fp8",
@@ -1334,7 +1343,7 @@ class ModelRouterEngineTests(unittest.TestCase):
             return backend_instance
 
         with mock.patch.object(engine, "_build_backend_engine", side_effect=fake_build_backend):
-            engine.load_model("disabled-model", settings)
+            engine.load_model("disabled-model")
 
         self.assertEqual(captured["replica_ids"], ["disabled-model#1"])
         self.assertTrue(captured["enabled"])
@@ -1361,7 +1370,7 @@ class ModelRouterEngineTests(unittest.TestCase):
         with mock.patch.object(engine_module, "Ct2Engine", FakeCt2Engine):
             engine = ModelRouterEngine(settings)
             with mock.patch.object(engine, "_build_backend_engine") as build_backend_engine:
-                entry = engine.load_model("enabled-model", settings)
+                entry = engine.load_model("enabled-model")
 
         self.assertEqual(entry["runtime_state"], "loaded")
         build_backend_engine.assert_not_called()
@@ -1389,7 +1398,7 @@ class ModelRouterEngineTests(unittest.TestCase):
             engine = ModelRouterEngine(settings)
 
         with self.assertRaises(ValueError) as exc_info:
-            engine.load_model("gguf-model", settings, AdminLoadRequest(gguf_n_ctx=32768))
+            engine.load_model("gguf-model", AdminLoadRequest(gguf_n_ctx=32768))
 
         self.assertEqual(
             str(exc_info.exception),
@@ -1410,7 +1419,7 @@ class ModelRouterEngineTests(unittest.TestCase):
         engine = ModelRouterEngine(settings)
 
         with self.assertRaises(ValueError) as exc_info:
-            engine.load_model("gguf-model", settings, AdminLoadRequest(exllama_cache_size=16384))
+            engine.load_model("gguf-model", AdminLoadRequest(exllama_cache_size=16384))
 
         self.assertEqual(
             str(exc_info.exception),
@@ -1431,7 +1440,7 @@ class ModelRouterEngineTests(unittest.TestCase):
         engine = ModelRouterEngine(settings)
 
         with self.assertRaises(ValueError) as exc_info:
-            engine.load_model("gguf-model", settings, AdminLoadRequest(gguf_type_k="q8-0"))
+            engine.load_model("gguf-model", AdminLoadRequest(gguf_type_k="q8-0"))
 
         self.assertEqual(
             str(exc_info.exception),
@@ -1452,7 +1461,7 @@ class ModelRouterEngineTests(unittest.TestCase):
         engine = ModelRouterEngine(settings)
 
         with self.assertRaises(ValueError) as exc_info:
-            engine.load_model("gguf-model", settings, AdminLoadRequest(gguf_flash_attn="sometimes"))
+            engine.load_model("gguf-model", AdminLoadRequest(gguf_flash_attn="sometimes"))
 
         self.assertEqual(
             str(exc_info.exception),
@@ -1478,7 +1487,7 @@ class ModelRouterEngineTests(unittest.TestCase):
 
         with mock.patch.dict(sys.modules, {"llama_cpp": fake_llama_cpp}):
             with self.assertRaises(ValueError) as exc_info:
-                engine.load_model("gguf-model", settings, AdminLoadRequest(gguf_type_k="foo"))
+                engine.load_model("gguf-model", AdminLoadRequest(gguf_type_k="foo"))
 
         self.assertEqual(str(exc_info.exception), "unsupported GGUF cache type: 'foo'")
 
@@ -1496,7 +1505,7 @@ class ModelRouterEngineTests(unittest.TestCase):
         engine = ModelRouterEngine(settings)
 
         with self.assertRaises(ValueError) as exc_info:
-            engine.load_model("exl-model", settings, AdminLoadRequest(exllama_cache_k_bits=8))
+            engine.load_model("exl-model", AdminLoadRequest(exllama_cache_k_bits=8))
 
         self.assertEqual(
             str(exc_info.exception),
@@ -1519,7 +1528,6 @@ class ModelRouterEngineTests(unittest.TestCase):
         with self.assertRaises(ValueError) as exc_info:
             engine.load_model(
                 "exl-model",
-                settings,
                 AdminLoadRequest(exllama_cache_quant="8,8", exllama_cache_k_bits=8, exllama_cache_v_bits=4),
             )
 
@@ -1554,7 +1562,7 @@ class ModelRouterEngineTests(unittest.TestCase):
         engine._model_states["other-model"].lifecycle = "unloading"
 
         with self.assertRaises(engine_module.ModelStateError) as exc_info:
-            engine.load_model("other-model", settings)
+            engine.load_model("other-model")
 
         self.assertEqual(exc_info.exception.code, "model_unloading")
 
@@ -1585,7 +1593,7 @@ class ModelRouterEngineTests(unittest.TestCase):
         with mock.patch.object(engine_module, "Ct2Engine", FakeCt2Engine):
             engine = ModelRouterEngine(settings)
             with self.assertRaises(RuntimeError) as exc_info:
-                engine.load_model("broken-model", settings)
+                engine.load_model("broken-model")
 
         self.assertEqual(str(exc_info.exception), "broken-model#1: boom")
         payload = engine.admin_models_payload()
@@ -1617,7 +1625,7 @@ class ModelRouterEngineTests(unittest.TestCase):
         with mock.patch.object(engine_module, "Ct2Engine", FakeCt2Engine):
             engine = ModelRouterEngine(settings)
             with mock.patch.object(engine, "_cleanup_runtime") as cleanup_runtime:
-                entry = engine.unload_model("other-model", settings)
+                entry = engine.unload_model("other-model")
 
         self.assertEqual(entry["name"], "other-model")
         self.assertEqual(entry["runtime_state"], "unloaded")
@@ -1694,7 +1702,7 @@ class ModelRouterEngineTests(unittest.TestCase):
             result_holder["result"] = engine.complete(ResponseRequest(model="other-model", input="hello"))
 
         def run_unload() -> None:
-            unload_holder["entry"] = engine.unload_model("other-model", settings)
+            unload_holder["entry"] = engine.unload_model("other-model")
 
         request_thread = threading.Thread(target=run_complete)
         request_thread.start()
@@ -1723,6 +1731,195 @@ class ModelRouterEngineTests(unittest.TestCase):
         self.assertEqual(result_holder["result"].text, "ct2:other-model#1")
         self.assertEqual(unload_holder["entry"]["runtime_state"], "unloaded")
         self.assertNotIn("other-model#1", engine._models)
+
+    def test_reload_preserves_state_identity_while_unload_waits_for_inflight_request(self) -> None:
+        settings = AppSettings(
+            service=ServiceSettings(),
+            engine=EngineSettings(
+                backend="stub",
+                models={
+                    "loaded-model": ModelSettings(
+                        model_path="/models/loaded",
+                        backend="stub",
+                        enabled=True,
+                    )
+                },
+            ),
+        )
+        engine = ModelRouterEngine(settings)
+        release = threading.Event()
+        entered = threading.Event()
+        request_done = threading.Event()
+        unload_done = threading.Event()
+        thread_errors: list[BaseException] = []
+        backend_engine = engine._model_engines["loaded-model#1"]
+        original_complete = backend_engine.complete
+
+        def blocking_complete(request: ResponseRequest) -> EngineResult:
+            entered.set()
+            release.wait(timeout=5.0)
+            return original_complete(request)
+
+        backend_engine.complete = blocking_complete
+
+        def run_request() -> None:
+            try:
+                engine.complete(ResponseRequest(model="loaded-model", input="hello"))
+            except BaseException as exc:
+                thread_errors.append(exc)
+            finally:
+                request_done.set()
+
+        def run_unload() -> None:
+            try:
+                engine.unload_model("loaded-model")
+            except BaseException as exc:
+                thread_errors.append(exc)
+            finally:
+                unload_done.set()
+
+        request_thread = threading.Thread(target=run_request, daemon=True)
+        unload_thread = threading.Thread(target=run_unload, daemon=True)
+        try:
+            request_thread.start()
+            self.assertTrue(entered.wait(timeout=1.0))
+            old_state = engine._model_states["loaded-model"]
+            self.assertEqual(old_state.inflight_requests, 1)
+
+            unload_thread.start()
+            for _ in range(50):
+                if old_state.lifecycle == "unloading":
+                    break
+                time.sleep(0.01)
+            else:
+                self.fail("model never entered unloading state")
+
+            reloaded_settings = AppSettings(
+                service=settings.service,
+                engine=EngineSettings(
+                    backend="stub",
+                    models={
+                        "loaded-model": settings.engine.models["loaded-model"],
+                        "new-model": ModelSettings(
+                            model_path="/models/new",
+                            backend="stub",
+                            enabled=False,
+                        ),
+                    },
+                ),
+            )
+            payload = engine.reload_settings(reloaded_settings)
+
+            self.assertEqual(payload["added_models"], ["new-model"])
+            self.assertIs(engine._model_states["loaded-model"], old_state)
+        finally:
+            release.set()
+            request_thread.join(timeout=2.0)
+            unload_thread.join(timeout=2.0)
+
+        self.assertTrue(request_done.is_set())
+        self.assertTrue(unload_done.is_set())
+        self.assertEqual(thread_errors, [])
+        self.assertEqual(engine._model_states["loaded-model"].inflight_requests, 0)
+        engine.close()
+
+    def test_reload_settings_preserves_failed_state_for_enabled_only_change(self) -> None:
+        settings = AppSettings(
+            service=ServiceSettings(),
+            engine=EngineSettings(
+                backend="stub",
+                models={
+                    "failed-model": ModelSettings(
+                        model_path="/models/failed",
+                        backend="stub",
+                        enabled=False,
+                    )
+                },
+            ),
+        )
+        engine = ModelRouterEngine(settings)
+        state = engine._model_states["failed-model"]
+        state.lifecycle = "failed"
+        state.last_error = "cuda oom during previous load"
+        state.observed_vram_mib = 4096
+        reloaded_settings = AppSettings(
+            service=settings.service,
+            engine=EngineSettings(
+                backend="stub",
+                models={
+                    "failed-model": ModelSettings(
+                        model_path="/models/failed",
+                        backend="stub",
+                        enabled=True,
+                    )
+                },
+            ),
+        )
+
+        payload = engine.reload_settings(reloaded_settings)
+
+        reloaded_state = engine._model_states["failed-model"]
+        self.assertEqual(payload["updated_models"], ["failed-model"])
+        self.assertEqual(reloaded_state.lifecycle, "failed")
+        self.assertEqual(reloaded_state.last_error, "cuda oom during previous load")
+        self.assertEqual(reloaded_state.observed_vram_mib, 4096)
+        self.assertTrue(reloaded_state.configured_enabled)
+        engine.close()
+
+    def test_reload_settings_replaces_scheduler_when_idle_fairness_changes(self) -> None:
+        settings = AppSettings(
+            service=ServiceSettings(),
+            engine=EngineSettings(
+                backend="stub",
+                models={},
+                fairness=FairnessSettings(default_weight=1.0),
+            ),
+        )
+        engine = ModelRouterEngine(settings)
+        old_scheduler = engine._scheduler
+        reloaded_settings = AppSettings(
+            service=settings.service,
+            engine=EngineSettings(
+                backend="stub",
+                models={},
+                fairness=FairnessSettings(default_weight=2.0),
+            ),
+        )
+
+        with mock.patch.object(old_scheduler, "close", wraps=old_scheduler.close) as close:
+            engine.reload_settings(reloaded_settings)
+
+        self.assertIsNot(engine._scheduler, old_scheduler)
+        self.assertEqual(engine._scheduler._fairness_settings.default_weight, 2.0)
+        close.assert_called_once_with()
+        engine.close()
+
+    def test_reload_settings_rejects_removing_loaded_model(self) -> None:
+        settings = AppSettings(
+            service=ServiceSettings(),
+            engine=EngineSettings(
+                backend="stub",
+                models={
+                    "loaded-model": ModelSettings(
+                        model_path="/models/loaded",
+                        backend="stub",
+                        enabled=True,
+                    )
+                },
+            ),
+        )
+        engine = ModelRouterEngine(settings)
+        reloaded_settings = AppSettings(
+            service=settings.service,
+            engine=EngineSettings(backend="stub", models={}),
+        )
+
+        with self.assertRaises(engine_module.SettingsReloadConflictError) as exc_info:
+            engine.reload_settings(reloaded_settings)
+
+        self.assertEqual(exc_info.exception.conflicts, ["engine.models.loaded-model"])
+        self.assertEqual(engine.list_models_payload(), {"models": ["loaded-model"]})
+        engine.close()
 
     def test_admin_gpu_memory_payload_reports_gpu_and_model_estimates(self) -> None:
         settings = AppSettings(

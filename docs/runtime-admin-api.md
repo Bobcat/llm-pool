@@ -31,6 +31,7 @@ Managed backend behavior:
 - [Endpoints](#endpoints)
   - [`GET /v1/admin/models`](#get-v1adminmodels)
   - [`GET /v1/admin/gpu-memory`](#get-v1admingpu-memory)
+  - [`POST /v1/admin/settings/reload`](#post-v1adminsettingsreload)
   - [`POST /v1/admin/models/{model_name}/load`](#post-v1adminmodelsmodel_nameload)
   - [`POST /v1/admin/models/{model_name}/unload`](#post-v1adminmodelsmodel_nameunload)
 - [Unload And In-Flight Requests](#unload-and-in-flight-requests)
@@ -56,7 +57,7 @@ That distinction must stay explicit in both the API and the UI.
 
 A configured model definition comes from the merged `settings.json + local.json` payload.
 
-This is static process input. It includes fields such as:
+The process reads this definition at startup and when the settings reload endpoint is called. It includes fields such as:
 
 - `model_path`
 - `backend`
@@ -65,7 +66,7 @@ This is static process input. It includes fields such as:
 - backend-specific settings
 - `enabled`
 
-This definition is not modified by the admin API.
+The admin API does not write this definition. The reload endpoint only rereads the files.
 
 ### Runtime State
 
@@ -661,6 +662,35 @@ Notes:
 - `vram_estimate_mib` for unloaded models is still an estimate, not a reservation
 - `vram_estimate_replica_count` tells the caller how many replicas that estimate corresponds to
 - if `nvidia-smi` is unavailable, `gpus` can be empty and `error` will explain why
+
+### `POST /v1/admin/settings/reload`
+
+Rereads the configured `settings.json` and its matching `local.json`. The merge rules are the same as at startup.
+
+The operation updates the in-process model catalog. It does not load or unload a model. A newly added model therefore starts in `unloaded`, even when its file definition has `enabled: true`.
+
+The reload is rejected with `409 settings_reload_conflict` when it would invalidate an active runtime. Conflicts include:
+
+- changing or removing a model that is `loading`, `loaded`, or `unloading`
+- changing `engine.decoding` or `engine.fairness` while a model is active
+
+Changing only `enabled` is safe because that field controls startup loading. The model still appears in `updated_models`. That list reports file-definition changes, not required runtime reloads. To change another field on a loaded model, unload it first and call the reload endpoint again.
+
+Service changes do not block a catalog reload. The response sets `service_restart_required` to `true` until the process restarts with those service settings. This applies to fields such as the bind address, port, and log level.
+
+Invalid JSON or invalid setting values return `400 invalid_settings`. A rejected reload leaves the current catalog unchanged.
+
+Example response:
+
+```json
+{
+  "added_models": ["new-model"],
+  "removed_models": ["retired-model"],
+  "updated_models": ["changed-model"],
+  "unchanged_models": ["loaded-model"],
+  "service_restart_required": false
+}
+```
 
 ### `POST /v1/admin/models/{model_name}/load`
 

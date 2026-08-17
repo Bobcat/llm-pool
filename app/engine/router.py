@@ -32,6 +32,8 @@ from .common import _resolve_gguf_cache_type_constant
 from .common import ModelRuntimeState
 from .common import ModelStateError
 from .common import RequestAdmissionError
+from .common import SettingsReloadConflictError
+from .common import SettingsReloadValidationError
 from .common import UnknownModelError
 from .scheduler import ExecutorSnapshot
 from .scheduler import ReplicaRegistration
@@ -40,6 +42,8 @@ from .scheduler import RuntimeScheduler
 
 class ModelRouterEngine:
     def __init__(self, settings: AppSettings) -> None:
+        self._settings = settings
+        self._runtime_service_settings = settings.service
         self._configured_models = dict(settings.engine.models)
         self._models: dict[str, object] = {}
         self._model_engines: dict[str, object] = {}
@@ -48,9 +52,6 @@ class ModelRouterEngine:
         self._scheduler = RuntimeScheduler(settings.engine.fairness)
         self._state_lock = threading.RLock()
         self._state_changed = threading.Condition(self._state_lock)
-        if not self._configured_models:
-            raise ValueError("no configured models")
-
         for model_name, model_settings in settings.engine.models.items():
             backend = self._resolve_model_backend(settings.engine.backend, model_settings)
             self._model_states[model_name] = ModelRuntimeState(
@@ -62,7 +63,7 @@ class ModelRouterEngine:
             if not model_settings.enabled:
                 continue
             try:
-                self.load_model(model_name, settings)
+                self.load_model(model_name)
             except Exception:
                 LOGGER.exception("Failed to initialize model '%s'.", model_name)
 
@@ -149,16 +150,14 @@ class ModelRouterEngine:
                     state.inflight_requests -= 1
                     self._state_changed.notify_all()
 
-    def admin_models_payload(self, settings: AppSettings | None = None) -> dict[str, object]:
-        del settings
+    def admin_models_payload(self) -> dict[str, object]:
         with self._state_lock:
             models: list[dict[str, object]] = []
             for model_name, model_settings in self._configured_models.items():
                 models.append(self._admin_model_entry_locked(model_name, model_settings))
             return {"models": models}
 
-    def admin_gpu_memory_payload(self, settings: AppSettings | None = None) -> dict[str, object]:
-        del settings
+    def admin_gpu_memory_payload(self) -> dict[str, object]:
         gpus, error = _query_gpu_memory()
         with self._state_lock:
             models: list[dict[str, object]] = []
@@ -169,15 +168,13 @@ class ModelRouterEngine:
     def load_model(
         self,
         model_name: str,
-        settings: AppSettings | None = None,
         load_request: AdminLoadRequest | None = None,
     ) -> dict[str, object]:
-        if settings is None:
-            raise RuntimeError("settings are required to load a model")
         load_override = self._load_override_payload(load_request)
         requested_replica_count = self._replica_count_from_load_request(load_request)
 
         with self._state_lock:
+            runtime_settings = self._settings
             model_settings = self._configured_models.get(model_name)
             if model_settings is None:
                 raise UnknownModelError(model_name)
@@ -203,9 +200,9 @@ class ModelRouterEngine:
         gpu_used_before_mib = _query_primary_gpu_used_mib()
         replica_ids = self._replica_ids_for_model(model_name, replica_count)
         scoped_settings = replace(
-            settings,
+            runtime_settings,
             engine=replace(
-                settings.engine,
+                runtime_settings.engine,
                 backend=resolved_backend,
                 models={replica_id: scoped_model_settings for replica_id in replica_ids},
             ),
@@ -282,8 +279,118 @@ class ModelRouterEngine:
                 state.observed_vram_replicas = replica_count
             return self._admin_model_entry_locked(model_name, model_settings)
 
-    def unload_model(self, model_name: str, settings: AppSettings | None = None) -> dict[str, object]:
-        del settings
+    def reload_settings(self, settings: AppSettings) -> dict[str, object]:
+        with self._state_lock:
+            old_settings = self._settings
+            old_models = self._configured_models
+            new_models = settings.engine.models
+            try:
+                new_backends = {
+                    model_name: self._resolve_model_backend(settings.engine.backend, model_settings)
+                    for model_name, model_settings in new_models.items()
+                }
+            except ValueError as exc:
+                raise SettingsReloadValidationError(str(exc)) from exc
+
+            active_models = {
+                model_name
+                for model_name, state in self._model_states.items()
+                if state.lifecycle not in {"unloaded", "failed"}
+            }
+            conflicts: list[str] = []
+
+            if active_models and settings.engine.decoding != old_settings.engine.decoding:
+                conflicts.append("engine.decoding")
+            if active_models and settings.engine.fairness != old_settings.engine.fairness:
+                conflicts.append("engine.fairness")
+
+            for model_name in sorted(active_models):
+                old_model = old_models[model_name]
+                new_model = new_models.get(model_name)
+                if new_model is None:
+                    conflicts.append(f"engine.models.{model_name}")
+                    continue
+                if self._runtime_definition_changed(
+                    old_model,
+                    new_model,
+                    old_backend=self._model_states[model_name].resolved_backend,
+                    new_backend=new_backends[model_name],
+                ):
+                    conflicts.append(f"engine.models.{model_name}")
+
+            if conflicts:
+                raise SettingsReloadConflictError(conflicts)
+
+            old_names = set(old_models)
+            new_names = set(new_models)
+            added_models = sorted(new_names - old_names)
+            removed_models = sorted(old_names - new_names)
+            updated_models = sorted(
+                model_name
+                for model_name in old_names & new_names
+                if old_models[model_name] != new_models[model_name]
+                or self._model_states[model_name].resolved_backend != new_backends[model_name]
+            )
+            unchanged_models = sorted((old_names & new_names) - set(updated_models))
+
+            new_model_states: dict[str, ModelRuntimeState] = {}
+            configured_enabled_updates: list[tuple[ModelRuntimeState, bool]] = []
+            for model_name, model_settings in new_models.items():
+                old_model = old_models.get(model_name)
+                if old_model is None:
+                    new_model_states[model_name] = ModelRuntimeState(
+                        resolved_backend=new_backends[model_name],
+                        configured_enabled=model_settings.enabled,
+                    )
+                    continue
+
+                old_state = self._model_states[model_name]
+                if self._runtime_definition_changed(
+                    old_model,
+                    model_settings,
+                    old_backend=old_state.resolved_backend,
+                    new_backend=new_backends[model_name],
+                ):
+                    new_model_states[model_name] = ModelRuntimeState(
+                        resolved_backend=new_backends[model_name],
+                        configured_enabled=model_settings.enabled,
+                    )
+                else:
+                    new_model_states[model_name] = old_state
+                    configured_enabled_updates.append((old_state, model_settings.enabled))
+
+            new_scheduler = self._scheduler
+            if settings.engine.fairness != old_settings.engine.fairness:
+                new_scheduler = RuntimeScheduler(settings.engine.fairness)
+                self._scheduler.close()
+
+            for state, configured_enabled in configured_enabled_updates:
+                state.configured_enabled = configured_enabled
+            self._configured_models = dict(new_models)
+            self._model_states = new_model_states
+            self._scheduler = new_scheduler
+            self._settings = settings
+
+            payload: dict[str, object] = {
+                "added_models": added_models,
+                "removed_models": removed_models,
+                "updated_models": updated_models,
+                "unchanged_models": unchanged_models,
+                "service_restart_required": settings.service != self._runtime_service_settings,
+            }
+            return payload
+
+    @staticmethod
+    def _runtime_definition_changed(
+        old_model: ModelSettings,
+        new_model: ModelSettings,
+        *,
+        old_backend: str,
+        new_backend: str,
+    ) -> bool:
+        return replace(old_model, enabled=new_model.enabled) != new_model or old_backend != new_backend
+
+    def unload_model(self, model_name: str) -> dict[str, object]:
         executor = None
         with self._state_lock:
             model_settings = self._configured_models.get(model_name)

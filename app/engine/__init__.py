@@ -11,6 +11,8 @@ from .common import _query_gpu_memory
 from .common import _query_primary_gpu_used_mib
 from .common import ModelRuntimeState
 from .common import RequestAdmissionError
+from .common import SettingsReloadConflictError
+from .common import SettingsReloadValidationError
 from .common import ModelStateError
 from .common import ResolvedDecoding
 from .common import UnknownModelError
@@ -33,6 +35,4 @@ from .vllm_serve import VllmServeModelRuntime
 
 
 def build_engine(settings):
-    if settings.engine.backend == "stub" and not settings.engine.models:
-        return StubEngine(settings)
     return ModelRouterEngine(settings)

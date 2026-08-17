@@ -663,6 +663,16 @@ class ModelRuntimeState:
     load_override: dict[str, object | None] = field(default_factory=dict)
 
 
+class SettingsReloadConflictError(RuntimeError):
+    def __init__(self, conflicts: list[str]) -> None:
+        self.conflicts = conflicts
+        super().__init__("settings changes require active models to be unloaded")
+
+
+class SettingsReloadValidationError(ValueError):
+    pass
+
+
 @dataclass(frozen=True)
 class ResolvedDecoding:
     beam_size: int
