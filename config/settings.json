@@ -26,31 +26,12 @@
       "idle_state_ttl_s": 300
     },
     "models": {
-      "eurollm-9b-ct2-int8": {
-        "model_path": "/home/gunnar/models/EuroLLM-9B-Instruct-ct2-int8",
-        "device": "cuda",
-        "compute_type": "default",
-        "prompt_format": "generic",
-        "enabled": false
-      },
       "google_gemma-4-E2B-it-Q8_0-gguf": {
         "model_path": "/home/gunnar/models/google_gemma-4-E2B-it-Q8_0/google_gemma-4-E2B-it-Q8_0.gguf",
         "backend": "llama_cpp",
         "device": "cuda",
         "prompt_format": "gemma4_template",
         "enable_thinking": false,
-        "gguf_n_ctx": 16384,
-        "gguf_flash_attn": "auto",
-        "enabled": false
-      },
-      "google_gemma-4-E2B-it-Q5_K_M-gguf": {
-        "model_path": "/home/gunnar/models/google_gemma-4-E2B-it-Q5_K_M/google_gemma-4-E2B-it-Q5_K_M.gguf",
-        "backend": "llama_cpp",
-        "device": "cuda",
-        "prompt_format": "gemma4_template",
-        "enable_thinking": false,
-        "replicas": 3,
-        "replica_max": 4,
         "gguf_n_ctx": 16384,
         "gguf_flash_attn": "auto",
         "enabled": false
@@ -82,98 +63,6 @@
         "prompt_format": "gemma4_template",
         "enable_thinking": false,
         "gguf_flash_attn": "auto",
-        "enabled": false
-      },
-      "gemma-4-e2b-it-vllm": {
-        "backend": "vllm",
-        "model_path": null,
-        "prompt_format": "gemma4_template",
-        "enable_thinking": false,
-        "modalities": [
-          "text",
-          "image"
-        ],
-        "vllm_model": "/home/gunnar/models/google/gemma-4-E2B-it",
-        "vllm_dtype": "bfloat16",
-        "vllm_gpu_memory_utilization": 0.01,
-        "vllm_kv_cache_memory_bytes": 268435456,
-        "vllm_max_model_len": 8192,
-        "vllm_trust_remote_code": true,
-        "vllm_limit_mm_per_prompt": {
-          "image": 1
-        },
-        "vllm_mm_processor_kwargs": {
-          "max_soft_tokens": 560
-        },
-        "enabled": false
-      },
-      "gemma-4-e2b-it-qat-w4a16-ct-vllm": {
-        "backend": "vllm",
-        "model_path": null,
-        "prompt_format": "gemma4_template",
-        "enable_thinking": false,
-        "modalities": [
-          "text",
-          "image"
-        ],
-        "vllm_model": "/home/gunnar/models/google/gemma-4-E2B-it-qat-w4a16-ct",
-        "vllm_dtype": "auto",
-        "vllm_gpu_memory_utilization": 0.01,
-        "vllm_kv_cache_memory_bytes": 268435456,
-        "vllm_max_model_len": 8192,
-        "vllm_trust_remote_code": true,
-        "vllm_limit_mm_per_prompt": {
-          "image": 1
-        },
-        "vllm_mm_processor_kwargs": {
-          "max_soft_tokens": 560
-        },
-        "enabled": false
-      },
-      "gemma-4-e4b-it-vllm": {
-        "backend": "vllm",
-        "model_path": null,
-        "prompt_format": "gemma4_template",
-        "enable_thinking": false,
-        "modalities": [
-          "text",
-          "image"
-        ],
-        "vllm_model": "/home/gunnar/models/google/gemma-4-E4B-it",
-        "vllm_dtype": "bfloat16",
-        "vllm_gpu_memory_utilization": 0.01,
-        "vllm_kv_cache_memory_bytes": 536870912,
-        "vllm_max_model_len": 8192,
-        "vllm_trust_remote_code": true,
-        "vllm_limit_mm_per_prompt": {
-          "image": 1
-        },
-        "vllm_mm_processor_kwargs": {
-          "max_soft_tokens": 560
-        },
-        "enabled": false
-      },
-      "gemma-4-e4b-it-qat-w4a16-ct-vllm": {
-        "backend": "vllm",
-        "model_path": null,
-        "prompt_format": "gemma4_template",
-        "enable_thinking": false,
-        "modalities": [
-          "text",
-          "image"
-        ],
-        "vllm_model": "/home/gunnar/models/google/gemma-4-E4B-it-qat-w4a16-ct",
-        "vllm_dtype": "auto",
-        "vllm_gpu_memory_utilization": 0.01,
-        "vllm_kv_cache_memory_bytes": 536870912,
-        "vllm_max_model_len": 8192,
-        "vllm_trust_remote_code": true,
-        "vllm_limit_mm_per_prompt": {
-          "image": 1
-        },
-        "vllm_mm_processor_kwargs": {
-          "max_soft_tokens": 560
-        },
         "enabled": false
       },
       "gemma-4-e4b-it-unsloth-nvfp4-vllm-serve": {
@@ -229,52 +118,6 @@
           "--default-chat-template-kwargs",
           "{\"enable_thinking\": false}"
         ],
-        "enabled": false
-      },
-      "gemma-4-12b-it-vllm": {
-        "backend": "vllm",
-        "model_path": null,
-        "prompt_format": "gemma4_template",
-        "enable_thinking": false,
-        "modalities": [
-          "text",
-          "image"
-        ],
-        "vllm_model": "/home/gunnar/models/google/gemma-4-12B-it",
-        "vllm_dtype": "bfloat16",
-        "vllm_gpu_memory_utilization": 0.01,
-        "vllm_kv_cache_memory_bytes": 2147483648,
-        "vllm_max_model_len": 8192,
-        "vllm_trust_remote_code": true,
-        "vllm_limit_mm_per_prompt": {
-          "image": 1
-        },
-        "vllm_mm_processor_kwargs": {
-          "max_soft_tokens": 560
-        },
-        "enabled": false
-      },
-      "gemma-4-12b-it-qat-w4a16-ct-vllm": {
-        "backend": "vllm",
-        "model_path": null,
-        "prompt_format": "gemma4_template",
-        "enable_thinking": false,
-        "modalities": [
-          "text",
-          "image"
-        ],
-        "vllm_model": "/home/gunnar/models/google/gemma-4-12B-it-qat-w4a16-ct",
-        "vllm_dtype": "auto",
-        "vllm_gpu_memory_utilization": 0.01,
-        "vllm_kv_cache_memory_bytes": 2147483648,
-        "vllm_max_model_len": 8192,
-        "vllm_trust_remote_code": true,
-        "vllm_limit_mm_per_prompt": {
-          "image": 1
-        },
-        "vllm_mm_processor_kwargs": {
-          "max_soft_tokens": 560
-        },
         "enabled": false
       },
       "gemma-4-26b-a4b-it-nvfp4-vllm": {
@@ -367,7 +210,7 @@
         "model_path": null,
         "prompt_format": "gemma4_template",
         "enable_thinking": false,
-        "target_inflight": 4,
+        "target_inflight": 16,
         "modalities": [
           "text",
           "image"
@@ -375,7 +218,7 @@
         "vllm_model": "/home/gunnar/models/nvidia/Gemma-4-26B-A4B-NVFP4",
         "vllm_dtype": "auto",
         "vllm_gpu_memory_utilization": 0.01,
-        "vllm_kv_cache_memory_bytes": 2147483648,
+        "vllm_kv_cache_memory_bytes": 8589934592,
         "vllm_max_model_len": 20480,
         "vllm_trust_remote_code": true,
         "vllm_limit_mm_per_prompt": {
@@ -397,7 +240,7 @@
         },
         "vllm_serve_extra_args": [
           "--max-num-seqs",
-          "4"
+          "16"
         ],
         "enabled": false
       },
@@ -511,26 +354,8 @@
         "gguf_flash_attn": "auto",
         "enabled": false
       },
-      "translategemma-4b-it-q5-k-m-gguf": {
-        "model_path": "/home/gunnar/models/google/translategemma-4b-it-GGUF/translategemma-4b-it.Q5_K_M.gguf",
-        "backend": "llama_cpp",
-        "device": "cuda",
-        "prompt_format": "translategemma_template",
-        "gguf_n_ctx": 2048,
-        "gguf_flash_attn": "auto",
-        "enabled": false
-      },
       "translategemma-4b-it-q6-k-gguf": {
         "model_path": "/home/gunnar/models/translategemma-4b-it-GGUF/translategemma-4b-it.Q6_K.gguf",
-        "backend": "llama_cpp",
-        "device": "cuda",
-        "prompt_format": "translategemma_template",
-        "gguf_n_ctx": 2048,
-        "gguf_flash_attn": "auto",
-        "enabled": false
-      },
-      "translategemma-4b-it-q8-0-gguf": {
-        "model_path": "/home/gunnar/models/google/translategemma-4b-it-GGUF/translategemma-4b-it.Q8_0.gguf",
         "backend": "llama_cpp",
         "device": "cuda",
         "prompt_format": "translategemma_template",
@@ -556,38 +381,8 @@
         "gguf_flash_attn": "auto",
         "enabled": false
       },
-      "ministral-3-3b-instruct-2512-gguf": {
-        "model_path": "/home/gunnar/models/Ministral-3-3B-Instruct-2512-Q8_0/Ministral-3-3B-Instruct-2512-Q8_0.gguf",
-        "backend": "llama_cpp",
-        "device": "cuda",
-        "prompt_format": "mistral_template",
-        "enable_thinking": false,
-        "gguf_flash_attn": "auto",
-        "enabled": false
-      },
-      "eurollm-22b-instruct-2512-ct2-int8f16": {
-        "model_path": "/home/gunnar/models/EuroLLM-22B-Instruct-2512-ct2-int8f16",
-        "device": "cuda",
-        "compute_type": "default",
-        "prompt_format": "generic",
-        "enabled": false
-      },
-      "mistral-7b-instruct-v0.3-ct2-int8": {
-        "model_path": "/home/gunnar/models/Mistral-7B-Instruct-v0.3-ct2-int8",
-        "device": "cuda",
-        "compute_type": "default",
-        "prompt_format": "mistral_template",
-        "enabled": false
-      },
       "phi-4-ct2-int8": {
         "model_path": "/home/gunnar/models/Phi-4-ct2-int8",
-        "device": "cuda",
-        "compute_type": "default",
-        "prompt_format": "generic",
-        "enabled": false
-      },
-      "qwen2.5-14b-instruct-ct2-int8": {
-        "model_path": "/home/gunnar/models/Qwen2.5-14B-Instruct-ct2-int8",
         "device": "cuda",
         "compute_type": "default",
         "prompt_format": "generic",
@@ -611,48 +406,6 @@
           "text",
           "image"
         ],
-        "enabled": false
-      },
-      "qwen2.5-vl-3b": {
-        "backend": "vllm",
-        "model_path": null,
-        "prompt_format": "generic",
-        "modalities": [
-          "text",
-          "image"
-        ],
-        "vllm_model": "/home/gunnar/models/Qwen2.5-VL-3B-Instruct",
-        "vllm_dtype": "bfloat16",
-        "vllm_gpu_memory_utilization": 0.01,
-        "vllm_kv_cache_memory_bytes": 1073741824,
-        "vllm_max_model_len": 12288,
-        "vllm_limit_mm_per_prompt": {
-          "image": 1
-        },
-        "vllm_mm_processor_kwargs": {
-          "max_pixels": 4014080
-        },
-        "enabled": false
-      },
-      "qwen2.5-vl-3b-awq": {
-        "backend": "vllm",
-        "model_path": null,
-        "prompt_format": "generic",
-        "modalities": [
-          "text",
-          "image"
-        ],
-        "vllm_model": "/home/gunnar/models/Qwen2.5-VL-3B-Instruct-AWQ",
-        "vllm_dtype": "auto",
-        "vllm_gpu_memory_utilization": 0.01,
-        "vllm_kv_cache_memory_bytes": 1073741824,
-        "vllm_max_model_len": 12288,
-        "vllm_limit_mm_per_prompt": {
-          "image": 1
-        },
-        "vllm_mm_processor_kwargs": {
-          "max_pixels": 4014080
-        },
         "enabled": false
       }
     }
