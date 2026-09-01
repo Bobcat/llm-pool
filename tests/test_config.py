@@ -509,6 +509,75 @@ class ConfigTests(unittest.TestCase):
         self.assertEqual(model.vllm_serve_api_key, "local-secret")
         self.assertEqual(model.vllm_serve_extra_args, ("--tool-call-parser", "gemma4"))
 
+    def test_load_settings_reads_trtllm_serve_model_without_model_path(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = Path(tmpdir) / "settings.json"
+            path.write_text(
+                (
+                    "{\n"
+                    '  "engine": {\n'
+                    '    "backend": "stub",\n'
+                    '    "models": {\n'
+                    '      "gemma4-trtllm": {\n'
+                    '        "backend": "trtllm_serve",\n'
+                    '        "trtllm_model": "/models/nvidia/Gemma-4-26B-A4B-NVFP4",\n'
+                    '        "trtllm_trust_remote_code": true,\n'
+                    '        "trtllm_serve_binary": "/opt/trtllm/bin/trtllm-serve",\n'
+                    '        "trtllm_serve_host": "127.0.0.1",\n'
+                    '        "trtllm_serve_port": 18091,\n'
+                    '        "trtllm_serve_model_alias": "gemma-local",\n'
+                    '        "trtllm_serve_timeout_s": 33.5,\n'
+                    '        "trtllm_serve_start_timeout_s": 644.5,\n'
+                    '        "trtllm_serve_stop_timeout_s": 33.5,\n'
+                    '        "trtllm_serve_library_path": ["/opt/openmpi/lib", "/cuda/lib"],\n'
+                    '        "trtllm_serve_env": {"CUDA_HOME": "/cuda"},\n'
+                    '        "trtllm_serve_config_path": "/models/gemma4-trtllm.yaml",\n'
+                    '        "trtllm_serve_reasoning_parser": "gemma4",\n'
+                    '        "trtllm_serve_tool_parser": "gemma4",\n'
+                    '        "trtllm_serve_extra_args": ["--max_batch_size", "4"]\n'
+                    "      }\n"
+                    "    }\n"
+                    "  }\n"
+                    "}\n"
+                ),
+                encoding="utf-8",
+            )
+
+            settings = load_settings(path)
+
+        model = settings.engine.models["gemma4-trtllm"]
+        self.assertIsNone(model.model_path)
+        self.assertEqual(model.backend, "trtllm_serve")
+        self.assertEqual(
+            model.trtllm_model,
+            "/models/nvidia/Gemma-4-26B-A4B-NVFP4",
+        )
+        self.assertTrue(model.trtllm_trust_remote_code)
+        self.assertEqual(
+            model.trtllm_serve_binary,
+            "/opt/trtllm/bin/trtllm-serve",
+        )
+        self.assertEqual(model.trtllm_serve_port, 18091)
+        self.assertEqual(model.trtllm_serve_model_alias, "gemma-local")
+        self.assertEqual(model.trtllm_serve_timeout_s, 33.5)
+        self.assertEqual(model.trtllm_serve_start_timeout_s, 644.5)
+        self.assertEqual(model.trtllm_serve_stop_timeout_s, 33.5)
+        self.assertEqual(
+            model.trtllm_serve_library_path,
+            ("/opt/openmpi/lib", "/cuda/lib"),
+        )
+        self.assertEqual(model.trtllm_serve_env, (("CUDA_HOME", "/cuda"),))
+        self.assertEqual(
+            model.trtllm_serve_config_path,
+            "/models/gemma4-trtllm.yaml",
+        )
+        self.assertEqual(model.trtllm_serve_reasoning_parser, "gemma4")
+        self.assertEqual(model.trtllm_serve_tool_parser, "gemma4")
+        self.assertEqual(
+            model.trtllm_serve_extra_args,
+            ("--max_batch_size", "4"),
+        )
+
     def test_load_settings_defaults_target_inflight_to_one(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             path = Path(tmpdir) / "settings.json"
