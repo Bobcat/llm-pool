@@ -187,6 +187,7 @@ class TrtllmServeEngineTests(unittest.TestCase):
             )
         )
         self.assertEqual(popen_kwargs["env"]["CUDA_HOME"], "/cuda")
+        self.assertEqual(popen_kwargs["env"]["PYTHONUNBUFFERED"], "1")
         self.assertEqual(captured["health_timeout"], 1.0)
         self.assertEqual(
             captured["chat_url"],
@@ -227,6 +228,16 @@ class TrtllmServeEngineTests(unittest.TestCase):
         self.assertEqual(result.metrics.engine_output_tokens, 3)
         killpg.assert_called_once_with(4242, signal.SIGTERM)
 
+    def test_subprocess_env_unbuffers_output_without_other_overrides(self) -> None:
+        settings = ModelSettings(
+            model_path=None,
+            backend="trtllm_serve",
+        )
+
+        env = trtllm_serve_module.TrtllmServeEngine._subprocess_env(settings)
+
+        self.assertEqual(env["PYTHONUNBUFFERED"], "1")
+
     def test_close_kills_process_group_after_timeout(self) -> None:
         process = FakeProcess()
         process.wait = mock.Mock(
@@ -258,7 +269,7 @@ class TrtllmServeEngineTests(unittest.TestCase):
         )
         self.assertTrue(runtime.output_log.closed)
 
-    def test_close_signals_process_group_after_leader_exit(self) -> None:
+    def test_close_escalates_process_group_after_leader_exit(self) -> None:
         process = FakeProcess()
         process.return_code = 1
         process.wait = mock.Mock()
@@ -273,11 +284,27 @@ class TrtllmServeEngineTests(unittest.TestCase):
             output_log=tempfile.TemporaryFile(),
         )
 
-        with mock.patch.object(trtllm_serve_module.os, "killpg") as killpg:
+        with (
+            mock.patch.object(trtllm_serve_module.os, "killpg") as killpg,
+            mock.patch.object(
+                trtllm_serve_module.time,
+                "monotonic",
+                side_effect=[10.0, 10.0, 12.0],
+            ),
+            mock.patch.object(trtllm_serve_module.time, "sleep") as sleep,
+        ):
             runtime.close()
             runtime.close()
 
-        killpg.assert_called_once_with(4242, signal.SIGTERM)
+        self.assertEqual(
+            killpg.call_args_list,
+            [
+                mock.call(4242, signal.SIGTERM),
+                mock.call(4242, 0),
+                mock.call(4242, signal.SIGKILL),
+            ],
+        )
+        sleep.assert_called_once_with(0.1)
         process.wait.assert_not_called()
         self.assertTrue(runtime.output_log.closed)
 

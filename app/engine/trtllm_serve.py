@@ -57,6 +57,17 @@ class TrtllmServeModelRuntime:
             except ProcessLookupError:
                 pass
             if not leader_running:
+                deadline = time.monotonic() + self.stop_timeout_s
+                while time.monotonic() < deadline:
+                    try:
+                        os.killpg(self.process.pid, 0)
+                    except ProcessLookupError:
+                        return
+                    time.sleep(0.1)
+                try:
+                    os.killpg(self.process.pid, signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
                 return
             try:
                 self.process.wait(timeout=self.stop_timeout_s)
@@ -254,17 +265,12 @@ class TrtllmServeEngine:
         return process, output_log
 
     @staticmethod
-    def _subprocess_env(settings: ModelSettings) -> dict[str, str] | None:
+    def _subprocess_env(settings: ModelSettings) -> dict[str, str]:
         binary_dir = os.path.dirname(settings.trtllm_serve_binary)
-        if (
-            not binary_dir
-            and not settings.trtllm_serve_library_path
-            and not settings.trtllm_serve_env
-        ):
-            return None
         env = os.environ.copy()
         for key, value in settings.trtllm_serve_env:
             env[key] = value
+        env["PYTHONUNBUFFERED"] = "1"
         path_items = [binary_dir]
         cuda_home = env.get("CUDA_HOME")
         if cuda_home:
