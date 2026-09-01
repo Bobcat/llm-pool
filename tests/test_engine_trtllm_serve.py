@@ -4,6 +4,7 @@ import importlib.util
 import json
 import signal
 import subprocess
+import tempfile
 import unittest
 from unittest import mock
 
@@ -176,6 +177,8 @@ class TrtllmServeEngineTests(unittest.TestCase):
         self.assertEqual(command[command.index("--max_batch_size") + 1], "4")
         popen_kwargs = captured["popen_kwargs"]
         self.assertTrue(popen_kwargs["start_new_session"])
+        self.assertEqual(popen_kwargs["stderr"], subprocess.STDOUT)
+        self.assertTrue(popen_kwargs["stdout"].closed)
         self.assertTrue(popen_kwargs["env"]["PATH"].startswith("/opt/trtllm/bin"))
         self.assertIn("/cuda/bin", popen_kwargs["env"]["PATH"].split(":"))
         self.assertTrue(
@@ -240,6 +243,7 @@ class TrtllmServeEngineTests(unittest.TestCase):
             remote_model="gemma-local",
             timeout_s=12.5,
             stop_timeout_s=2.0,
+            output_log=tempfile.TemporaryFile(),
         )
 
         with mock.patch.object(trtllm_serve_module.os, "killpg") as killpg:
@@ -251,6 +255,113 @@ class TrtllmServeEngineTests(unittest.TestCase):
                 mock.call(4242, signal.SIGTERM),
                 mock.call(4242, signal.SIGKILL),
             ],
+        )
+        self.assertTrue(runtime.output_log.closed)
+
+    def test_close_signals_process_group_after_leader_exit(self) -> None:
+        process = FakeProcess()
+        process.return_code = 1
+        process.wait = mock.Mock()
+        runtime = trtllm_serve_module.TrtllmServeModelRuntime(
+            config=mock.Mock(),
+            process=process,
+            base_url="http://127.0.0.1:18091/v1",
+            health_url="http://127.0.0.1:18091/health",
+            remote_model="gemma-local",
+            timeout_s=12.5,
+            stop_timeout_s=2.0,
+            output_log=tempfile.TemporaryFile(),
+        )
+
+        with mock.patch.object(trtllm_serve_module.os, "killpg") as killpg:
+            runtime.close()
+            runtime.close()
+
+        killpg.assert_called_once_with(4242, signal.SIGTERM)
+        process.wait.assert_not_called()
+        self.assertTrue(runtime.output_log.closed)
+
+    def test_close_does_not_raise_when_process_survives_sigkill(self) -> None:
+        process = FakeProcess()
+        process.wait = mock.Mock(
+            side_effect=[
+                subprocess.TimeoutExpired(cmd="trtllm-serve", timeout=2.0),
+                subprocess.TimeoutExpired(cmd="trtllm-serve", timeout=5.0),
+            ]
+        )
+        runtime = trtllm_serve_module.TrtllmServeModelRuntime(
+            config=mock.Mock(),
+            process=process,
+            base_url="http://127.0.0.1:18091/v1",
+            health_url="http://127.0.0.1:18091/health",
+            remote_model="gemma-local",
+            timeout_s=12.5,
+            stop_timeout_s=2.0,
+            output_log=tempfile.TemporaryFile(),
+        )
+
+        with (
+            mock.patch.object(trtllm_serve_module.os, "killpg") as killpg,
+            self.assertLogs(trtllm_serve_module.LOGGER, level="WARNING") as logs,
+        ):
+            runtime.close()
+
+        self.assertEqual(
+            killpg.call_args_list,
+            [
+                mock.call(4242, signal.SIGTERM),
+                mock.call(4242, signal.SIGKILL),
+            ],
+        )
+        self.assertIn("did not exit after SIGKILL", logs.output[0])
+        self.assertTrue(runtime.output_log.closed)
+
+    def test_startup_exit_includes_process_output_tail(self) -> None:
+        process = FakeProcess()
+        process.return_code = 17
+        output_log = tempfile.TemporaryFile()
+        output_log.write(b"engine initialized\naddress already in use\n")
+        output_log.flush()
+        runtime = trtllm_serve_module.TrtllmServeModelRuntime(
+            config=mock.Mock(),
+            process=process,
+            base_url="http://127.0.0.1:18091/v1",
+            health_url="http://127.0.0.1:18091/health",
+            remote_model="gemma-local",
+            timeout_s=12.5,
+            stop_timeout_s=2.0,
+            output_log=output_log,
+        )
+        self.addCleanup(output_log.close)
+        engine = object.__new__(trtllm_serve_module.TrtllmServeEngine)
+
+        with self.assertRaises(RuntimeError) as exc_info:
+            engine._wait_until_ready(runtime, 1.0)
+
+        self.assertIn("exited during startup with code 17", str(exc_info.exception))
+        self.assertIn("address already in use", str(exc_info.exception))
+
+    def test_empty_final_content_with_reasoning_is_incomplete(self) -> None:
+        payload = {
+            "choices": [
+                {
+                    "finish_reason": "length",
+                    "message": {
+                        "content": "",
+                        "reasoning_content": "unfinished reasoning",
+                    },
+                }
+            ]
+        }
+
+        with self.assertRaises(
+            trtllm_serve_module.BackendExecutionError
+        ) as exc_info:
+            trtllm_serve_module.TrtllmServeEngine._extract_text(payload)
+
+        self.assertEqual(
+            exc_info.exception.code,
+            "trtllm_serve_incomplete_response",
         )
 
 

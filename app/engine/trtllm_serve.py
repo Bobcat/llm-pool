@@ -6,7 +6,9 @@ import os
 import signal
 import socket
 import subprocess
+import tempfile
 import time
+from typing import BinaryIO
 from urllib.error import HTTPError
 from urllib.error import URLError
 from urllib.request import Request
@@ -42,22 +44,49 @@ class TrtllmServeModelRuntime:
     remote_model: str
     timeout_s: float
     stop_timeout_s: float
+    output_log: BinaryIO
 
     def close(self) -> None:
-        if self.process.poll() is not None:
+        if self.output_log.closed:
             return
         try:
-            os.killpg(self.process.pid, signal.SIGTERM)
-        except ProcessLookupError:
-            return
-        try:
-            self.process.wait(timeout=self.stop_timeout_s)
-        except subprocess.TimeoutExpired:
+            leader_running = self.process.poll() is None
             try:
-                os.killpg(self.process.pid, signal.SIGKILL)
+                # start_new_session=True makes the child the process-group leader.
+                os.killpg(self.process.pid, signal.SIGTERM)
             except ProcessLookupError:
                 pass
-            self.process.wait(timeout=5.0)
+            if not leader_running:
+                return
+            try:
+                self.process.wait(timeout=self.stop_timeout_s)
+            except subprocess.TimeoutExpired:
+                try:
+                    os.killpg(self.process.pid, signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
+                try:
+                    self.process.wait(timeout=5.0)
+                except subprocess.TimeoutExpired:
+                    LOGGER.warning(
+                        "TensorRT-LLM serve process group %s did not exit after SIGKILL",
+                        self.process.pid,
+                    )
+        finally:
+            self.output_log.close()
+
+    def output_tail(self, max_bytes: int = 16 * 1024) -> str:
+        try:
+            file_descriptor = self.output_log.fileno()
+            file_size = os.fstat(file_descriptor).st_size
+            raw_output = os.pread(
+                file_descriptor,
+                max_bytes,
+                max(0, file_size - max_bytes),
+            )
+        except (OSError, ValueError):
+            return ""
+        return raw_output.decode("utf-8", errors="replace").strip()
 
 
 class TrtllmServeEngine:
@@ -135,23 +164,25 @@ class TrtllmServeEngine:
         port = settings.trtllm_serve_port or self._pick_free_port(host)
         remote_model = settings.trtllm_serve_model_alias or model_name
         base_url = f"http://{host}:{port}/v1"
+        process, output_log = self._start_process(
+            self._command(
+                settings=settings,
+                model_ref=model_ref,
+                host=host,
+                port=port,
+                remote_model=remote_model,
+            ),
+            settings=settings,
+        )
         runtime = TrtllmServeModelRuntime(
             config=settings,
-            process=self._start_process(
-                self._command(
-                    settings=settings,
-                    model_ref=model_ref,
-                    host=host,
-                    port=port,
-                    remote_model=remote_model,
-                ),
-                settings=settings,
-            ),
+            process=process,
             base_url=base_url,
             health_url=f"http://{host}:{port}/health",
             remote_model=remote_model,
             timeout_s=settings.trtllm_serve_timeout_s,
             stop_timeout_s=settings.trtllm_serve_stop_timeout_s,
+            output_log=output_log,
         )
         try:
             self._wait_until_ready(runtime, settings.trtllm_serve_start_timeout_s)
@@ -195,18 +226,32 @@ class TrtllmServeEngine:
         command.extend(settings.trtllm_serve_extra_args)
         return command
 
-    def _start_process(self, command: list[str], *, settings: ModelSettings) -> subprocess.Popen:
+    def _start_process(
+        self,
+        command: list[str],
+        *,
+        settings: ModelSettings,
+    ) -> tuple[subprocess.Popen, BinaryIO]:
+        output_log = tempfile.TemporaryFile(
+            prefix="llm-pool-trtllm-serve-",
+            suffix=".log",
+        )
         try:
-            return subprocess.Popen(
+            process = subprocess.Popen(
                 command,
                 env=self._subprocess_env(settings),
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
+                stdout=output_log,
+                stderr=subprocess.STDOUT,
                 text=True,
                 start_new_session=True,
             )
         except FileNotFoundError as exc:
+            output_log.close()
             raise RuntimeError(f"TensorRT-LLM serve binary not found: {command[0]}") from exc
+        except Exception:
+            output_log.close()
+            raise
+        return process, output_log
 
     @staticmethod
     def _subprocess_env(settings: ModelSettings) -> dict[str, str] | None:
@@ -248,7 +293,10 @@ class TrtllmServeEngine:
             return_code = runtime.process.poll()
             if return_code is not None:
                 raise RuntimeError(
-                    f"TensorRT-LLM serve exited during startup with code {return_code}"
+                    self._startup_failure_message(
+                        runtime,
+                        f"TensorRT-LLM serve exited during startup with code {return_code}",
+                    )
                 )
             try:
                 self._get_health(runtime)
@@ -257,9 +305,22 @@ class TrtllmServeEngine:
                 last_error = _exception_message(exc)
             time.sleep(0.25)
         raise RuntimeError(
-            "TensorRT-LLM serve did not become ready within "
-            f"{start_timeout_s:g}s: {last_error}"
+            self._startup_failure_message(
+                runtime,
+                "TensorRT-LLM serve did not become ready within "
+                f"{start_timeout_s:g}s: {last_error}",
+            )
         )
+
+    @staticmethod
+    def _startup_failure_message(
+        runtime: TrtllmServeModelRuntime,
+        message: str,
+    ) -> str:
+        output_tail = runtime.output_tail()
+        if output_tail == "":
+            return message
+        return f"{message}\nTensorRT-LLM output tail:\n{output_tail}"
 
     @staticmethod
     def _get_health(runtime: TrtllmServeModelRuntime) -> None:
@@ -444,7 +505,21 @@ class TrtllmServeEngine:
             )
         content = message.get("content")
         if isinstance(content, str):
-            return content.strip()
+            text = content.strip()
+            reasoning_content = message.get("reasoning_content")
+            if (
+                text == ""
+                and isinstance(reasoning_content, str)
+                and reasoning_content.strip() != ""
+            ):
+                raise BackendExecutionError(
+                    code="trtllm_serve_incomplete_response",
+                    status_code=502,
+                    message=(
+                        "TensorRT-LLM serve response ended before producing final content"
+                    ),
+                )
+            return text
         raise BackendExecutionError(
             code="trtllm_serve_response_parse_failure",
             status_code=502,
