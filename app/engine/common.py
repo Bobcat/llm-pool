@@ -144,6 +144,23 @@ _BACKEND_MODEL_DEFINITION_FIELDS = {
         "vllm_serve_api_key",
         "vllm_serve_extra_args",
     ),
+    "trtllm_serve": (
+        "trtllm_model",
+        "trtllm_trust_remote_code",
+        "trtllm_serve_binary",
+        "trtllm_serve_host",
+        "trtllm_serve_port",
+        "trtllm_serve_model_alias",
+        "trtllm_serve_timeout_s",
+        "trtllm_serve_start_timeout_s",
+        "trtllm_serve_stop_timeout_s",
+        "trtllm_serve_library_path",
+        "trtllm_serve_env",
+        "trtllm_serve_config_path",
+        "trtllm_serve_reasoning_parser",
+        "trtllm_serve_tool_parser",
+        "trtllm_serve_extra_args",
+    ),
 }
 
 # llama_cpp multi-turn is text-only and depends on llama.cpp's chat-completion path.
@@ -160,6 +177,7 @@ _THINKING_CONTROL_PROMPT_FORMATS = {
     "ct2": frozenset({"qwen3_template"}),
     "exllamav3": frozenset({"gemma4_template", "qwen3_template"}),
     "llama_cpp": frozenset({"gemma4_template"}),
+    "trtllm_serve": frozenset({"gemma4_template"}),
     "vllm": frozenset({"gemma4_template", "qwen3_template"}),
 }
 _DEFAULT_THINKING_MODES = ("default",)
@@ -170,7 +188,13 @@ _VLLM_SERVE_RESPONSE_FORMATS = ("text", "json_schema")
 
 def _model_supports_multi_turn(backend: str, prompt_format: str | None) -> bool:
     normalized_backend = backend.strip().lower()
-    if normalized_backend in {"llama_server", "openai_remote", "vllm", "vllm_serve"}:
+    if normalized_backend in {
+        "llama_server",
+        "openai_remote",
+        "trtllm_serve",
+        "vllm",
+        "vllm_serve",
+    }:
         return True
     if normalized_backend == "llama_cpp":
         normalized_prompt_format = (prompt_format or "").strip().lower()

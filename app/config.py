@@ -110,6 +110,21 @@ class ModelSettings:
     vllm_serve_env: tuple[tuple[str, str], ...] = ()
     vllm_serve_api_key: str | None = None
     vllm_serve_extra_args: tuple[str, ...] = ()
+    trtllm_model: str | None = None
+    trtllm_trust_remote_code: bool = False
+    trtllm_serve_binary: str = "trtllm-serve"
+    trtllm_serve_host: str = "127.0.0.1"
+    trtllm_serve_port: int | None = None
+    trtllm_serve_model_alias: str | None = None
+    trtllm_serve_timeout_s: float = 120.0
+    trtllm_serve_start_timeout_s: float = 600.0
+    trtllm_serve_stop_timeout_s: float = 30.0
+    trtllm_serve_library_path: tuple[str, ...] = ()
+    trtllm_serve_env: tuple[tuple[str, str], ...] = ()
+    trtllm_serve_config_path: str | None = None
+    trtllm_serve_reasoning_parser: str | None = None
+    trtllm_serve_tool_parser: str | None = None
+    trtllm_serve_extra_args: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -190,7 +205,12 @@ def load_settings(path: str | Path | None = None) -> AppSettings:
                 backend = parsed_backend
         resolved_backend = backend or default_backend
         model_path = _coerce_optional_str(model_payload.get("model_path"))
-        if model_path is None and resolved_backend not in {"openai_remote", "vllm", "vllm_serve"}:
+        if model_path is None and resolved_backend not in {
+            "openai_remote",
+            "trtllm_serve",
+            "vllm",
+            "vllm_serve",
+        }:
             continue
         cache_quant_value = model_payload.get("exllama_cache_quant")
         cache_quant = None
@@ -366,6 +386,57 @@ def load_settings(path: str | Path | None = None) -> AppSettings:
             vllm_serve_extra_args=_coerce_str_tuple(
                 model_payload.get("vllm_serve_extra_args"),
                 "vllm_serve_extra_args",
+            ),
+            trtllm_model=_coerce_optional_str(model_payload.get("trtllm_model")),
+            trtllm_trust_remote_code=bool(
+                model_payload.get("trtllm_trust_remote_code", False)
+            ),
+            trtllm_serve_binary=(
+                str(
+                    model_payload.get("trtllm_serve_binary", "trtllm-serve")
+                    or "trtllm-serve"
+                ).strip()
+                or "trtllm-serve"
+            ),
+            trtllm_serve_host=(
+                str(model_payload.get("trtllm_serve_host", "127.0.0.1") or "127.0.0.1").strip()
+                or "127.0.0.1"
+            ),
+            trtllm_serve_port=_coerce_optional_positive_int(
+                model_payload.get("trtllm_serve_port")
+            ),
+            trtllm_serve_model_alias=_coerce_optional_str(
+                model_payload.get("trtllm_serve_model_alias")
+            ),
+            trtllm_serve_timeout_s=float(
+                model_payload.get("trtllm_serve_timeout_s", 120.0)
+            ),
+            trtllm_serve_start_timeout_s=float(
+                model_payload.get("trtllm_serve_start_timeout_s", 600.0)
+            ),
+            trtllm_serve_stop_timeout_s=float(
+                model_payload.get("trtllm_serve_stop_timeout_s", 30.0)
+            ),
+            trtllm_serve_library_path=_coerce_path_tuple(
+                model_payload.get("trtllm_serve_library_path"),
+                "trtllm_serve_library_path",
+            ),
+            trtllm_serve_env=_coerce_str_str_map(
+                model_payload.get("trtllm_serve_env"),
+                "trtllm_serve_env",
+            ),
+            trtllm_serve_config_path=_coerce_optional_str(
+                model_payload.get("trtllm_serve_config_path")
+            ),
+            trtllm_serve_reasoning_parser=_coerce_optional_str(
+                model_payload.get("trtllm_serve_reasoning_parser")
+            ),
+            trtllm_serve_tool_parser=_coerce_optional_str(
+                model_payload.get("trtllm_serve_tool_parser")
+            ),
+            trtllm_serve_extra_args=_coerce_str_tuple(
+                model_payload.get("trtllm_serve_extra_args"),
+                "trtllm_serve_extra_args",
             ),
         )
         if models[str(model_name)].replicas > models[str(model_name)].replica_max:

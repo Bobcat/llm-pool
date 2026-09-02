@@ -341,6 +341,60 @@ class ModelRouterEngineTests(unittest.TestCase):
         self.assertEqual(entry["runtime_state"], "unloaded")
         self.assertTrue(runtime.closed)
 
+    def test_dispatches_trtllm_serve_backend_as_local_runtime(self) -> None:
+        settings = AppSettings(
+            service=ServiceSettings(),
+            engine=EngineSettings(
+                backend="ct2",
+                models={
+                    "trtllm-model": ModelSettings(
+                        model_path=None,
+                        backend="trtllm_serve",
+                        prompt_format="gemma4_template",
+                        trtllm_model="/models/gemma4",
+                        target_inflight=3,
+                    ),
+                },
+            ),
+        )
+        runtime = types.SimpleNamespace(closed=False)
+
+        def close_runtime() -> None:
+            runtime.closed = True
+
+        runtime.close = close_runtime
+
+        class FakeTrtllmServeEngine:
+            def __init__(self, scoped_settings):
+                self._models = {name: runtime for name in scoped_settings.engine.models}
+                self._load_errors = {}
+
+            def complete(self, request: ResponseRequest) -> EngineResult:
+                return EngineResult(text=f"trtllm-serve:{request.model}")
+
+        with mock.patch.object(
+            engine_module,
+            "TrtllmServeEngine",
+            FakeTrtllmServeEngine,
+        ):
+            engine = ModelRouterEngine(settings)
+            result = engine.complete(
+                ResponseRequest(model="trtllm-model", input="hello")
+            )
+            model = engine.admin_models_payload()["models"][0]
+            entry = engine.unload_model("trtllm-model")
+
+        self.assertEqual(result.text, "trtllm-serve:trtllm-model#1")
+        self.assertEqual(model["effective_target_inflight"], 3)
+        self.assertEqual(
+            model["capabilities"]["thinking_modes"],
+            ["default", "enabled", "disabled"],
+        )
+        self.assertEqual(model["capabilities"]["response_formats"], ["text"])
+        self.assertEqual(model["definition"]["trtllm_model"], "/models/gemma4")
+        self.assertEqual(entry["runtime_state"], "unloaded")
+        self.assertTrue(runtime.closed)
+
     def test_build_engine_uses_model_router_for_non_stub_backends(self) -> None:
         settings = AppSettings(
             service=ServiceSettings(),

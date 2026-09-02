@@ -10,8 +10,8 @@ Current reality note:
 
 - the implemented backend is named `openai_remote`
 - it is for remote/provider Chat Completions routes and keeps config-only load semantics
-- it is not the local lifecycle backend for managed `llama-server` or `vllm serve` processes
-- local managed server support now lives in separate `llama_server` and `vllm_serve` backends
+- it is not the local lifecycle backend for managed `llama-server`, `trtllm-serve`, or `vllm serve` processes
+- local managed server support now lives in separate `llama_server`, `trtllm_serve`, and `vllm_serve` backends
 
 ## Implementation Status
 

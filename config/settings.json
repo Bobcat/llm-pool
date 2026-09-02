@@ -244,6 +244,37 @@
         ],
         "enabled": false
       },
+      "gemma-4-26b-a4b-it-nvidia-nvfp4-trtllm-serve": {
+        "backend": "trtllm_serve",
+        "model_path": null,
+        "prompt_format": "gemma4_template",
+        "enable_thinking": false,
+        "target_inflight": 4,
+        "modalities": [
+          "text",
+          "image"
+        ],
+        "trtllm_model": "/home/gunnar/models/nvidia/Gemma-4-26B-A4B-NVFP4",
+        "trtllm_serve_binary": "/home/gunnar/.cache/llm-pool/trtllm-v130rc25-cu130/bin/trtllm-serve",
+        "trtllm_serve_model_alias": "gemma-4-26b-a4b-it-nvidia-nvfp4-trtllm-serve",
+        "trtllm_serve_start_timeout_s": 900.0,
+        "trtllm_serve_stop_timeout_s": 60.0,
+        "trtllm_serve_library_path": [
+          "/home/gunnar/.cache/llm-pool/openmpi-v416/lib",
+          "/home/gunnar/.cache/llm-pool/trtllm-v130rc25-cu130/lib/python3.12/site-packages/nvidia/cu13/lib"
+        ],
+        "trtllm_serve_env": {
+          "CUDA_HOME": "/home/gunnar/.cache/llm-pool/trtllm-v130rc25-cu130/lib/python3.12/site-packages/nvidia/cu13",
+          "MAX_JOBS": "4",
+          "FLASHINFER_NVCC_THREADS": "1",
+          "CMAKE_BUILD_PARALLEL_LEVEL": "4",
+          "TORCHINDUCTOR_COMPILE_THREADS": "4"
+        },
+        "trtllm_serve_config_path": "/home/gunnar/projects/llm-pool/config/trtllm/gemma-4-26b-a4b-nvfp4.yaml",
+        "trtllm_serve_reasoning_parser": "gemma4",
+        "trtllm_serve_tool_parser": "gemma4",
+        "enabled": false
+      },
       "qwen3.6-35b-a3b-nvfp4-vllm-serve": {
         "backend": "vllm_serve",
         "model_path": null,

@@ -28,6 +28,8 @@ from .openai_remote import OpenAIRemoteEngine
 from .openai_remote import OpenAIRemoteModelRuntime
 from .router import ModelRouterEngine
 from .stub import StubEngine
+from .trtllm_serve import TrtllmServeEngine
+from .trtllm_serve import TrtllmServeModelRuntime
 from .vllm import VllmEngine
 from .vllm import VllmModelRuntime
 from .vllm_serve import VllmServeEngine

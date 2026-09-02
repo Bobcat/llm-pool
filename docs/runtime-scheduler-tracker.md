@@ -12,8 +12,8 @@ Current reality note:
 - per-model weighted client fairness is implemented with per-key FIFO buckets,
   measured slot-time, and a work-conserving soft inflight cap
 - per-key and per-executor pending limits provide bounded backpressure
-- local runtime capability is still effectively `1` in-flight request per replica except for `openai_remote` and `vllm_serve`, which can use configured `target_inflight`
-- `llama_server` and `vllm_serve` use the same scheduler/executor path; their native subprocess lifecycles are backend-owned, not the general runtime-subprocess design from `runtime-subprocess-notes.md`
+- local runtime capability is still effectively `1` in-flight request per replica except for `openai_remote`, `trtllm_serve`, and `vllm_serve`, which can use configured `target_inflight`
+- `llama_server`, `trtllm_serve`, and `vllm_serve` use the same scheduler/executor path; their native subprocess lifecycles are backend-owned, not the general runtime-subprocess design from `runtime-subprocess-notes.md`
 - `vllm_serve` high-throughput tuning is currently expressed through model config and upstream flags, not through scheduler-native adaptive concurrency
 
 ## Status Labels

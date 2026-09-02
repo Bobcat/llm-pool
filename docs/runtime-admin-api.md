@@ -19,6 +19,7 @@ Managed backend behavior:
 - runtime-only load overrides are implemented for `llama_cpp`, `exllamav3`, `vllm`, `vllm_serve`, and `llama_server`
 - `llama_server` load/unload starts and stops a managed native `llama-server` subprocess; binary path, model path, library path, `mmproj`, draft model path, host, port, and extra native args stay in model config
 - `vllm_serve` load/unload starts and stops a managed local `vllm serve` subprocess; binary path, target model id/path, library path, environment, host, port, API key, and extra CLI args stay in model config
+- `trtllm_serve` load/unload starts and stops a managed local `trtllm-serve` process group; binary path, target model id/path, library path, environment, host, port, TensorRT-LLM config, parser names, and extra CLI args stay in model config
 - clients use the live `load_constraints` payload to build backend-specific load controls
 
 ## Contents
@@ -288,7 +289,7 @@ Notes:
 - `queue_depth` is the public-model queue depth inside the scheduler
 - `runtime_inflight` is aggregate inflight work across loaded replicas of the public model
 - `configured_target_inflight` is the configured per-replica inflight target
-- `effective_target_inflight` is the currently honest per-replica scheduler target after capability clamping
+- `effective_target_inflight` is the per-replica scheduler target after capability clamping; `openai_remote`, `trtllm_serve`, and `vllm_serve` may use a configured value above 1, while other backends are clamped to 1
 - `fairness.keys` reports bounded per-key pending work, active work, configured weight, normalized score, and queue-limit rejection counts; a `null` key is the anonymous bucket
 - `fairness.rejected_per_key_limit` and `fairness.rejected_executor_limit` are aggregate counters for the current loaded executor and reset on unload
 - `vram_estimate_mib` is an approximate per-model VRAM estimate
@@ -296,9 +297,9 @@ Notes:
 - `vram_estimate_source` is either `observed_load_delta`, `model_artifact_size`, or `unavailable`
 - `capabilities.modalities` lists the accepted input modalities: `text`, `image`, and `audio`; a model may advertise any configured combination, with `text` added by default
 - `capabilities.file_inputs` reports whether the model accepts `file` content items; this is currently limited to `openai_remote` models with `remote_file_mode` configured
-- `capabilities.multi_turn` reports whether the model accepts a multi-turn `messages` array on `POST /v1/responses`; this is `true` for `llama_server`, `openai_remote`, `vllm`, and `vllm_serve` models and for supported text-only `llama_cpp` chat prompt formats (`generic`, `mistral_template`, `qwen3_template`, `gemma4_template`), but remains `false` for `llama_cpp` `translategemma_template`
-- `capabilities.thinking_modes` lists accepted values for request-level `thinking`; models without a safe per-request control report only `["default"]`, while supported vLLM Gemma4/Qwen3, `llama_cpp` Gemma4, ExLlamaV3 Gemma4/Qwen3, CT2 Qwen3, and configured remote models report `["default", "enabled", "disabled"]`
-- `capabilities.response_formats` is `["text", "json_schema"]` for `vllm_serve` and `["text"]` for other backends
+- `capabilities.multi_turn` reports whether the model accepts a multi-turn `messages` array on `POST /v1/responses`; this is `true` for `llama_server`, `openai_remote`, `trtllm_serve`, `vllm`, and `vllm_serve` models and for supported text-only `llama_cpp` chat prompt formats (`generic`, `mistral_template`, `qwen3_template`, `gemma4_template`), but remains `false` for `llama_cpp` `translategemma_template`
+- `capabilities.thinking_modes` lists accepted values for request-level `thinking`; models without a safe per-request control report only `["default"]`, while supported vLLM Gemma4/Qwen3, TensorRT-LLM Gemma4, `llama_cpp` Gemma4, ExLlamaV3 Gemma4/Qwen3, CT2 Qwen3, and configured remote models report `["default", "enabled", "disabled"]`
+- `capabilities.response_formats` is `["text", "json_schema"]` for `vllm_serve`; `trtllm_serve` and other backends report `["text"]`
 - `load_constraints` describes backend-specific live-load fields for UI controls
 - `load_recommendations` describes service-curated recommended presets and pairings for UI defaults
 - `load_override` reports the runtime-only override currently active on a loaded model
@@ -607,7 +608,7 @@ ExLlamaV3 recommended presets:
 }
 ```
 
-CT2, `openai_remote`, and stub:
+CT2, `openai_remote`, `trtllm_serve`, and stub:
 
 ```json
 {}
@@ -713,6 +714,8 @@ Supported load override fields:
 - ExLlamaV3: `exllama_cache_size`, `exllama_cache_quant`, `exllama_cache_k_bits`, `exllama_cache_v_bits`, `exllama_max_rq_tokens`
 - vLLM and vLLM Serve: `vllm_max_model_len`, `vllm_kv_cache_dtype`, `vllm_kv_cache_memory_bytes`, `vllm_max_pixels`, `vllm_speculative_method`, `vllm_speculative_model`, `vllm_speculative_moe_backend`, `vllm_speculative_attention_backend`, `vllm_num_speculative_tokens`
 - llama-server: `llama_server_n_ctx`, `llama_server_image_max_tokens`, `llama_server_spec_type`, `llama_server_spec_draft_n_max`, `llama_server_spec_draft_p_min`
+
+`trtllm_serve` has no backend-specific runtime load overrides. The common `replicas` field is still accepted. TensorRT-LLM model, binary, environment, YAML, parser, timeout, and CLI settings remain in the model definition.
 
 Example load bodies:
 
@@ -822,6 +825,12 @@ vLLM and vLLM Serve load override notes:
 - `vllm_num_speculative_tokens` maps to vLLM `speculative_config.num_speculative_tokens`.
 - For `vllm_serve`, target model id/path, binary path, library path, environment, host, port, API key, and extra CLI args are configured in the model definition, not overridden through the admin load body.
 - Loading a `vllm_serve` model starts a local `vllm serve` subprocess. Unloading terminates that subprocess, so VRAM is released by the server process rather than by Python object cleanup alone.
+
+TensorRT-LLM Serve load notes:
+
+- `trtllm_serve` accepts no backend-specific load overrides. Only the common `replicas` field can be changed for one load.
+- Target model, binary, library path, environment, YAML config, parser names, host, port, timeouts, and extra CLI args are configured in the model definition.
+- Loading starts a local `trtllm-serve` process group. Unloading terminates that group, so VRAM is released by process exit.
 
 llama-server load override notes:
 
