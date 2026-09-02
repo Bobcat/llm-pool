@@ -38,9 +38,10 @@ how much work may wait in a queue.
   - [ExLlamaV3](#exllamav3)
   - [llama_cpp (in-process GGUF)](#llama_cpp-in-process-gguf)
   - [vLLM](#vllm)
-- [Pool-managed Backends](#pool-managed-backends) — llama_server, vllm_serve
+- [Pool-managed Backends](#pool-managed-backends) — llama_server, vllm_serve, trtllm_serve
   - [llama_server](#llama_server)
   - [vllm_serve](#vllm_serve)
+  - [trtllm_serve](#trtllm_serve)
 - [Remote Backends](#remote-backends) — openai_remote
   - [Remote prompt caching](#remote-prompt-caching)
   - [Remote file input](#remote-file-input)
@@ -62,7 +63,7 @@ how much work may wait in a queue.
 ## What It Does
 
 - exposes one inference API for multiple model runtimes
-- supports local CT2, ExLlamaV3, `llama_cpp`/GGUF, managed native `llama-server`, in-process vLLM, and managed `vllm serve` backends
+- supports local CT2, ExLlamaV3, `llama_cpp`/GGUF, managed native `llama-server`, in-process vLLM, managed `vllm serve`, and managed TensorRT-LLM backends
 - calls remote OpenAI-compatible models only when a request explicitly allows remote execution
 - accepts text input everywhere, image and audio input on models that advertise those capabilities, and document files on explicitly configured remote models
 - supports single-turn `input` requests and backend-dependent multi-turn `messages` requests
@@ -109,6 +110,7 @@ The names above describe the local project family. This repo should remain usabl
 | `app/engine/llama_server.py` | Managed native `llama-server` subprocess adapter. |
 | `app/engine/vllm.py` | In-process vLLM adapter. |
 | `app/engine/vllm_serve.py` | Managed `vllm serve` subprocess adapter. |
+| `app/engine/trtllm_serve.py` | Managed `trtllm-serve` subprocess adapter. |
 | `app/engine/openai_remote.py` | Remote OpenAI-compatible Chat Completions adapter. |
 | `config/settings.json` | Shared model and service defaults. |
 | `config/local.json` | Optional ignored machine-local overrides. |
@@ -132,7 +134,7 @@ At runtime:
 A runtime model currently runs in one of three different shapes:
 
 - in-process Python runtimes: CT2, ExLlamaV3, `llama_cpp`/GGUF, vLLM
-- managed local subprocess runtimes: `llama_server`, `vllm_serve`
+- managed local subprocess runtimes: `llama_server`, `vllm_serve`, `trtllm_serve`
 - remote upstream API runtime: `openai_remote`
 
 The managed subprocess backends are useful when native upstream dependencies, CUDA libraries, or backend build variants should be isolated from the main Python API process.
@@ -332,7 +334,7 @@ Important behavior:
 - A model declares image or audio support with values such as `"modalities": ["text", "image", "audio"]`; the default is `["text"]`.
 - Text-only models reject image content with `modality_unsupported`.
 - Models without configured file support reject file content with `file_input_unsupported`.
-- `llama_server`, vLLM, `vllm_serve`, and remote OpenAI-compatible vision models are the current intended vision paths.
+- `llama_server`, vLLM, `vllm_serve`, `trtllm_serve`, and remote OpenAI-compatible vision models are the current intended vision paths.
 - `vllm_serve` is the supported local audio path; clients should send audio only when the model advertises that modality.
 - In-process GGUF via `llama-cpp-python` remains text-only.
 - A text-only content array is accepted by text backends and concatenated into one prompt.
@@ -370,6 +372,7 @@ Current support:
 
 - `llama_server`: multi-turn text and image, depending on model capabilities.
 - `openai_remote`: multi-turn text, image, and configured document-file input.
+- `trtllm_serve`: multi-turn text and image, depending on model capabilities.
 - `vllm`: multi-turn text and image, depending on model capabilities.
 - `vllm_serve`: multi-turn text, image, and audio, depending on model capabilities.
 - `llama_cpp`: text-only multi-turn for selected prompt formats: `generic`, `mistral_template`, `qwen3_template`, and `gemma4_template`.
@@ -414,6 +417,7 @@ Backends add their own fields:
 - `llama_server`: binary, host, port, library path, context, GPU layers, flash attention, `mmproj`, image token budget, MTP/speculative decoding, reasoning, and extra native args
 - vLLM: model id/path, dtype, KV cache, model length, tensor parallelism, multimodal limits, processor kwargs, speculative decoding
 - `vllm_serve`: the same vLLM model/runtime fields plus binary path, host, port, library path, environment, API key, timeout, and extra CLI args
+- `trtllm_serve`: model id/path, binary path, host, port, library path, environment, TensorRT-LLM config file, reasoning and tool parsers, timeouts, and extra CLI args
 - remote OpenAI-compatible: base URL, API key env var, upstream model name, timeout, retry, thinking, prompt-cache opt-in, and provider-specific file settings
 
 Minimal local override example:
@@ -688,7 +692,7 @@ Blackwell runtime note:
 
 ## Pool-managed Backends
 
-These backends run as local subprocesses that the pool starts, supervises, and stops: `llama_server` and `vllm_serve`. Each has its own dependency stack, so its native libraries and CUDA toolkit stay isolated from the pool's environment — `*_library_path` is prepended to the subprocess `LD_LIBRARY_PATH`. Unloading terminates the process, so VRAM is released by process exit.
+These backends run as local subprocesses that the pool starts, supervises, and stops: `llama_server`, `vllm_serve`, and `trtllm_serve`. Each has its own dependency stack, so its native libraries and CUDA toolkit stay isolated from the pool's environment — `*_library_path` is prepended to the subprocess `LD_LIBRARY_PATH`. Unloading terminates the process, so VRAM is released by process exit.
 
 ### llama_server
 
@@ -881,6 +885,14 @@ Example Qwen 3.6 definition:
 ```
 
 The example shows a short `vllm_serve_library_path`; production configs may need every CUDA library directory from that isolated vLLM environment.
+
+### trtllm_serve
+
+The `trtllm_serve` backend starts a local `trtllm-serve` subprocess, waits for its health endpoint, and forwards requests through its OpenAI-compatible chat endpoint. Unloading stops the process group and frees its VRAM.
+
+The target model, executable, library paths, environment, TensorRT-LLM YAML config, parser names, and extra CLI arguments stay in the model definition. The admin load body does not override these fields. `target_inflight` controls how many requests the pool may submit concurrently to the managed server.
+
+The checked-in Gemma 4 NVFP4 definition is disabled by default.
 
 ## Remote Backends
 

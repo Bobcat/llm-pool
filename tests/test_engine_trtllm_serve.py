@@ -280,19 +280,11 @@ class TrtllmServeEngineTests(unittest.TestCase):
             health_url="http://127.0.0.1:18091/health",
             remote_model="gemma-local",
             timeout_s=12.5,
-            stop_timeout_s=2.0,
+            stop_timeout_s=0.0,
             output_log=tempfile.TemporaryFile(),
         )
 
-        with (
-            mock.patch.object(trtllm_serve_module.os, "killpg") as killpg,
-            mock.patch.object(
-                trtllm_serve_module.time,
-                "monotonic",
-                side_effect=[10.0, 10.0, 12.0],
-            ),
-            mock.patch.object(trtllm_serve_module.time, "sleep") as sleep,
-        ):
+        with mock.patch.object(trtllm_serve_module.os, "killpg") as killpg:
             runtime.close()
             runtime.close()
 
@@ -300,11 +292,87 @@ class TrtllmServeEngineTests(unittest.TestCase):
             killpg.call_args_list,
             [
                 mock.call(4242, signal.SIGTERM),
-                mock.call(4242, 0),
                 mock.call(4242, signal.SIGKILL),
             ],
         )
-        sleep.assert_called_once_with(0.1)
+        process.wait.assert_not_called()
+        self.assertTrue(runtime.output_log.closed)
+
+    def test_close_stops_when_orphan_group_exits_during_grace_period(self) -> None:
+        process = FakeProcess()
+        process.return_code = 1
+        process.wait = mock.Mock()
+        runtime = trtllm_serve_module.TrtllmServeModelRuntime(
+            config=mock.Mock(),
+            process=process,
+            base_url="http://127.0.0.1:18091/v1",
+            health_url="http://127.0.0.1:18091/health",
+            remote_model="gemma-local",
+            timeout_s=12.5,
+            stop_timeout_s=2.0,
+            output_log=tempfile.TemporaryFile(),
+        )
+
+        with (
+            mock.patch.object(
+                trtllm_serve_module.os,
+                "killpg",
+                side_effect=[None, ProcessLookupError],
+            ) as killpg,
+            mock.patch.object(
+                trtllm_serve_module.time,
+                "monotonic",
+                return_value=10.0,
+            ),
+        ):
+            runtime.close()
+
+        self.assertEqual(
+            killpg.call_args_list,
+            [
+                mock.call(4242, signal.SIGTERM),
+                mock.call(4242, 0),
+            ],
+        )
+        process.wait.assert_not_called()
+        self.assertTrue(runtime.output_log.closed)
+
+    def test_close_stops_when_orphan_group_is_not_permitted(self) -> None:
+        process = FakeProcess()
+        process.return_code = 1
+        process.wait = mock.Mock()
+        runtime = trtllm_serve_module.TrtllmServeModelRuntime(
+            config=mock.Mock(),
+            process=process,
+            base_url="http://127.0.0.1:18091/v1",
+            health_url="http://127.0.0.1:18091/health",
+            remote_model="gemma-local",
+            timeout_s=12.5,
+            stop_timeout_s=2.0,
+            output_log=tempfile.TemporaryFile(),
+        )
+
+        with (
+            mock.patch.object(
+                trtllm_serve_module.os,
+                "killpg",
+                side_effect=[None, PermissionError],
+            ) as killpg,
+            mock.patch.object(
+                trtllm_serve_module.time,
+                "monotonic",
+                return_value=10.0,
+            ),
+        ):
+            runtime.close()
+
+        self.assertEqual(
+            killpg.call_args_list,
+            [
+                mock.call(4242, signal.SIGTERM),
+                mock.call(4242, 0),
+            ],
+        )
         process.wait.assert_not_called()
         self.assertTrue(runtime.output_log.closed)
 

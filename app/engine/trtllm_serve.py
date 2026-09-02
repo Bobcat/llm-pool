@@ -54,28 +54,28 @@ class TrtllmServeModelRuntime:
             try:
                 # start_new_session=True makes the child the process-group leader.
                 os.killpg(self.process.pid, signal.SIGTERM)
-            except ProcessLookupError:
-                pass
+            except (ProcessLookupError, PermissionError):
+                return
             if not leader_running:
                 deadline = time.monotonic() + self.stop_timeout_s
                 while time.monotonic() < deadline:
                     try:
                         os.killpg(self.process.pid, 0)
-                    except ProcessLookupError:
+                    except (ProcessLookupError, PermissionError):
                         return
                     time.sleep(0.1)
                 try:
                     os.killpg(self.process.pid, signal.SIGKILL)
-                except ProcessLookupError:
-                    pass
+                except (ProcessLookupError, PermissionError):
+                    return
                 return
             try:
                 self.process.wait(timeout=self.stop_timeout_s)
             except subprocess.TimeoutExpired:
                 try:
                     os.killpg(self.process.pid, signal.SIGKILL)
-                except ProcessLookupError:
-                    pass
+                except (ProcessLookupError, PermissionError):
+                    return
                 try:
                     self.process.wait(timeout=5.0)
                 except subprocess.TimeoutExpired:
