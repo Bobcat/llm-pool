@@ -114,6 +114,7 @@ The names above describe the local project family. This repo should remain usabl
 | `app/engine/openai_remote.py` | Remote OpenAI-compatible Chat Completions adapter. |
 | `config/settings.json` | Shared model and service defaults. |
 | `config/local.json` | Optional ignored machine-local overrides. |
+| `config/trtllm/` | TensorRT-LLM server configuration files passed to `trtllm-serve`. |
 | `docs/` | Runtime notes, admin API notes, scheduler notes, and backend investigations. |
 | `deploy/systemd/` | User-service helper scripts and deployment notes. |
 | `tests/` | Unit tests for config, routing, schemas, and backend adapter behavior. |
@@ -244,7 +245,7 @@ Supported `decoding` fields:
 | Field | Type | Notes |
 | --- | --- | --- |
 | `beam_size` | `int` | Used by CT2. Accepted but ignored by most sampling backends. |
-| `top_k` | `int` | Used by CT2, ExLlamaV3, `llama_cpp`, vLLM, and `vllm_serve`; ignored by `llama_server` and `openai_remote`. |
+| `top_k` | `int` | Used by CT2, ExLlamaV3, `llama_cpp`, `trtllm_serve`, vLLM, and `vllm_serve`; ignored by `llama_server` and `openai_remote`. |
 | `top_p` | `float` | Sampling control where supported. |
 | `temperature` | `float` | Sampling control where supported. |
 | `repetition_penalty` | `float` | Repetition penalty where supported. |
@@ -890,9 +891,55 @@ The example shows a short `vllm_serve_library_path`; production configs may need
 
 The `trtllm_serve` backend starts a local `trtllm-serve` subprocess, waits for its health endpoint, and forwards requests through its OpenAI-compatible chat endpoint. Unloading stops the process group and frees its VRAM.
 
-The target model, executable, library paths, environment, TensorRT-LLM YAML config, parser names, and extra CLI arguments stay in the model definition. The admin load body does not override these fields. `target_inflight` controls how many requests the pool may submit concurrently to the managed server.
+Example:
+
+```json
+{
+  "engine": {
+    "models": {
+      "gemma4-nvfp4-trtllm": {
+        "backend": "trtllm_serve",
+        "model_path": null,
+        "prompt_format": "gemma4_template",
+        "enable_thinking": false,
+        "target_inflight": 4,
+        "modalities": ["text", "image"],
+        "trtllm_model": "/models/nvidia/Gemma-4-26B-A4B-NVFP4",
+        "trtllm_serve_binary": "/opt/tensorrt-llm/bin/trtllm-serve",
+        "trtllm_serve_library_path": [
+          "/opt/openmpi/lib",
+          "/opt/cuda/lib64"
+        ],
+        "trtllm_serve_env": {
+          "CUDA_HOME": "/opt/cuda",
+          "MAX_JOBS": "4",
+          "FLASHINFER_NVCC_THREADS": "1",
+          "CMAKE_BUILD_PARALLEL_LEVEL": "4",
+          "TORCHINDUCTOR_COMPILE_THREADS": "4"
+        },
+        "trtllm_serve_config_path": "/etc/llm-pool/trtllm/gemma4.yaml",
+        "trtllm_serve_start_timeout_s": 900.0,
+        "trtllm_serve_stop_timeout_s": 60.0,
+        "trtllm_serve_reasoning_parser": "gemma4",
+        "trtllm_serve_tool_parser": "gemma4",
+        "enabled": false
+      }
+    }
+  }
+}
+```
+
+Notes:
+
+- `trtllm_model` is the model id, local checkpoint path, or TensorRT engine path passed to `trtllm-serve`; `model_path` is not required.
+- `trtllm_serve_config_path` is passed to the child as `--config`. TensorRT-LLM reads the YAML; llm-pool does not parse it. Explicit CLI arguments take precedence over YAML values.
+- The target model, executable, library paths, environment, YAML config, parser names, and extra CLI arguments stay in the model definition. The admin load body can only override the common `replicas` field.
+- `target_inflight` controls how many requests the pool may submit concurrently. TensorRT-LLM's batch and KV-cache limits still determine whether that concurrency fits.
+- Compiler limits in `trtllm_serve_env` bound cold JIT compilation. Cached kernels normally avoid that work on later starts, but upgrades and new kernel variants may compile again.
 
 The checked-in Gemma 4 NVFP4 definition is disabled by default.
+
+See [TensorRT-LLM Serve Backend Notes](docs/trtllm-serve-backend.md) for the complete setting map, validated runtime, MTP status, and operational limits.
 
 ## Remote Backends
 
@@ -1062,7 +1109,7 @@ On repeated image caption/OCR-style prompts with local vision models:
 - NVIDIA NVFP4 through managed `vllm_serve` with Gemma 4 assistant MTP: 430+ tok/s observed after warmup on the document-structure OCR prompt below
 - Qwen 3.6 35B A3B NVFP4 through managed `vllm_serve` with MTP: around 500 tok/s observed with `vllm_num_speculative_tokens: 8`; other speculative-token values were not tested
 
-These results are why both managed local vision subprocess paths are treated as first-class runtimes: `llama_server` for GGUF and fast loading, `vllm_serve` for high warm throughput when its heavier load cost is acceptable.
+These measurements cover two managed local vision paths: `llama_server` for GGUF and fast loading, and `vllm_serve` for high warm throughput when its heavier load cost is acceptable. No TensorRT-LLM throughput result is included in this snapshot.
 
 Local `vllm_serve` MTP sweep for `gemma-4-26b-a4b-it-nvidia-nvfp4-vllm-serve`:
 
@@ -1116,6 +1163,7 @@ Heavy backend dependencies are loaded lazily. Install the dependencies for the b
 - a native `llama-server` binary for `llama_server`
 - vLLM and its CUDA/PyTorch stack for `vllm`
 - a `vllm` executable and matching CUDA/PyTorch environment for `vllm_serve`
+- a `trtllm-serve` executable and matching CUDA/OpenMPI environment for `trtllm_serve`
 
 ## Tests
 
@@ -1128,7 +1176,12 @@ python3 -m unittest discover -s tests
 Useful targeted checks while editing runtime loading:
 
 ```bash
-python3 -m unittest tests.test_config tests.test_engine_router tests.test_engine_llama_server tests.test_engine_vllm_serve
+python3 -m unittest \
+  tests.test_config \
+  tests.test_engine_router \
+  tests.test_engine_llama_server \
+  tests.test_engine_trtllm_serve \
+  tests.test_engine_vllm_serve
 ```
 
 ## Deployment Notes
@@ -1157,6 +1210,7 @@ See [deploy/systemd/README.md](deploy/systemd/README.md).
 - ExLlamaV3
 - llama-cpp-python
 - llama.cpp
+- NVIDIA TensorRT-LLM
 - vLLM
 
 ## License

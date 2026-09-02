@@ -10,7 +10,7 @@ Current reality note:
 - one public model may load multiple identical replicas
 - admin remains aggregate per public model
 - local runtime capability is still clamped to one in-flight request per replica except where a backend explicitly reports more capacity
-- `vllm_serve` reports configured `target_inflight` as scheduler capacity; most other local backends, including `llama_server`, remain effectively single-request per replica
+- `trtllm_serve` and `vllm_serve` report configured `target_inflight` as scheduler capacity; most other local backends, including `llama_server`, remain effectively single-request per replica
 - one public model's replicas share the same per-key fairness queue and
   slot-time history
 - live resizing, per-replica admin rows, and per-replica unload remain out of scope
@@ -277,11 +277,11 @@ concurrency by loading the weights N times. This is a predictable workaround,
 but its VRAM cost grows linearly with the number of replicas.
 
 Backend-native concurrency lets one weight copy serve many in-flight requests
-through continuous batching. The `vllm_serve` backend exposes this path to the
-`llm-pool` scheduler through `target_inflight`. llama.cpp can also work this
-way, but the `llama_cpp` backend does not expose it yet: it constructs the
-runtime with `n_ctx` only and serializes generation with a lock, so it is
-effectively single-sequence today.
+through continuous batching. The `trtllm_serve` and `vllm_serve` backends
+expose this path to the `llm-pool` scheduler through `target_inflight`.
+llama.cpp can also work this way, but the `llama_cpp` backend does not expose
+it yet: it constructs the runtime with `n_ctx` only and serializes generation
+with a lock, so it is effectively single-sequence today.
 
 #### The two axes
 

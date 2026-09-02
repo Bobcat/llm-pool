@@ -608,7 +608,7 @@ ExLlamaV3 recommended presets:
 }
 ```
 
-CT2, `openai_remote`, and stub:
+CT2, `openai_remote`, `trtllm_serve`, and stub:
 
 ```json
 {}
@@ -714,6 +714,8 @@ Supported load override fields:
 - ExLlamaV3: `exllama_cache_size`, `exllama_cache_quant`, `exllama_cache_k_bits`, `exllama_cache_v_bits`, `exllama_max_rq_tokens`
 - vLLM and vLLM Serve: `vllm_max_model_len`, `vllm_kv_cache_dtype`, `vllm_kv_cache_memory_bytes`, `vllm_max_pixels`, `vllm_speculative_method`, `vllm_speculative_model`, `vllm_speculative_moe_backend`, `vllm_speculative_attention_backend`, `vllm_num_speculative_tokens`
 - llama-server: `llama_server_n_ctx`, `llama_server_image_max_tokens`, `llama_server_spec_type`, `llama_server_spec_draft_n_max`, `llama_server_spec_draft_p_min`
+
+`trtllm_serve` has no backend-specific runtime load overrides. The common `replicas` field is still accepted. TensorRT-LLM model, binary, environment, YAML, parser, timeout, and CLI settings remain in the model definition.
 
 Example load bodies:
 
@@ -823,6 +825,12 @@ vLLM and vLLM Serve load override notes:
 - `vllm_num_speculative_tokens` maps to vLLM `speculative_config.num_speculative_tokens`.
 - For `vllm_serve`, target model id/path, binary path, library path, environment, host, port, API key, and extra CLI args are configured in the model definition, not overridden through the admin load body.
 - Loading a `vllm_serve` model starts a local `vllm serve` subprocess. Unloading terminates that subprocess, so VRAM is released by the server process rather than by Python object cleanup alone.
+
+TensorRT-LLM Serve load notes:
+
+- `trtllm_serve` accepts no backend-specific load overrides. Only the common `replicas` field can be changed for one load.
+- Target model, binary, library path, environment, YAML config, parser names, host, port, timeouts, and extra CLI args are configured in the model definition.
+- Loading starts a local `trtllm-serve` process group. Unloading terminates that group, so VRAM is released by process exit.
 
 llama-server load override notes:
 

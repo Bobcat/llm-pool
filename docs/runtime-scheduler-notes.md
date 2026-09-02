@@ -15,8 +15,8 @@ Current reality note:
 - bounded per-key and per-executor pending limits return distinct HTTP `429`
   errors before enqueue
 - the runtime admin API already uses the scheduler boundary for load/unload semantics
-- `llama_server` and `vllm_serve` now run through the same scheduler path, while their native subprocess lifecycles remain backend-owned
-- scheduler-visible capacity for most local backends is still conservative; `vllm_serve` uses configured `target_inflight` because its HTTP runtime and vLLM scheduler support concurrent requests
+- `llama_server`, `trtllm_serve`, and `vllm_serve` now run through the same scheduler path, while their native subprocess lifecycles remain backend-owned
+- scheduler-visible capacity for most local backends is still conservative; `trtllm_serve` and `vllm_serve` use configured `target_inflight` because their HTTP runtimes support concurrent requests
 - backend-native tuning through `vllm_serve_extra_args`, including `--max-num-seqs`, is model config, not scheduler policy
 - this note now describes the broader scheduler design space beyond that first implemented cut
 

@@ -9,10 +9,10 @@ It exists to preserve the architectural decisions behind a future subprocess-bas
 Current reality note:
 
 - the general subprocess-isolated runtime architecture described here is not implemented
-- `llm-pool` does now have `llama_server` and `vllm_serve` backends that start local server subprocesses for one loaded model runtime
+- `llm-pool` does now have `llama_server`, `trtllm_serve`, and `vllm_serve` backends that start local server subprocesses for one loaded model runtime
 - those subprocesses are backend-owned lifecycle plumbing, not a general parent/child runtime transport shared by all backends
 - those backend-owned subprocesses already provide practical dependency isolation for their specific runtimes: separate binaries, environment variables, `LD_LIBRARY_PATH`, virtualenvs, CUDA/shared-library stacks, and even upstream forks can be selected per configured model
-- model-specific native/runtime flags still live in backend config in this interim design; for example `vllm_serve_extra_args` can carry upstream `vllm serve` flags such as `--max-num-seqs`
+- model-specific native/runtime flags still live in backend config in this interim design; for example `vllm_serve_extra_args` can carry upstream `vllm serve` flags, while `trtllm_serve_config_path` passes a TensorRT-LLM YAML file
 - the first in-process scheduler/executor layer and runtime admin API already exist, so references below to an upcoming scheduler should be read as historical design context
 
 ## Purpose
