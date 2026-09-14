@@ -45,39 +45,64 @@ The public llm-pool SSE route remains available, but this adapter does not consu
 | `trtllm_serve_stop_timeout_s` | SIGTERM grace period before process-group escalation. |
 | `trtllm_serve_library_path` | Directories prepended to the child `LD_LIBRARY_PATH`. |
 | `trtllm_serve_env` | Environment variables added to the child process. |
-| `trtllm_serve_config_path` | YAML path passed to TensorRT-LLM as `--config`. |
+| `trtllm_serve_config_path` | Base YAML path used to build the config passed through `--config`. |
+| `trtllm_max_seq_len` | Maximum prompt-plus-output sequence length. Load-overridable. |
+| `trtllm_kv_cache_memory_bytes` | Absolute GPU KV-cache budget in bytes. Load-overridable. |
+| `trtllm_max_num_tokens` | Maximum number of unpadded tokens in one scheduled batch. Load-overridable. |
+| `trtllm_enable_chunked_prefill` | Enables or disables chunked prompt processing. Load-overridable. |
+| `trtllm_kv_cache_dtype` | KV-cache dtype: `auto`, `fp8`, or `nvfp4`. Load-overridable. |
 | `trtllm_serve_reasoning_parser` | Adds TensorRT-LLM's `--reasoning_parser`. |
 | `trtllm_serve_tool_parser` | Adds TensorRT-LLM's `--tool_parser`. This does not add tool-calling fields to llm-pool's public request schema. |
 | `trtllm_serve_extra_args` | Additional `trtllm-serve serve` CLI arguments. |
 
-These fields are part of the model definition. The runtime load API does not override them. The common `replicas` override remains available.
+The five fields marked load-overridable can be changed for one load without editing settings. The target model, executable, library paths, environment, base YAML, parsers, timeouts, and extra CLI arguments stay in the model definition. The common `replicas` and `target_inflight` overrides are also available. `target_inflight` controls llm-pool scheduler concurrency and maps to TensorRT-LLM `max_batch_size`.
 
 ## TensorRT-LLM YAML
 
-`trtllm_serve_config_path` is passed directly to the child process. llm-pool does not parse or merge the YAML. TensorRT-LLM documents `--config` as an alias of `--extra_llm_api_options`; explicit CLI flags win over YAML values.
+`trtllm_serve_config_path` names a base YAML file. llm-pool parses that file, merges the effective model and load settings, and passes a temporary YAML file through `--config`. The generated `max_batch_size` comes from `target_inflight`. The source file remains unchanged, and normal runtime cleanup removes the temporary file. Do not set `max_batch_size` in the base YAML or through `trtllm_serve_extra_args`.
 
 The checked-in [Gemma 4 profile](../config/trtllm/gemma-4-26b-a4b-nvfp4.yaml) contains:
 
 ```yaml
-max_batch_size: 4
-max_num_tokens: 8192
-max_seq_len: 20480
-enable_chunked_prefill: false
+kv_cache_config:
+  enable_block_reuse: false
+  free_gpu_memory_fraction: 0.9
+```
+
+The matching model definition supplies these effective defaults:
+
+```json
+{
+  "trtllm_max_seq_len": 20480,
+  "trtllm_kv_cache_memory_bytes": 8589934592,
+  "trtllm_max_num_tokens": 8192,
+  "trtllm_enable_chunked_prefill": false,
+  "trtllm_kv_cache_dtype": "fp8"
+}
+```
+
+Together with `target_inflight: 4`, they produce an effective config containing `max_seq_len: 20480`, `max_batch_size: 4`, `max_num_tokens: 8192`, `enable_chunked_prefill: false`, and these KV-cache values:
+
+```yaml
 kv_cache_config:
   dtype: fp8
   enable_block_reuse: false
-  free_gpu_memory_fraction: 0.5
+  free_gpu_memory_fraction: 0.9
+  max_gpu_total_bytes: 8589934592
 ```
 
 The values have these effects:
 
-- `max_batch_size` caps the requests TensorRT-LLM may schedule together.
+- `max_batch_size` comes from `target_inflight` and caps the requests TensorRT-LLM may schedule together.
 - `max_num_tokens` caps the unpadded input tokens in one scheduled batch.
 - `max_seq_len` caps prompt plus generated tokens for one request.
 - `enable_chunked_prefill: false` disables chunked prompt processing.
 - `kv_cache_config.dtype: fp8` uses an FP8 KV cache.
 - `enable_block_reuse: false` disables KV block reuse. Keep this disabled when testing Gemma 4 MTP.
-- `free_gpu_memory_fraction: 0.5` lets the runtime use half of the memory left after weights and runtime buffers for KV cache.
+- `max_gpu_total_bytes: 8589934592` caps the KV cache at 8 GiB.
+- `free_gpu_memory_fraction: 0.9` remains as a second safety ceiling. TensorRT-LLM uses the lower result of the fractional and absolute limits, so this fraction must not be deliberately reduced as it is for the comparable vLLM configuration.
+
+The total process VRAM is weights plus the KV cache and TensorRT-LLM runtime buffers. An 8 GiB KV-cache budget therefore does not by itself guarantee exactly the same total VRAM as vLLM, but it removes the former half-of-free-memory allocation that made this profile use about 43 GiB.
 
 The model definition remains disabled by default.
 
@@ -116,7 +141,7 @@ The leader-already-dead cleanup path is covered by unit tests. A deliberate cras
 
 ## MTP Speculative Decoding
 
-Upstream TensorRT-LLM documents Gemma 4 MTP through `speculative_config` in the YAML passed to `trtllm-serve`. The llm-pool adapter already passes that YAML, so a future profile can use upstream speculative-decoding fields without adding request-time MTP controls.
+Upstream TensorRT-LLM documents Gemma 4 MTP through `speculative_config` in the YAML passed to `trtllm-serve`. The llm-pool adapter preserves unrecognized base-YAML fields while merging its load settings, so a future profile can use upstream speculative-decoding fields without adding request-time MTP controls.
 
 The checked-in SM120 profile does not enable MTP. In the local 1.3.0rc25 investigation, an eager SM120 proof of concept ran, but CUDA graphs and batch sizes above one were not ready for this backend. That result was not production-ready, so MTP stayed out of the profile.
 

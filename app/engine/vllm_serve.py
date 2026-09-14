@@ -163,6 +163,13 @@ class VllmServeEngine:
         port: int,
         remote_model: str,
     ) -> list[str]:
+        if any(
+            argument in {"--max-num-seqs", "--max_num_seqs"}
+            or argument.startswith("--max-num-seqs=")
+            or argument.startswith("--max_num_seqs=")
+            for argument in settings.vllm_serve_extra_args
+        ):
+            raise ValueError("vLLM --max-num-seqs is controlled by target_inflight")
         command = [
             settings.vllm_serve_binary,
             "serve",
@@ -218,6 +225,7 @@ class VllmServeEngine:
         if settings.vllm_serve_api_key is not None:
             command.extend(["--api-key", settings.vllm_serve_api_key])
         command.extend(settings.vllm_serve_extra_args)
+        command.extend(["--max-num-seqs", str(settings.target_inflight)])
         return command
 
     def _start_process(self, command: list[str], *, settings: ModelSettings) -> subprocess.Popen:

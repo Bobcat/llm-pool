@@ -162,6 +162,12 @@ class LlamaServerEngine:
         port: int,
         remote_model: str,
     ) -> list[str]:
+        if any(
+            argument in {"-np", "--parallel"}
+            or argument.startswith("--parallel=")
+            for argument in settings.llama_server_extra_args
+        ):
+            raise ValueError("llama-server --parallel is controlled by target_inflight")
         command = [
             settings.llama_server_binary,
             "--model",
@@ -199,6 +205,7 @@ class LlamaServerEngine:
         if settings.llama_server_api_key is not None:
             command.extend(["--api-key", settings.llama_server_api_key])
         command.extend(settings.llama_server_extra_args)
+        command.extend(["--parallel", str(settings.target_inflight)])
         return command
 
     def _start_process(self, command: list[str], *, settings: ModelSettings) -> subprocess.Popen:

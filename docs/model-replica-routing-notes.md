@@ -10,7 +10,7 @@ Current reality note:
 - one public model may load multiple identical replicas
 - admin remains aggregate per public model
 - local runtime capability is still clamped to one in-flight request per replica except where a backend explicitly reports more capacity
-- `trtllm_serve` and `vllm_serve` report configured `target_inflight` as scheduler capacity; most other local backends, including `llama_server`, remain effectively single-request per replica
+- `llama_server`, `trtllm_serve`, `sglang_serve`, and `vllm_serve` report configured `target_inflight` as scheduler capacity and map it to their requested native concurrency limit
 - one public model's replicas share the same per-key fairness queue and
   slot-time history
 - live resizing, per-replica admin rows, and per-replica unload remain out of scope
@@ -277,8 +277,9 @@ concurrency by loading the weights N times. This is a predictable workaround,
 but its VRAM cost grows linearly with the number of replicas.
 
 Backend-native concurrency lets one weight copy serve many in-flight requests
-through continuous batching. The `trtllm_serve` and `vllm_serve` backends
-expose this path to the `llm-pool` scheduler through `target_inflight`.
+through continuous batching. The managed local server backends expose this
+path to the `llm-pool` scheduler through `target_inflight`. They also map that
+value to their requested native concurrency limit.
 llama.cpp can also work this way, but the `llama_cpp` backend does not expose
 it yet: it constructs the runtime with `n_ctx` only and serializes generation
 with a lock, so it is effectively single-sequence today.
@@ -291,8 +292,8 @@ expose them inversely:
 
 | | per-request length | total KV pool | concurrency |
 | --- | --- | --- | --- |
-| vLLM | `max_model_len` (set directly) | `kv_cache_memory_bytes` (set directly) | bounded by `max_num_seqs` and cache capacity |
-| llama.cpp | derived = `n_ctx / n_parallel` | `n_ctx` (in tokens) | `n_parallel` (set directly) |
+| vLLM | `max_model_len` (set directly) | `kv_cache_memory_bytes` (set directly) | `target_inflight` maps to `max_num_seqs` |
+| llama.cpp server | derived = `n_ctx / n_parallel` | `n_ctx` (in tokens) | `target_inflight` maps to `n_parallel` |
 
 So llama.cpp is not fundamentally single-axis. `n_ctx` is the total cache in
 tokens shared across `n_parallel` slots, and each slot gets `n_ctx / n_parallel`

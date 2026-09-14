@@ -8,14 +8,11 @@ import socket
 import subprocess
 import tempfile
 import time
-from pathlib import Path
 from typing import BinaryIO
 from urllib.error import HTTPError
 from urllib.error import URLError
 from urllib.request import Request
 from urllib.request import urlopen
-
-import yaml
 
 from app.config import AppSettings
 from app.config import ModelSettings
@@ -39,25 +36,23 @@ _DEFAULT_SYSTEM_PROMPT = "You are a helpful assistant. Return only the response.
 
 
 @dataclass
-class TrtllmServeModelRuntime:
+class SglangServeModelRuntime:
     config: ModelSettings
     process: subprocess.Popen
     base_url: str
     health_url: str
     remote_model: str
     timeout_s: float
+    api_key: str | None
     stop_timeout_s: float
     output_log: BinaryIO
-    generated_config_path: str | None = None
 
     def close(self) -> None:
         if self.output_log.closed:
-            self._remove_generated_config()
             return
         try:
             leader_running = self.process.poll() is None
             try:
-                # start_new_session=True makes the child the process-group leader.
                 os.killpg(self.process.pid, signal.SIGTERM)
             except (ProcessLookupError, PermissionError):
                 return
@@ -85,26 +80,11 @@ class TrtllmServeModelRuntime:
                     self.process.wait(timeout=5.0)
                 except subprocess.TimeoutExpired:
                     LOGGER.warning(
-                        "TensorRT-LLM serve process group %s did not exit after SIGKILL",
+                        "SGLang serve process group %s did not exit after SIGKILL",
                         self.process.pid,
                     )
         finally:
             self.output_log.close()
-            self._remove_generated_config()
-
-    def _remove_generated_config(self) -> None:
-        if self.generated_config_path is None:
-            return
-        config_path = self.generated_config_path
-        self.generated_config_path = None
-        try:
-            Path(config_path).unlink(missing_ok=True)
-        except OSError:
-            LOGGER.warning(
-                "Failed to remove generated TensorRT-LLM config %s",
-                config_path,
-                exc_info=True,
-            )
 
     def output_tail(self, max_bytes: int = 16 * 1024) -> str:
         try:
@@ -120,10 +100,10 @@ class TrtllmServeModelRuntime:
         return raw_output.decode("utf-8", errors="replace").strip()
 
 
-class TrtllmServeEngine:
+class SglangServeEngine:
     def __init__(self, settings: AppSettings) -> None:
         self.decoding_defaults = settings.engine.decoding
-        self._models: dict[str, TrtllmServeModelRuntime] = {}
+        self._models: dict[str, SglangServeModelRuntime] = {}
         self._load_errors: dict[str, str] = {}
         for model_name, model_settings in settings.engine.models.items():
             if not model_settings.enabled:
@@ -133,9 +113,9 @@ class TrtllmServeEngine:
             except Exception as exc:
                 self._load_errors[model_name] = _exception_message(exc)
                 LOGGER.exception(
-                    "Failed to start TensorRT-LLM serve for model '%s' from '%s'; skipping model.",
+                    "Failed to start SGLang serve for model '%s' from '%s'; skipping model.",
                     model_name,
-                    model_settings.trtllm_model or model_settings.model_path,
+                    model_settings.sglang_model or model_settings.model_path,
                 )
         if not self._models:
             if self._load_errors:
@@ -144,7 +124,7 @@ class TrtllmServeEngine:
                     for model_name, message in sorted(self._load_errors.items())
                 )
                 raise ValueError(details)
-            raise ValueError("no enabled trtllm_serve models could be loaded")
+            raise ValueError("no enabled sglang_serve models could be loaded")
 
     def complete(self, request: ResponseRequest) -> EngineResult:
         runtime = self._models.get(request.model)
@@ -182,56 +162,51 @@ class TrtllmServeEngine:
         self,
         model_name: str,
         settings: ModelSettings,
-    ) -> TrtllmServeModelRuntime:
+    ) -> SglangServeModelRuntime:
         model_ref = self._model_ref(settings)
-        if settings.trtllm_serve_timeout_s <= 0.0:
-            raise ValueError("trtllm_serve_timeout_s must be greater than 0")
-        if settings.trtllm_serve_start_timeout_s <= 0.0:
-            raise ValueError("trtllm_serve_start_timeout_s must be greater than 0")
-        if settings.trtllm_serve_stop_timeout_s < 0.0:
-            raise ValueError("trtllm_serve_stop_timeout_s must be greater than or equal to 0")
+        if settings.sglang_serve_timeout_s <= 0.0:
+            raise ValueError("sglang_serve_timeout_s must be greater than 0")
+        if settings.sglang_serve_start_timeout_s <= 0.0:
+            raise ValueError("sglang_serve_start_timeout_s must be greater than 0")
+        if settings.sglang_serve_stop_timeout_s < 0.0:
+            raise ValueError("sglang_serve_stop_timeout_s must be greater than or equal to 0")
+        if settings.sglang_mem_fraction_static is not None and not (
+            0.0 < settings.sglang_mem_fraction_static <= 1.0
+        ):
+            raise ValueError("sglang_mem_fraction_static must be greater than 0 and at most 1")
+        if settings.sglang_chunked_prefill_size == 0 or (
+            settings.sglang_chunked_prefill_size is not None
+            and settings.sglang_chunked_prefill_size < -1
+        ):
+            raise ValueError("sglang_chunked_prefill_size must be -1 or a positive integer")
 
-        host = self._required_field(settings.trtllm_serve_host, "trtllm_serve_host")
-        port = settings.trtllm_serve_port or self._pick_free_port(host)
-        remote_model = settings.trtllm_serve_model_alias or model_name
+        host = self._required_field(settings.sglang_serve_host, "sglang_serve_host")
+        port = settings.sglang_serve_port or self._pick_free_port(host)
+        remote_model = settings.sglang_serve_model_alias or model_name
         base_url = f"http://{host}:{port}/v1"
-        config_path, generated_config_path = self._prepare_runtime_config(settings)
-        try:
-            process, output_log = self._start_process(
-                self._command(
-                    settings=settings,
-                    model_ref=model_ref,
-                    host=host,
-                    port=port,
-                    remote_model=remote_model,
-                    config_path=config_path,
-                ),
+        process, output_log = self._start_process(
+            self._command(
                 settings=settings,
-            )
-        except Exception:
-            if generated_config_path is not None:
-                try:
-                    Path(generated_config_path).unlink(missing_ok=True)
-                except OSError:
-                    LOGGER.warning(
-                        "Failed to remove generated TensorRT-LLM config %s",
-                        generated_config_path,
-                        exc_info=True,
-                    )
-            raise
-        runtime = TrtllmServeModelRuntime(
+                model_ref=model_ref,
+                host=host,
+                port=port,
+                remote_model=remote_model,
+            ),
+            settings=settings,
+        )
+        runtime = SglangServeModelRuntime(
             config=settings,
             process=process,
             base_url=base_url,
-            health_url=f"http://{host}:{port}/health",
+            health_url=f"{base_url}/models",
             remote_model=remote_model,
-            timeout_s=settings.trtllm_serve_timeout_s,
-            stop_timeout_s=settings.trtllm_serve_stop_timeout_s,
+            timeout_s=settings.sglang_serve_timeout_s,
+            api_key=settings.sglang_serve_api_key,
+            stop_timeout_s=settings.sglang_serve_stop_timeout_s,
             output_log=output_log,
-            generated_config_path=generated_config_path,
         )
         try:
-            self._wait_until_ready(runtime, settings.trtllm_serve_start_timeout_s)
+            self._wait_until_ready(runtime, settings.sglang_serve_start_timeout_s)
         except Exception:
             runtime.close()
             raise
@@ -245,104 +220,80 @@ class TrtllmServeEngine:
         host: str,
         port: int,
         remote_model: str,
-        config_path: str | None,
     ) -> list[str]:
-        reserved_batch_arguments = {"--max_batch_size", "--max-batch-size"}
         if any(
-            argument in reserved_batch_arguments
-            or any(
-                argument.startswith(f"{reserved_argument}=")
-                for reserved_argument in reserved_batch_arguments
-            )
-            for argument in settings.trtllm_serve_extra_args
+            argument == "--max-running-requests"
+            or argument.startswith("--max-running-requests=")
+            for argument in settings.sglang_serve_extra_args
         ):
             raise ValueError(
-                "TensorRT-LLM max_batch_size is controlled by target_inflight"
+                "SGLang --max-running-requests is controlled by target_inflight"
             )
         command = [
-            settings.trtllm_serve_binary,
+            settings.sglang_serve_binary,
             "serve",
+            "--model-path",
             model_ref,
             "--host",
             host,
             "--port",
             str(port),
-            "--served_model_name",
+            "--served-model-name",
             remote_model,
-            "--no-telemetry",
+            "--tp-size",
+            str(settings.sglang_tensor_parallel_size),
         ]
-        if config_path is not None:
-            command.extend(["--config", config_path])
-        if settings.trtllm_serve_reasoning_parser is not None:
-            command.extend([
-                "--reasoning_parser",
-                settings.trtllm_serve_reasoning_parser,
-            ])
-        if settings.trtllm_serve_tool_parser is not None:
-            command.extend(["--tool_parser", settings.trtllm_serve_tool_parser])
-        if settings.trtllm_trust_remote_code:
-            command.append("--trust_remote_code")
-        command.extend(settings.trtllm_serve_extra_args)
-        return command
-
-    @staticmethod
-    def _prepare_runtime_config(settings: ModelSettings) -> tuple[str | None, str | None]:
-        top_level_overrides = {
-            "max_seq_len": settings.trtllm_max_seq_len,
-            "max_batch_size": settings.target_inflight,
-            "max_num_tokens": settings.trtllm_max_num_tokens,
-            "enable_chunked_prefill": settings.trtllm_enable_chunked_prefill,
-        }
-        kv_cache_overrides = {
-            "max_gpu_total_bytes": settings.trtllm_kv_cache_memory_bytes,
-            "dtype": settings.trtllm_kv_cache_dtype,
-        }
-        has_overrides = any(
-            value is not None for value in top_level_overrides.values()
-        ) or any(
-            value is not None for value in kv_cache_overrides.values()
+        optional_args = (
+            ("--context-length", settings.sglang_context_length),
+            ("--mem-fraction-static", settings.sglang_mem_fraction_static),
+            ("--max-total-tokens", settings.sglang_max_total_tokens),
+            ("--chunked-prefill-size", settings.sglang_chunked_prefill_size),
+            ("--quantization", settings.sglang_quantization),
+            ("--attention-backend", settings.sglang_attention_backend),
+            ("--fp4-gemm-backend", settings.sglang_fp4_gemm_backend),
+            ("--reasoning-parser", settings.sglang_serve_reasoning_parser),
+            ("--tool-call-parser", settings.sglang_serve_tool_parser),
         )
-        source_path = settings.trtllm_serve_config_path
-        if not has_overrides:
-            return source_path, None
-
-        payload: dict[str, object] = {}
-        if source_path is not None:
-            loaded = yaml.safe_load(Path(source_path).read_text(encoding="utf-8"))
-            if loaded is not None and not isinstance(loaded, dict):
-                raise ValueError("TensorRT-LLM config root must be a mapping")
-            if isinstance(loaded, dict):
-                payload = loaded
-        if "max_batch_size" in payload:
-            raise ValueError(
-                "TensorRT-LLM base config max_batch_size is controlled by target_inflight"
+        for argument, value in optional_args:
+            if value is not None:
+                command.extend([argument, str(value)])
+        if settings.sglang_kv_cache_dtype != "auto":
+            command.extend(["--kv-cache-dtype", settings.sglang_kv_cache_dtype])
+        if settings.sglang_trust_remote_code:
+            command.append("--trust-remote-code")
+        if settings.sglang_speculative_algorithm is not None:
+            command.extend(
+                ["--speculative-algorithm", settings.sglang_speculative_algorithm]
             )
-
-        for key, value in top_level_overrides.items():
-            if value is not None:
-                payload[key] = value
-
-        configured_kv_cache = payload.get("kv_cache_config", {})
-        if configured_kv_cache is None:
-            configured_kv_cache = {}
-        if not isinstance(configured_kv_cache, dict):
-            raise ValueError("TensorRT-LLM kv_cache_config must be a mapping")
-        kv_cache_config = dict(configured_kv_cache)
-        for key, value in kv_cache_overrides.items():
-            if value is not None:
-                kv_cache_config[key] = value
-        if kv_cache_config:
-            payload["kv_cache_config"] = kv_cache_config
-
-        with tempfile.NamedTemporaryFile(
-            mode="w",
-            encoding="utf-8",
-            prefix="llm-pool-trtllm-serve-",
-            suffix=".yaml",
-            delete=False,
-        ) as config_file:
-            yaml.safe_dump(payload, config_file, sort_keys=False)
-            return config_file.name, config_file.name
+            command.extend(
+                ["--speculative-num-steps", str(settings.sglang_speculative_num_steps)]
+            )
+            speculative_num_draft_tokens = (
+                settings.sglang_speculative_num_steps + 1
+                if settings.sglang_speculative_eagle_topk == 1
+                else settings.sglang_speculative_num_draft_tokens
+            )
+            command.extend(
+                [
+                    "--speculative-num-draft-tokens",
+                    str(speculative_num_draft_tokens),
+                ]
+            )
+            command.extend(
+                ["--speculative-eagle-topk", str(settings.sglang_speculative_eagle_topk)]
+            )
+            if settings.sglang_speculative_draft_model is not None:
+                command.extend(
+                    [
+                        "--speculative-draft-model-path",
+                        settings.sglang_speculative_draft_model,
+                    ]
+                )
+        if settings.sglang_serve_api_key is not None:
+            command.extend(["--api-key", settings.sglang_serve_api_key])
+        command.extend(settings.sglang_serve_extra_args)
+        command.extend(["--max-running-requests", str(settings.target_inflight)])
+        return command
 
     def _start_process(
         self,
@@ -351,7 +302,7 @@ class TrtllmServeEngine:
         settings: ModelSettings,
     ) -> tuple[subprocess.Popen, BinaryIO]:
         output_log = tempfile.TemporaryFile(
-            prefix="llm-pool-trtllm-serve-",
+            prefix="llm-pool-sglang-serve-",
             suffix=".log",
         )
         try:
@@ -365,7 +316,7 @@ class TrtllmServeEngine:
             )
         except FileNotFoundError as exc:
             output_log.close()
-            raise RuntimeError(f"TensorRT-LLM serve binary not found: {command[0]}") from exc
+            raise RuntimeError(f"SGLang serve binary not found: {command[0]}") from exc
         except Exception:
             output_log.close()
             raise
@@ -373,9 +324,9 @@ class TrtllmServeEngine:
 
     @staticmethod
     def _subprocess_env(settings: ModelSettings) -> dict[str, str]:
-        binary_dir = os.path.dirname(settings.trtllm_serve_binary)
+        binary_dir = os.path.dirname(settings.sglang_serve_binary)
         env = os.environ.copy()
-        for key, value in settings.trtllm_serve_env:
+        for key, value in settings.sglang_serve_env:
             env[key] = value
         env["PYTHONUNBUFFERED"] = "1"
         path_items = [binary_dir]
@@ -385,30 +336,29 @@ class TrtllmServeEngine:
         existing_path = env.get("PATH", "")
         if existing_path:
             path_items.append(existing_path)
-        if any(path_items):
-            env["PATH"] = os.pathsep.join(item for item in path_items if item)
-        if settings.trtllm_serve_library_path:
+        env["PATH"] = os.pathsep.join(item for item in path_items if item)
+        if settings.sglang_serve_library_path:
             existing_library_path = env.get("LD_LIBRARY_PATH", "")
-            path_items = [*settings.trtllm_serve_library_path]
+            library_items = [*settings.sglang_serve_library_path]
             if existing_library_path:
-                path_items.append(existing_library_path)
-            env["LD_LIBRARY_PATH"] = os.pathsep.join(path_items)
+                library_items.append(existing_library_path)
+            env["LD_LIBRARY_PATH"] = os.pathsep.join(library_items)
         return env
 
     def _wait_until_ready(
         self,
-        runtime: TrtllmServeModelRuntime,
+        runtime: SglangServeModelRuntime,
         start_timeout_s: float,
     ) -> None:
         deadline = time.monotonic() + start_timeout_s
-        last_error = "health endpoint did not respond"
+        last_error = "models endpoint did not respond"
         while time.monotonic() < deadline:
             return_code = runtime.process.poll()
             if return_code is not None:
                 raise RuntimeError(
                     self._startup_failure_message(
                         runtime,
-                        f"TensorRT-LLM serve exited during startup with code {return_code}",
+                        f"SGLang serve exited during startup with code {return_code}",
                     )
                 )
             try:
@@ -420,31 +370,33 @@ class TrtllmServeEngine:
         raise RuntimeError(
             self._startup_failure_message(
                 runtime,
-                "TensorRT-LLM serve did not become ready within "
-                f"{start_timeout_s:g}s: {last_error}",
+                f"SGLang serve did not become ready within {start_timeout_s:g}s: {last_error}",
             )
         )
 
     @staticmethod
     def _startup_failure_message(
-        runtime: TrtllmServeModelRuntime,
+        runtime: SglangServeModelRuntime,
         message: str,
     ) -> str:
         output_tail = runtime.output_tail()
         if output_tail == "":
             return message
-        return f"{message}\nTensorRT-LLM output tail:\n{output_tail}"
+        return f"{message}\nSGLang output tail:\n{output_tail}"
 
-    @staticmethod
-    def _get_health(runtime: TrtllmServeModelRuntime) -> None:
-        request = Request(runtime.health_url, method="GET")
+    def _get_health(self, runtime: SglangServeModelRuntime) -> None:
+        request = Request(
+            runtime.health_url,
+            headers=self._headers(runtime),
+            method="GET",
+        )
         with urlopen(request, timeout=1.0) as response:
             response.read()
 
     def _chat_completions_payload(
         self,
         *,
-        runtime: TrtllmServeModelRuntime,
+        runtime: SglangServeModelRuntime,
         request: ResponseRequest,
         decoding: ResolvedDecoding,
     ) -> dict[str, object]:
@@ -464,9 +416,7 @@ class TrtllmServeEngine:
             runtime.config.enable_thinking,
         )
         if enable_thinking is not None:
-            payload["chat_template_kwargs"] = {
-                "enable_thinking": enable_thinking,
-            }
+            payload["chat_template_kwargs"] = {"enable_thinking": enable_thinking}
         return payload
 
     def _chat_messages(self, request: ResponseRequest) -> list[dict[str, object]]:
@@ -477,19 +427,11 @@ class TrtllmServeEngine:
             for message in request.messages:
                 messages.append(self._message_payload(message))
             return messages
-        messages.append(
-            {
-                "role": "user",
-                "content": self._content_payload(request.input),
-            }
-        )
+        messages.append({"role": "user", "content": self._content_payload(request.input)})
         return messages
 
     def _message_payload(self, message: Message) -> dict[str, object]:
-        return {
-            "role": message.role,
-            "content": self._content_payload(message.content),
-        }
+        return {"role": message.role, "content": self._content_payload(message.content)}
 
     def _content_payload(
         self,
@@ -511,17 +453,14 @@ class TrtllmServeEngine:
 
     def _post_json(
         self,
-        runtime: TrtllmServeModelRuntime,
+        runtime: SglangServeModelRuntime,
         payload: dict[str, object],
     ) -> dict[str, object]:
         data = json.dumps(payload, ensure_ascii=True).encode("utf-8")
         request = Request(
             f"{runtime.base_url}/chat/completions",
             data=data,
-            headers={
-                "Accept": "application/json",
-                "Content-Type": "application/json",
-            },
+            headers=self._headers(runtime),
             method="POST",
         )
         try:
@@ -531,66 +470,71 @@ class TrtllmServeEngine:
             raise self._map_http_error(exc) from exc
         except (TimeoutError, socket.timeout) as exc:
             raise BackendExecutionError(
-                code="trtllm_serve_timeout",
+                code="sglang_serve_timeout",
                 status_code=504,
-                message="TensorRT-LLM serve chat completion timed out",
+                message="SGLang serve chat completion timed out",
             ) from exc
         except URLError as exc:
             if isinstance(exc.reason, (TimeoutError, socket.timeout)):
                 raise BackendExecutionError(
-                    code="trtllm_serve_timeout",
+                    code="sglang_serve_timeout",
                     status_code=504,
-                    message="TensorRT-LLM serve chat completion timed out",
+                    message="SGLang serve chat completion timed out",
                 ) from exc
             raise BackendExecutionError(
-                code="trtllm_serve_connection_error",
+                code="sglang_serve_connection_error",
                 status_code=502,
-                message="TensorRT-LLM serve chat completion connection failed",
+                message="SGLang serve chat completion connection failed",
             ) from exc
 
         try:
             parsed = json.loads(raw_payload.decode("utf-8"))
         except (UnicodeDecodeError, json.JSONDecodeError) as exc:
             raise BackendExecutionError(
-                code="trtllm_serve_response_parse_failure",
+                code="sglang_serve_response_parse_failure",
                 status_code=502,
-                message="TensorRT-LLM serve chat completion returned invalid JSON",
+                message="SGLang serve chat completion returned invalid JSON",
             ) from exc
         if not isinstance(parsed, dict):
             raise BackendExecutionError(
-                code="trtllm_serve_response_parse_failure",
+                code="sglang_serve_response_parse_failure",
                 status_code=502,
-                message=(
-                    "TensorRT-LLM serve chat completion returned a non-object JSON response"
-                ),
+                message="SGLang serve chat completion returned a non-object JSON response",
             )
         return parsed
 
     @staticmethod
+    def _headers(runtime: SglangServeModelRuntime) -> dict[str, str]:
+        headers = {"Accept": "application/json", "Content-Type": "application/json"}
+        if runtime.api_key is not None:
+            headers["Authorization"] = f"Bearer {runtime.api_key}"
+        return headers
+
+    @staticmethod
     def _map_http_error(exc: HTTPError) -> BackendExecutionError:
         status = int(exc.code)
+        if status in {401, 403}:
+            return BackendExecutionError(
+                code="sglang_serve_authentication_failure",
+                status_code=502,
+                message=f"SGLang serve chat completion authentication failed with HTTP {status}",
+            )
         if 400 <= status < 500:
             return BackendExecutionError(
-                code="trtllm_serve_invalid_request",
+                code="sglang_serve_invalid_request",
                 status_code=502,
-                message=(
-                    "TensorRT-LLM serve chat completion rejected the request "
-                    f"with HTTP {status}"
-                ),
+                message=f"SGLang serve chat completion rejected the request with HTTP {status}",
             )
         if status >= 500:
             return BackendExecutionError(
-                code="trtllm_serve_error",
+                code="sglang_serve_error",
                 status_code=502,
-                message=(
-                    "TensorRT-LLM serve chat completion failed "
-                    f"with HTTP {status}"
-                ),
+                message=f"SGLang serve chat completion failed with HTTP {status}",
             )
         return BackendExecutionError(
-            code="trtllm_serve_http_error",
+            code="sglang_serve_http_error",
             status_code=502,
-            message=f"TensorRT-LLM serve chat completion failed with HTTP {status}",
+            message=f"SGLang serve chat completion failed with HTTP {status}",
         )
 
     @staticmethod
@@ -598,45 +542,39 @@ class TrtllmServeEngine:
         choices = payload.get("choices")
         if not isinstance(choices, list) or not choices:
             raise BackendExecutionError(
-                code="trtllm_serve_response_parse_failure",
+                code="sglang_serve_response_parse_failure",
                 status_code=502,
-                message="TensorRT-LLM serve response did not contain choices",
+                message="SGLang serve response did not contain choices",
             )
         first_choice = choices[0]
         if not isinstance(first_choice, dict):
             raise BackendExecutionError(
-                code="trtllm_serve_response_parse_failure",
+                code="sglang_serve_response_parse_failure",
                 status_code=502,
-                message="TensorRT-LLM serve response choice was not an object",
+                message="SGLang serve response choice was not an object",
             )
         message = first_choice.get("message")
         if not isinstance(message, dict):
             raise BackendExecutionError(
-                code="trtllm_serve_response_parse_failure",
+                code="sglang_serve_response_parse_failure",
                 status_code=502,
-                message="TensorRT-LLM serve response choice did not contain a message",
+                message="SGLang serve response choice did not contain a message",
             )
         content = message.get("content")
         if isinstance(content, str):
             text = content.strip()
             reasoning_content = message.get("reasoning_content")
-            if (
-                text == ""
-                and isinstance(reasoning_content, str)
-                and reasoning_content.strip() != ""
-            ):
+            if text == "" and isinstance(reasoning_content, str) and reasoning_content.strip():
                 raise BackendExecutionError(
-                    code="trtllm_serve_incomplete_response",
+                    code="sglang_serve_incomplete_response",
                     status_code=502,
-                    message=(
-                        "TensorRT-LLM serve response ended before producing final content"
-                    ),
+                    message="SGLang serve response ended before producing final content",
                 )
             return text
         raise BackendExecutionError(
-            code="trtllm_serve_response_parse_failure",
+            code="sglang_serve_response_parse_failure",
             status_code=502,
-            message="TensorRT-LLM serve response message content was not text",
+            message="SGLang serve response message content was not text",
         )
 
     def _extract_usage(self, payload: dict[str, object]) -> tuple[int | None, int | None]:
@@ -658,7 +596,7 @@ class TrtllmServeEngine:
             "%s",
             json.dumps(
                 {
-                    "event": "llm_pool.trtllm_serve_unsupported_decoding",
+                    "event": "llm_pool.sglang_serve_unsupported_decoding",
                     "ignored": {"beam_size": request.decoding.beam_size},
                     "model": request.model,
                 },
@@ -675,16 +613,8 @@ class TrtllmServeEngine:
                 if request_decoding.beam_size is not None
                 else defaults.beam_size
             ),
-            top_k=(
-                request_decoding.top_k
-                if request_decoding.top_k is not None
-                else defaults.top_k
-            ),
-            top_p=(
-                request_decoding.top_p
-                if request_decoding.top_p is not None
-                else defaults.top_p
-            ),
+            top_k=request_decoding.top_k if request_decoding.top_k is not None else defaults.top_k,
+            top_p=request_decoding.top_p if request_decoding.top_p is not None else defaults.top_p,
             temperature=(
                 request_decoding.temperature
                 if request_decoding.temperature is not None
@@ -700,30 +630,21 @@ class TrtllmServeEngine:
                 if request_decoding.max_tokens is not None
                 else defaults.max_tokens
             ),
-            stop=(
-                list(request_decoding.stop)
-                if request_decoding.stop
-                else list(defaults.stop)
-            ),
+            stop=list(request_decoding.stop) if request_decoding.stop else list(defaults.stop),
         )
 
     @staticmethod
     def _model_ref(settings: ModelSettings) -> str:
-        model_ref = (settings.trtllm_model or settings.model_path or "").strip()
+        model_ref = (settings.sglang_model or settings.model_path or "").strip()
         if model_ref == "":
-            raise ValueError(
-                "trtllm_serve backend requires model_path or trtllm_model to be set"
-            )
+            raise ValueError("sglang_serve backend requires model_path or sglang_model to be set")
         return model_ref
 
     @staticmethod
     def _required_field(value: str | None, field_name: str) -> str:
-        if value is None:
-            raise ValueError(f"{field_name} is required for trtllm_serve models")
-        parsed = value.strip()
-        if parsed == "":
-            raise ValueError(f"{field_name} is required for trtllm_serve models")
-        return parsed
+        if value is None or value.strip() == "":
+            raise ValueError(f"{field_name} is required for sglang_serve models")
+        return value.strip()
 
     @staticmethod
     def _pick_free_port(host: str) -> int:

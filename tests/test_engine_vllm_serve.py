@@ -62,6 +62,32 @@ class FakeProcess:
 
 @unittest.skipUnless(HAS_PYDANTIC, "pydantic not installed")
 class VllmServeEngineTests(unittest.TestCase):
+    def test_rejects_max_num_seqs_in_extra_args(self) -> None:
+        for extra_args in (
+            ("--max-num-seqs", "8"),
+            ("--max-num-seqs=8",),
+            ("--max_num_seqs", "8"),
+            ("--max_num_seqs=8",),
+        ):
+            with self.subTest(extra_args=extra_args):
+                settings = ModelSettings(
+                    model_path=None,
+                    backend="vllm_serve",
+                    vllm_model="/models/gemma4",
+                    vllm_serve_extra_args=extra_args,
+                )
+
+                with self.assertRaisesRegex(ValueError, "controlled by target_inflight"):
+                    vllm_serve_module.VllmServeEngine.__new__(
+                        vllm_serve_module.VllmServeEngine
+                    )._command(
+                        settings=settings,
+                        model_ref="/models/gemma4",
+                        host="127.0.0.1",
+                        port=18090,
+                        remote_model="gemma4",
+                    )
+
     def test_chat_completion_payload_uses_default_top_k(self) -> None:
         engine = vllm_serve_module.VllmServeEngine.__new__(
             vllm_serve_module.VllmServeEngine
@@ -90,6 +116,7 @@ class VllmServeEngineTests(unittest.TestCase):
                     "gemma4": ModelSettings(
                         model_path=None,
                         backend="vllm_serve",
+                        target_inflight=7,
                         vllm_model="/models/nvidia/Gemma-4-26B-A4B-NVFP4",
                         vllm_dtype="auto",
                         vllm_gpu_memory_utilization=0.55,
@@ -200,6 +227,7 @@ class VllmServeEngineTests(unittest.TestCase):
         self.assertEqual(command[command.index("--served-model-name") + 1], "gemma-local")
         self.assertEqual(command[command.index("--dtype") + 1], "auto")
         self.assertEqual(command[command.index("--tensor-parallel-size") + 1], "1")
+        self.assertEqual(command[command.index("--max-num-seqs") + 1], "7")
         self.assertEqual(command[command.index("--gpu-memory-utilization") + 1], "0.55")
         self.assertEqual(command[command.index("--kv-cache-memory-bytes") + 1], "2147483648")
         self.assertEqual(command[command.index("--kv-cache-dtype") + 1], "fp8")

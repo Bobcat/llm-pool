@@ -269,6 +269,7 @@ class ModelRouterEngine:
                 model_name=model_name,
                 backend_engine=target_engine,
                 replica_ids=replica_ids,
+                target_inflight=scoped_model_settings.target_inflight,
             )
             state = self._model_states[model_name]
             state.lifecycle = "loaded"
@@ -562,18 +563,29 @@ class ModelRouterEngine:
             )
         return executor.snapshot()
 
-    def _register_executor_group(self, *, model_name: str, backend_engine: object, replica_ids: list[str]) -> None:
+    def _register_executor_group(
+        self,
+        *,
+        model_name: str,
+        backend_engine: object,
+        replica_ids: list[str],
+        target_inflight: int,
+    ) -> None:
         self._scheduler.register(
             model_name=model_name,
             replicas=[
                 ReplicaRegistration(
                     replica_id=replica_id,
                     complete_fn=self._runtime_complete_fn(backend_engine, replica_id),
-                    runtime_capability=self._runtime_capability_for_model(model_name, backend_engine),
+                    runtime_capability=self._runtime_capability_for_model(
+                        model_name,
+                        backend_engine,
+                        target_inflight=target_inflight,
+                    ),
                 )
                 for replica_id in replica_ids
             ],
-            configured_target_inflight=self._configured_models[model_name].target_inflight,
+            configured_target_inflight=target_inflight,
         )
 
     def _runtime_complete_fn(self, backend_engine: object, replica_id: str):
@@ -582,11 +594,23 @@ class ModelRouterEngine:
 
         return _complete
 
-    def _runtime_capability_for_model(self, model_name: str, backend_engine: object) -> int:
+    def _runtime_capability_for_model(
+        self,
+        model_name: str,
+        backend_engine: object,
+        *,
+        target_inflight: int,
+    ) -> int:
         del backend_engine
         state = self._model_states[model_name]
-        if state.resolved_backend in {"openai_remote", "trtllm_serve", "vllm_serve"}:
-            return self._configured_models[model_name].target_inflight
+        if state.resolved_backend in {
+            "llama_server",
+            "openai_remote",
+            "sglang_serve",
+            "trtllm_serve",
+            "vllm_serve",
+        }:
+            return target_inflight
         return 1
 
     def _cleanup_runtime(self, runtime: object | None) -> None:
@@ -789,6 +813,29 @@ class ModelRouterEngine:
         if not load_override:
             return replace(model_settings, enabled=True)
 
+        load_override = dict(load_override)
+        if "target_inflight" in load_override:
+            if resolved_backend not in {
+                "llama_server",
+                "openai_remote",
+                "sglang_serve",
+                "trtllm_serve",
+                "vllm_serve",
+            }:
+                raise ValueError(
+                    f"unsupported load override for {resolved_backend} backend: target_inflight"
+                )
+            target_inflight = load_override.pop("target_inflight")
+            if not isinstance(target_inflight, int) or target_inflight <= 0:
+                raise ValueError("target_inflight load override must be a positive integer")
+            model_settings = replace(
+                model_settings,
+                enabled=True,
+                target_inflight=target_inflight,
+            )
+            if not load_override:
+                return model_settings
+
         if resolved_backend == "llama_cpp":
             unsupported = sorted(
                 field_name
@@ -972,6 +1019,157 @@ class ModelRouterEngine:
 
             return replace(model_settings, **replacement_kwargs)
 
+        if resolved_backend == "trtllm_serve":
+            supported = {
+                "trtllm_max_seq_len",
+                "trtllm_kv_cache_memory_bytes",
+                "trtllm_max_num_tokens",
+                "trtllm_enable_chunked_prefill",
+                "trtllm_kv_cache_dtype",
+            }
+            unsupported = sorted(
+                field_name
+                for field_name in load_override
+                if field_name not in supported
+            )
+            if unsupported:
+                names = ", ".join(unsupported)
+                raise ValueError(f"unsupported load override for trtllm_serve backend: {names}")
+
+            replacement_kwargs: dict[str, object | None] = {"enabled": True}
+            positive_integer_fields = {
+                "trtllm_max_seq_len",
+                "trtllm_kv_cache_memory_bytes",
+                "trtllm_max_num_tokens",
+            }
+            for field_name in positive_integer_fields & load_override.keys():
+                value = load_override[field_name]
+                if not isinstance(value, int) or value <= 0:
+                    raise ValueError(f"{field_name} load override must be a positive integer")
+                replacement_kwargs[field_name] = value
+
+            if "trtllm_enable_chunked_prefill" in load_override:
+                chunked_prefill = load_override["trtllm_enable_chunked_prefill"]
+                if not isinstance(chunked_prefill, bool):
+                    raise ValueError(
+                        "trtllm_enable_chunked_prefill load override must be a boolean"
+                    )
+                replacement_kwargs["trtllm_enable_chunked_prefill"] = chunked_prefill
+
+            if "trtllm_kv_cache_dtype" in load_override:
+                kv_cache_dtype = load_override["trtllm_kv_cache_dtype"]
+                if not isinstance(kv_cache_dtype, str):
+                    raise ValueError(
+                        "trtllm_kv_cache_dtype load override must be one of: auto, fp8, nvfp4"
+                    )
+                normalized_dtype = kv_cache_dtype.strip().lower()
+                if normalized_dtype not in {"auto", "fp8", "nvfp4"}:
+                    raise ValueError(
+                        "trtllm_kv_cache_dtype load override must be one of: auto, fp8, nvfp4"
+                    )
+                replacement_kwargs["trtllm_kv_cache_dtype"] = normalized_dtype
+
+            return replace(model_settings, **replacement_kwargs)
+
+        if resolved_backend == "sglang_serve":
+            supported = {
+                "sglang_context_length",
+                "sglang_mem_fraction_static",
+                "sglang_max_total_tokens",
+                "sglang_chunked_prefill_size",
+                "sglang_kv_cache_dtype",
+                "sglang_speculative_algorithm",
+                "sglang_speculative_draft_model",
+                "sglang_speculative_num_steps",
+                "sglang_speculative_num_draft_tokens",
+                "sglang_speculative_eagle_topk",
+            }
+            unsupported = sorted(set(load_override) - supported)
+            if unsupported:
+                names = ", ".join(unsupported)
+                raise ValueError(f"unsupported load override for sglang_serve backend: {names}")
+
+            replacement_kwargs: dict[str, object | None] = {"enabled": True}
+            positive_integer_fields = {
+                "sglang_context_length",
+                "sglang_max_total_tokens",
+                "sglang_speculative_num_steps",
+                "sglang_speculative_num_draft_tokens",
+                "sglang_speculative_eagle_topk",
+            }
+            for field_name in positive_integer_fields & load_override.keys():
+                value = load_override[field_name]
+                if not isinstance(value, int) or value <= 0:
+                    raise ValueError(f"{field_name} load override must be a positive integer")
+                replacement_kwargs[field_name] = value
+
+            if "sglang_mem_fraction_static" in load_override:
+                value = load_override["sglang_mem_fraction_static"]
+                if (
+                    not isinstance(value, (float, int))
+                    or isinstance(value, bool)
+                    or value <= 0.0
+                    or value > 1.0
+                ):
+                    raise ValueError(
+                        "sglang_mem_fraction_static load override must be greater than 0 and at most 1"
+                    )
+                replacement_kwargs["sglang_mem_fraction_static"] = float(value)
+
+            if "sglang_chunked_prefill_size" in load_override:
+                value = load_override["sglang_chunked_prefill_size"]
+                if not isinstance(value, int) or value == 0 or value < -1:
+                    raise ValueError(
+                        "sglang_chunked_prefill_size load override must be -1 or a positive integer"
+                    )
+                replacement_kwargs["sglang_chunked_prefill_size"] = value
+
+            string_or_null_fields = {
+                "sglang_speculative_algorithm",
+                "sglang_speculative_draft_model",
+            }
+            for field_name in string_or_null_fields & load_override.keys():
+                value = load_override[field_name]
+                if value is not None:
+                    if not isinstance(value, str) or value.strip() == "":
+                        raise ValueError(
+                            f"{field_name} load override must be a non-empty string or null"
+                        )
+                    value = value.strip()
+                replacement_kwargs[field_name] = value
+
+            if "sglang_kv_cache_dtype" in load_override:
+                value = load_override["sglang_kv_cache_dtype"]
+                if not isinstance(value, str) or value.strip() == "":
+                    raise ValueError(
+                        "sglang_kv_cache_dtype load override must be a non-empty string"
+                    )
+                replacement_kwargs["sglang_kv_cache_dtype"] = value.strip().lower()
+
+            effective_settings = replace(model_settings, **replacement_kwargs)
+            if (
+                effective_settings.sglang_speculative_algorithm is not None
+                and effective_settings.sglang_speculative_eagle_topk == 1
+            ):
+                expected_draft_tokens = (
+                    effective_settings.sglang_speculative_num_steps + 1
+                )
+                if (
+                    "sglang_speculative_num_draft_tokens" in load_override
+                    and effective_settings.sglang_speculative_num_draft_tokens
+                    != expected_draft_tokens
+                ):
+                    raise ValueError(
+                        "sglang_speculative_num_draft_tokens must equal "
+                        "sglang_speculative_num_steps + 1 when "
+                        "sglang_speculative_eagle_topk is 1"
+                    )
+                effective_settings = replace(
+                    effective_settings,
+                    sglang_speculative_num_draft_tokens=expected_draft_tokens,
+                )
+            return effective_settings
+
         if resolved_backend == "llama_server":
             unsupported = sorted(
                 field_name
@@ -1051,6 +1249,8 @@ class ModelRouterEngine:
             return engine_module.LlamaServerEngine(settings)
         if backend == "openai_remote":
             return engine_module.OpenAIRemoteEngine(settings)
+        if backend == "sglang_serve":
+            return engine_module.SglangServeEngine(settings)
         if backend == "trtllm_serve":
             return engine_module.TrtllmServeEngine(settings)
         if backend == "vllm":

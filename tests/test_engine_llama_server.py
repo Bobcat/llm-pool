@@ -60,6 +60,26 @@ class FakeProcess:
 
 @unittest.skipUnless(HAS_PYDANTIC, "pydantic not installed")
 class LlamaServerEngineTests(unittest.TestCase):
+    def test_rejects_parallel_in_extra_args(self) -> None:
+        for extra_args in (("-np", "8"), ("--parallel", "8"), ("--parallel=8",)):
+            with self.subTest(extra_args=extra_args):
+                settings = ModelSettings(
+                    model_path="/models/gemma.gguf",
+                    backend="llama_server",
+                    llama_server_extra_args=extra_args,
+                )
+
+                with self.assertRaisesRegex(ValueError, "controlled by target_inflight"):
+                    llama_server_module.LlamaServerEngine.__new__(
+                        llama_server_module.LlamaServerEngine
+                    )._command(
+                        settings=settings,
+                        model_path="/models/gemma.gguf",
+                        host="127.0.0.1",
+                        port=18089,
+                        remote_model="gemma4",
+                    )
+
     def test_starts_llama_server_and_posts_multimodal_chat_completion(self) -> None:
         settings = AppSettings(
             engine=EngineSettings(
@@ -73,6 +93,7 @@ class LlamaServerEngineTests(unittest.TestCase):
                     "gemma4": ModelSettings(
                         model_path="/models/gemma.gguf",
                         backend="llama_server",
+                        target_inflight=3,
                         llama_server_binary="/opt/llama-server",
                         llama_server_host="127.0.0.1",
                         llama_server_port=18089,
@@ -156,6 +177,7 @@ class LlamaServerEngineTests(unittest.TestCase):
         self.assertIn("--no-ui", command)
         self.assertEqual(command[command.index("-fa") + 1], "on")
         self.assertEqual(command[command.index("-c") + 1], "4096")
+        self.assertEqual(command[command.index("--parallel") + 1], "3")
         self.assertEqual(command[command.index("-ngl") + 1], "999")
         self.assertEqual(command[command.index("--mmproj") + 1], "/models/mmproj.gguf")
         self.assertEqual(command[command.index("--image-max-tokens") + 1], "512")

@@ -922,6 +922,7 @@ class ApiTests(unittest.TestCase):
                                 }
                             },
                             "load_override": {
+                                "target_inflight": 4,
                                 "gguf_n_ctx": 32768,
                                 "gguf_flash_attn": "auto",
                                 "gguf_type_k": "q8_0",
@@ -960,6 +961,7 @@ class ApiTests(unittest.TestCase):
             "/v1/admin/models/gguf-model/load",
             json={
                 "replicas": 2,
+                "target_inflight": 4,
                 "gguf_n_ctx": 32768,
                 "gguf_flash_attn": "auto",
                 "gguf_type_k": "q8_0",
@@ -970,6 +972,7 @@ class ApiTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual(captured["model_name"], "gguf-model")
         self.assertEqual(captured["load_request"].replicas, 2)
+        self.assertEqual(captured["load_request"].target_inflight, 4)
         self.assertEqual(captured["load_request"].gguf_n_ctx, 32768)
         self.assertEqual(captured["load_request"].gguf_flash_attn, "auto")
         self.assertEqual(captured["load_request"].gguf_type_k, "q8_0")
@@ -977,7 +980,13 @@ class ApiTests(unittest.TestCase):
         self.assertEqual(response.json()["loaded_replicas"], 2)
         self.assertEqual(
             response.json()["load_override"],
-            {"gguf_n_ctx": 32768, "gguf_flash_attn": "auto", "gguf_type_k": "q8_0", "gguf_type_v": "q4_0"},
+            {
+                "target_inflight": 4,
+                "gguf_n_ctx": 32768,
+                "gguf_flash_attn": "auto",
+                "gguf_type_k": "q8_0",
+                "gguf_type_v": "q4_0",
+            },
         )
 
     def test_load_model_endpoint_rejects_unknown_model(self) -> None:

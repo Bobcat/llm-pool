@@ -9,6 +9,25 @@ from app.config import load_settings
 
 
 class ConfigTests(unittest.TestCase):
+    def test_default_settings_include_sglang_gemma4_model(self) -> None:
+        settings = load_settings()
+        model = settings.engine.models[
+            "gemma-4-26b-a4b-it-nvidia-nvfp4-sglang-serve"
+        ]
+
+        self.assertEqual(model.backend, "sglang_serve")
+        self.assertEqual(model.sglang_context_length, 20480)
+        self.assertEqual(model.sglang_mem_fraction_static, 0.35)
+        self.assertEqual(model.sglang_max_total_tokens, 20480)
+        self.assertEqual(model.sglang_kv_cache_dtype, "fp8_e4m3")
+        self.assertEqual(model.sglang_speculative_algorithm, "NEXTN")
+        self.assertEqual(
+            model.sglang_speculative_draft_model,
+            "google/gemma-4-26B-A4B-it-assistant",
+        )
+        self.assertEqual(dict(model.sglang_serve_env)["MAX_JOBS"], "4")
+        self.assertFalse(model.enabled)
+
     def test_load_settings_reads_engine_model_registry(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             path = Path(tmpdir) / "settings.json"
@@ -520,8 +539,14 @@ class ConfigTests(unittest.TestCase):
                     '    "models": {\n'
                     '      "gemma4-trtllm": {\n'
                     '        "backend": "trtllm_serve",\n'
+                    '        "target_inflight": 4,\n'
                     '        "trtllm_model": "/models/nvidia/Gemma-4-26B-A4B-NVFP4",\n'
                     '        "trtllm_trust_remote_code": true,\n'
+                    '        "trtllm_max_seq_len": 20480,\n'
+                    '        "trtllm_kv_cache_memory_bytes": 8589934592,\n'
+                    '        "trtllm_max_num_tokens": 8192,\n'
+                    '        "trtllm_enable_chunked_prefill": false,\n'
+                    '        "trtllm_kv_cache_dtype": "fp8",\n'
                     '        "trtllm_serve_binary": "/opt/trtllm/bin/trtllm-serve",\n'
                     '        "trtllm_serve_host": "127.0.0.1",\n'
                     '        "trtllm_serve_port": 18091,\n'
@@ -533,8 +558,7 @@ class ConfigTests(unittest.TestCase):
                     '        "trtllm_serve_env": {"CUDA_HOME": "/cuda"},\n'
                     '        "trtllm_serve_config_path": "/models/gemma4-trtllm.yaml",\n'
                     '        "trtllm_serve_reasoning_parser": "gemma4",\n'
-                    '        "trtllm_serve_tool_parser": "gemma4",\n'
-                    '        "trtllm_serve_extra_args": ["--max_batch_size", "4"]\n'
+                    '        "trtllm_serve_tool_parser": "gemma4"\n'
                     "      }\n"
                     "    }\n"
                     "  }\n"
@@ -553,6 +577,12 @@ class ConfigTests(unittest.TestCase):
             "/models/nvidia/Gemma-4-26B-A4B-NVFP4",
         )
         self.assertTrue(model.trtllm_trust_remote_code)
+        self.assertEqual(model.target_inflight, 4)
+        self.assertEqual(model.trtllm_max_seq_len, 20480)
+        self.assertEqual(model.trtllm_kv_cache_memory_bytes, 8589934592)
+        self.assertEqual(model.trtllm_max_num_tokens, 8192)
+        self.assertFalse(model.trtllm_enable_chunked_prefill)
+        self.assertEqual(model.trtllm_kv_cache_dtype, "fp8")
         self.assertEqual(
             model.trtllm_serve_binary,
             "/opt/trtllm/bin/trtllm-serve",
@@ -573,10 +603,6 @@ class ConfigTests(unittest.TestCase):
         )
         self.assertEqual(model.trtllm_serve_reasoning_parser, "gemma4")
         self.assertEqual(model.trtllm_serve_tool_parser, "gemma4")
-        self.assertEqual(
-            model.trtllm_serve_extra_args,
-            ("--max_batch_size", "4"),
-        )
 
     def test_load_settings_defaults_target_inflight_to_one(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:

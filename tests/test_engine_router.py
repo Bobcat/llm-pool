@@ -294,9 +294,11 @@ class ModelRouterEngineTests(unittest.TestCase):
         with mock.patch.object(engine_module, "LlamaServerEngine", FakeLlamaServerEngine):
             engine = ModelRouterEngine(settings)
             result = engine.complete(ResponseRequest(model="llama-model", input="hello"))
+            model = engine.admin_models_payload()["models"][0]
             entry = engine.unload_model("llama-model")
 
         self.assertEqual(result.text, "llama-server:llama-model#1")
+        self.assertEqual(model["effective_target_inflight"], 3)
         self.assertEqual(entry["runtime_state"], "unloaded")
         self.assertTrue(runtime.closed)
 
@@ -392,6 +394,59 @@ class ModelRouterEngineTests(unittest.TestCase):
         )
         self.assertEqual(model["capabilities"]["response_formats"], ["text"])
         self.assertEqual(model["definition"]["trtllm_model"], "/models/gemma4")
+        self.assertEqual(entry["runtime_state"], "unloaded")
+        self.assertTrue(runtime.closed)
+
+    def test_dispatches_sglang_serve_backend_as_local_runtime(self) -> None:
+        settings = AppSettings(
+            service=ServiceSettings(),
+            engine=EngineSettings(
+                backend="ct2",
+                models={
+                    "sglang-model": ModelSettings(
+                        model_path=None,
+                        backend="sglang_serve",
+                        prompt_format="gemma4_template",
+                        sglang_model="/models/gemma4",
+                        target_inflight=4,
+                    ),
+                },
+            ),
+        )
+        runtime = types.SimpleNamespace(closed=False)
+
+        def close_runtime() -> None:
+            runtime.closed = True
+
+        runtime.close = close_runtime
+
+        class FakeSglangServeEngine:
+            def __init__(self, scoped_settings):
+                self._models = {name: runtime for name in scoped_settings.engine.models}
+                self._load_errors = {}
+
+            def complete(self, request: ResponseRequest) -> EngineResult:
+                return EngineResult(text=f"sglang-serve:{request.model}")
+
+        with mock.patch.object(
+            engine_module,
+            "SglangServeEngine",
+            FakeSglangServeEngine,
+        ):
+            engine = ModelRouterEngine(settings)
+            result = engine.complete(
+                ResponseRequest(model="sglang-model", input="hello")
+            )
+            model = engine.admin_models_payload()["models"][0]
+            entry = engine.unload_model("sglang-model")
+
+        self.assertEqual(result.text, "sglang-serve:sglang-model#1")
+        self.assertEqual(model["effective_target_inflight"], 4)
+        self.assertEqual(
+            model["capabilities"]["thinking_modes"],
+            ["default", "enabled", "disabled"],
+        )
+        self.assertEqual(model["definition"]["sglang_model"], "/models/gemma4")
         self.assertEqual(entry["runtime_state"], "unloaded")
         self.assertTrue(runtime.closed)
 
@@ -1001,6 +1056,64 @@ class ModelRouterEngineTests(unittest.TestCase):
         self.assertEqual(entry["replica_max"], 3)
         self.assertEqual(entry["loaded_replicas"], 2)
         self.assertEqual(sorted(engine._models.keys()), ["replica-model#1", "replica-model#2"])
+
+    def test_load_model_can_override_target_inflight_while_unloaded(self) -> None:
+        settings = AppSettings(
+            service=ServiceSettings(),
+            engine=EngineSettings(
+                backend="ct2",
+                models={
+                    "trtllm-model": ModelSettings(
+                        model_path=None,
+                        backend="trtllm_serve",
+                        trtllm_model="/models/gemma4",
+                        enabled=False,
+                        target_inflight=2,
+                    ),
+                },
+            ),
+        )
+        captured: dict[str, int] = {}
+
+        class FakeTrtllmServeEngine:
+            def __init__(self, scoped_settings):
+                self._models = {name: object() for name in scoped_settings.engine.models}
+                self._load_errors = {}
+                captured["target_inflight"] = next(
+                    iter(scoped_settings.engine.models.values())
+                ).target_inflight
+
+            def complete(self, request: ResponseRequest) -> EngineResult:
+                return EngineResult(text=f"trtllm-serve:{request.model}")
+
+        with mock.patch.object(
+            engine_module,
+            "TrtllmServeEngine",
+            FakeTrtllmServeEngine,
+        ):
+            engine = ModelRouterEngine(settings)
+            loaded = engine.load_model(
+                "trtllm-model",
+                AdminLoadRequest(target_inflight=6),
+            )
+            unloaded = engine.unload_model("trtllm-model")
+
+        self.assertEqual(captured["target_inflight"], 6)
+        self.assertEqual(loaded["configured_target_inflight"], 6)
+        self.assertEqual(loaded["effective_target_inflight"], 6)
+        self.assertEqual(loaded["load_override"], {"target_inflight": 6})
+        self.assertEqual(loaded["definition"]["target_inflight"], 2)
+        self.assertEqual(unloaded["configured_target_inflight"], 2)
+        self.assertEqual(unloaded["effective_target_inflight"], 1)
+        self.assertEqual(unloaded["load_override"], {})
+
+    def test_target_inflight_load_override_is_rejected_for_clamped_backend(self) -> None:
+        with self.assertRaisesRegex(ValueError, "unsupported load override"):
+            ModelRouterEngine.__new__(ModelRouterEngine)._apply_load_override(
+                ModelSettings(model_path="/models/test.gguf", backend="llama_cpp"),
+                resolved_backend="llama_cpp",
+                load_override={"target_inflight": 2},
+            )
 
     def test_scheduler_distributes_work_across_loaded_replicas(self) -> None:
         settings = AppSettings(

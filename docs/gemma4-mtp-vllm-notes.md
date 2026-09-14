@@ -24,8 +24,8 @@ Current reality note:
   been run end to end through `vllm_serve` with image input. The local
   document-structure OCR benchmark currently uses
   `vllm_num_speculative_tokens: 8`; the README records the observed sweep.
-- The NVIDIA `vllm_serve` Gemma 4 NVFP4 profile uses matching concurrency
-  limits: `target_inflight: 4` in `llm-pool` and `--max-num-seqs 4` in vLLM.
+- The NVIDIA `vllm_serve` Gemma 4 NVFP4 profile uses `target_inflight: 4`.
+  llm-pool maps it to vLLM `--max-num-seqs 4`.
   It combines those limits with `vllm_max_model_len: 20480` and an explicit
   2 GiB KV-cache budget. Four concurrent long text requests and four concurrent
   image-structure requests completed without preemption or request errors.
