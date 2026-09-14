@@ -232,6 +232,7 @@ class ResponseEnvelope(BaseModel):
 
 class AdminLoadRequest(BaseModel):
     replicas: int | None = Field(default=None, ge=1)
+    target_inflight: int | None = Field(default=None, ge=1)
     gguf_n_ctx: int | None = Field(default=None, ge=1)
     gguf_flash_attn: str | None = None
     gguf_type_k: str | None = None
@@ -250,6 +251,21 @@ class AdminLoadRequest(BaseModel):
     vllm_speculative_moe_backend: str | None = None
     vllm_speculative_attention_backend: str | None = None
     vllm_num_speculative_tokens: int | None = Field(default=None, ge=1)
+    trtllm_max_seq_len: int | None = Field(default=None, ge=1)
+    trtllm_kv_cache_memory_bytes: int | None = Field(default=None, ge=1)
+    trtllm_max_num_tokens: int | None = Field(default=None, ge=1)
+    trtllm_enable_chunked_prefill: bool | None = None
+    trtllm_kv_cache_dtype: str | None = None
+    sglang_context_length: int | None = Field(default=None, ge=1)
+    sglang_mem_fraction_static: float | None = Field(default=None, gt=0.0, le=1.0)
+    sglang_max_total_tokens: int | None = Field(default=None, ge=1)
+    sglang_chunked_prefill_size: int | None = None
+    sglang_kv_cache_dtype: str | None = None
+    sglang_speculative_algorithm: str | None = None
+    sglang_speculative_draft_model: str | None = None
+    sglang_speculative_num_steps: int | None = Field(default=None, ge=1)
+    sglang_speculative_num_draft_tokens: int | None = Field(default=None, ge=1)
+    sglang_speculative_eagle_topk: int | None = Field(default=None, ge=1)
     llama_server_n_ctx: int | None = Field(default=None, ge=1)
     llama_server_image_max_tokens: int | None = Field(default=None, ge=1)
     llama_server_spec_type: str | None = None

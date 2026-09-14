@@ -218,6 +218,7 @@ class VllmServeEngine:
         if settings.vllm_serve_api_key is not None:
             command.extend(["--api-key", settings.vllm_serve_api_key])
         command.extend(settings.vllm_serve_extra_args)
+        command.extend(["--max-num-seqs", str(settings.target_inflight)])
         return command
 
     def _start_process(self, command: list[str], *, settings: ModelSettings) -> subprocess.Popen:

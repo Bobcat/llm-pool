@@ -6,7 +6,10 @@ import signal
 import subprocess
 import tempfile
 import unittest
+from pathlib import Path
 from unittest import mock
+
+import yaml
 
 HAS_PYDANTIC = importlib.util.find_spec("pydantic") is not None
 
@@ -53,6 +56,67 @@ class FakeProcess:
 
 @unittest.skipUnless(HAS_PYDANTIC, "pydantic not installed")
 class TrtllmServeEngineTests(unittest.TestCase):
+    def test_rejects_max_batch_size_in_extra_args(self) -> None:
+        settings = ModelSettings(
+            model_path=None,
+            backend="trtllm_serve",
+            trtllm_serve_extra_args=("--max_batch_size", "8"),
+        )
+
+        with self.assertRaisesRegex(ValueError, "controlled by target_inflight"):
+            trtllm_serve_module.TrtllmServeEngine.__new__(
+                trtllm_serve_module.TrtllmServeEngine
+            )._command(
+                settings=settings,
+                model_ref="/models/gemma4",
+                host="127.0.0.1",
+                port=18091,
+                remote_model="gemma4",
+                config_path=None,
+            )
+
+    def test_runtime_config_merges_load_settings_into_base_yaml(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            base_config_path = Path(tmpdir) / "base.yaml"
+            base_config_path.write_text(
+                "kv_cache_config:\n"
+                "  enable_block_reuse: false\n"
+                "  free_gpu_memory_fraction: 0.9\n",
+                encoding="utf-8",
+            )
+            settings = ModelSettings(
+                model_path=None,
+                backend="trtllm_serve",
+                target_inflight=4,
+                trtllm_serve_config_path=str(base_config_path),
+                trtllm_max_seq_len=20480,
+                trtllm_kv_cache_memory_bytes=8589934592,
+                trtllm_max_num_tokens=8192,
+                trtllm_enable_chunked_prefill=True,
+                trtllm_kv_cache_dtype="fp8",
+            )
+
+            config_path, generated_config_path = (
+                trtllm_serve_module.TrtllmServeEngine._prepare_runtime_config(settings)
+            )
+            self.addCleanup(Path(generated_config_path).unlink, missing_ok=True)
+            payload = yaml.safe_load(Path(config_path).read_text(encoding="utf-8"))
+
+        self.assertEqual(payload["max_seq_len"], 20480)
+        self.assertEqual(payload["max_batch_size"], 4)
+        self.assertEqual(payload["max_num_tokens"], 8192)
+        self.assertTrue(payload["enable_chunked_prefill"])
+        self.assertEqual(
+            payload["kv_cache_config"],
+            {
+                "enable_block_reuse": False,
+                "free_gpu_memory_fraction": 0.9,
+                "max_gpu_total_bytes": 8589934592,
+                "dtype": "fp8",
+            },
+        )
+        self.assertEqual(config_path, generated_config_path)
+
     def test_starts_server_and_posts_multimodal_chat_completion(self) -> None:
         settings = AppSettings(
             engine=EngineSettings(
@@ -68,6 +132,7 @@ class TrtllmServeEngineTests(unittest.TestCase):
                     "gemma4": ModelSettings(
                         model_path=None,
                         backend="trtllm_serve",
+                        target_inflight=4,
                         prompt_format="gemma4_template",
                         enable_thinking=True,
                         trtllm_model="/models/nvidia/Gemma-4-26B-A4B-NVFP4",
@@ -81,10 +146,8 @@ class TrtllmServeEngineTests(unittest.TestCase):
                         trtllm_serve_stop_timeout_s=2.0,
                         trtllm_serve_library_path=("/opt/openmpi/lib", "/cuda/lib"),
                         trtllm_serve_env=(("CUDA_HOME", "/cuda"),),
-                        trtllm_serve_config_path="/models/gemma4-trtllm.yaml",
                         trtllm_serve_reasoning_parser="gemma4",
                         trtllm_serve_tool_parser="gemma4",
-                        trtllm_serve_extra_args=("--max_batch_size", "4"),
                     ),
                 },
             ),
@@ -163,10 +226,7 @@ class TrtllmServeEngineTests(unittest.TestCase):
             command[command.index("--served_model_name") + 1],
             "gemma-local",
         )
-        self.assertEqual(
-            command[command.index("--config") + 1],
-            "/models/gemma4-trtllm.yaml",
-        )
+        self.assertIn("--config", command)
         self.assertEqual(
             command[command.index("--reasoning_parser") + 1],
             "gemma4",
@@ -174,7 +234,6 @@ class TrtllmServeEngineTests(unittest.TestCase):
         self.assertEqual(command[command.index("--tool_parser") + 1], "gemma4")
         self.assertIn("--trust_remote_code", command)
         self.assertIn("--no-telemetry", command)
-        self.assertEqual(command[command.index("--max_batch_size") + 1], "4")
         popen_kwargs = captured["popen_kwargs"]
         self.assertTrue(popen_kwargs["start_new_session"])
         self.assertEqual(popen_kwargs["stderr"], subprocess.STDOUT)
@@ -268,6 +327,27 @@ class TrtllmServeEngineTests(unittest.TestCase):
             ],
         )
         self.assertTrue(runtime.output_log.closed)
+
+    def test_close_removes_generated_runtime_config(self) -> None:
+        process = FakeProcess()
+        with tempfile.NamedTemporaryFile(delete=False) as config_file:
+            generated_config_path = config_file.name
+        runtime = trtllm_serve_module.TrtllmServeModelRuntime(
+            config=mock.Mock(),
+            process=process,
+            base_url="http://127.0.0.1:18091/v1",
+            health_url="http://127.0.0.1:18091/health",
+            remote_model="gemma-local",
+            timeout_s=12.5,
+            stop_timeout_s=2.0,
+            output_log=tempfile.TemporaryFile(),
+            generated_config_path=generated_config_path,
+        )
+
+        with mock.patch.object(trtllm_serve_module.os, "killpg"):
+            runtime.close()
+
+        self.assertFalse(Path(generated_config_path).exists())
 
     def test_close_escalates_process_group_after_leader_exit(self) -> None:
         process = FakeProcess()

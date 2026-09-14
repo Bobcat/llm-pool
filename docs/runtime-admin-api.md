@@ -16,10 +16,11 @@ It controls live runtime state only:
 Managed backend behavior:
 
 - this admin API is implemented and is the live control plane used by the workbench
-- runtime-only load overrides are implemented for `llama_cpp`, `exllamav3`, `vllm`, `vllm_serve`, and `llama_server`
+- `replicas` and `target_inflight` are common runtime-only load overrides; backend-specific overrides are implemented for `llama_cpp`, `exllamav3`, `vllm`, `vllm_serve`, `trtllm_serve`, `sglang_serve`, and `llama_server`
 - `llama_server` load/unload starts and stops a managed native `llama-server` subprocess; binary path, model path, library path, `mmproj`, draft model path, host, port, and extra native args stay in model config
 - `vllm_serve` load/unload starts and stops a managed local `vllm serve` subprocess; binary path, target model id/path, library path, environment, host, port, API key, and extra CLI args stay in model config
 - `trtllm_serve` load/unload starts and stops a managed local `trtllm-serve` process group; binary path, target model id/path, library path, environment, host, port, TensorRT-LLM config, parser names, and extra CLI args stay in model config
+- `sglang_serve` load/unload starts and stops a managed local `sglang serve` process group; binary path, target model id/path, library path, environment, host, port, parser names, and extra CLI args stay in model config
 - clients use the live `load_constraints` payload to build backend-specific load controls
 
 ## Contents
@@ -289,7 +290,7 @@ Notes:
 - `queue_depth` is the public-model queue depth inside the scheduler
 - `runtime_inflight` is aggregate inflight work across loaded replicas of the public model
 - `configured_target_inflight` is the configured per-replica inflight target
-- `effective_target_inflight` is the per-replica scheduler target after capability clamping; `openai_remote`, `trtllm_serve`, and `vllm_serve` may use a configured value above 1, while other backends are clamped to 1
+- `effective_target_inflight` is the per-replica scheduler target after capability clamping; `llama_server`, `openai_remote`, `trtllm_serve`, `sglang_serve`, and `vllm_serve` may use a configured value above 1, while other backends are clamped to 1
 - `fairness.keys` reports bounded per-key pending work, active work, configured weight, normalized score, and queue-limit rejection counts; a `null` key is the anonymous bucket
 - `fairness.rejected_per_key_limit` and `fairness.rejected_executor_limit` are aggregate counters for the current loaded executor and reset on unload
 - `vram_estimate_mib` is an approximate per-model VRAM estimate
@@ -297,9 +298,9 @@ Notes:
 - `vram_estimate_source` is either `observed_load_delta`, `model_artifact_size`, or `unavailable`
 - `capabilities.modalities` lists the accepted input modalities: `text`, `image`, and `audio`; a model may advertise any configured combination, with `text` added by default
 - `capabilities.file_inputs` reports whether the model accepts `file` content items; this is currently limited to `openai_remote` models with `remote_file_mode` configured
-- `capabilities.multi_turn` reports whether the model accepts a multi-turn `messages` array on `POST /v1/responses`; this is `true` for `llama_server`, `openai_remote`, `trtllm_serve`, `vllm`, and `vllm_serve` models and for supported text-only `llama_cpp` chat prompt formats (`generic`, `mistral_template`, `qwen3_template`, `gemma4_template`), but remains `false` for `llama_cpp` `translategemma_template`
-- `capabilities.thinking_modes` lists accepted values for request-level `thinking`; models without a safe per-request control report only `["default"]`, while supported vLLM Gemma4/Qwen3, TensorRT-LLM Gemma4, `llama_cpp` Gemma4, ExLlamaV3 Gemma4/Qwen3, CT2 Qwen3, and configured remote models report `["default", "enabled", "disabled"]`
-- `capabilities.response_formats` is `["text", "json_schema"]` for `vllm_serve`; `trtllm_serve` and other backends report `["text"]`
+- `capabilities.multi_turn` reports whether the model accepts a multi-turn `messages` array on `POST /v1/responses`; this is `true` for `llama_server`, `openai_remote`, `trtllm_serve`, `sglang_serve`, `vllm`, and `vllm_serve` models and for supported text-only `llama_cpp` chat prompt formats (`generic`, `mistral_template`, `qwen3_template`, `gemma4_template`), but remains `false` for `llama_cpp` `translategemma_template`
+- `capabilities.thinking_modes` lists accepted values for request-level `thinking`; models without a safe per-request control report only `["default"]`, while supported vLLM Gemma4/Qwen3, TensorRT-LLM Gemma4, SGLang Gemma4, `llama_cpp` Gemma4, ExLlamaV3 Gemma4/Qwen3, CT2 Qwen3, and configured remote models report `["default", "enabled", "disabled"]`
+- `capabilities.response_formats` is `["text", "json_schema"]` for `vllm_serve`; `trtllm_serve`, `sglang_serve`, and other backends report `["text"]`
 - `load_constraints` describes backend-specific live-load fields for UI controls
 - `load_recommendations` describes service-curated recommended presets and pairings for UI defaults
 - `load_override` reports the runtime-only override currently active on a loaded model
@@ -385,6 +386,20 @@ The API does not currently return separate `k_bits` and `v_bits` fields.
 The UI should parse `exllama_cache_quant` itself when it wants to display separate K/V values.
 
 #### Current `load_constraints` Shapes
+
+Every backend includes this common constraint:
+
+```json
+{
+  "target_inflight": {
+    "kind": "integer",
+    "minimum": 1,
+    "step": 1
+  }
+}
+```
+
+The examples below show the additional backend-specific constraints.
 
 `llama_cpp` GGUF:
 
@@ -544,6 +559,114 @@ vLLM and vLLM Serve:
 }
 ```
 
+TensorRT-LLM Serve:
+
+```json
+{
+  "trtllm_max_seq_len": {
+    "kind": "integer",
+    "minimum": 256,
+    "step": 256
+  },
+  "trtllm_kv_cache_memory_bytes": {
+    "kind": "integer",
+    "minimum": 268435456,
+    "step": 268435456,
+    "unit": "bytes",
+    "display_unit": "mib"
+  },
+  "trtllm_max_num_tokens": {
+    "kind": "integer",
+    "minimum": 256,
+    "step": 256
+  },
+  "trtllm_enable_chunked_prefill": {
+    "kind": "boolean",
+    "default": false
+  },
+  "trtllm_kv_cache_dtype": {
+    "kind": "enum",
+    "default": "auto",
+    "allowed_values": ["auto", "fp8", "nvfp4"],
+    "examples": ["auto", "fp8", "nvfp4"]
+  }
+}
+```
+
+SGLang Serve:
+
+```json
+{
+  "sglang_context_length": {
+    "kind": "integer",
+    "minimum": 256,
+    "step": 256
+  },
+  "sglang_mem_fraction_static": {
+    "kind": "float",
+    "minimum": 0.01,
+    "maximum": 1.0,
+    "step": 0.01
+  },
+  "sglang_max_total_tokens": {
+    "kind": "integer",
+    "minimum": 256,
+    "step": 256,
+    "unit": "tokens"
+  },
+  "sglang_chunked_prefill_size": {
+    "kind": "integer",
+    "minimum": -1,
+    "step": 1
+  },
+  "sglang_kv_cache_dtype": {
+    "kind": "enum",
+    "default": "auto",
+    "allowed_values": [
+      "auto",
+      "bf16",
+      "bfloat16",
+      "fp8_e4m3",
+      "fp8_e5m2",
+      "mxfp8",
+      "nvfp4",
+      "fp4_mx_block16",
+      "fp4_e2m1"
+    ]
+  },
+  "sglang_speculative_algorithm": {
+    "kind": "string_or_null",
+    "format": "sglang_speculative_algorithm",
+    "default": null,
+    "examples": ["NEXTN"]
+  },
+  "sglang_speculative_draft_model": {
+    "kind": "string_or_null",
+    "format": "hf_id_or_local_path",
+    "default": null,
+    "examples": ["google/gemma-4-26B-A4B-it-assistant"]
+  },
+  "sglang_speculative_num_steps": {
+    "kind": "integer",
+    "minimum": 1,
+    "step": 1,
+    "default": 5
+  },
+  "sglang_speculative_num_draft_tokens": {
+    "kind": "integer",
+    "minimum": 1,
+    "step": 1,
+    "default": 6
+  },
+  "sglang_speculative_eagle_topk": {
+    "kind": "integer",
+    "minimum": 1,
+    "step": 1,
+    "default": 1
+  }
+}
+```
+
 llama-server:
 
 ```json
@@ -608,7 +731,7 @@ ExLlamaV3 recommended presets:
 }
 ```
 
-CT2, `openai_remote`, `trtllm_serve`, and stub:
+CT2, `openai_remote`, and stub:
 
 ```json
 {}
@@ -704,24 +827,25 @@ Rules:
 - transition `unloaded -> loading -> loaded`
 - transition `failed -> loading -> loaded`
 - if load fails, transition to `failed` and retain `last_error`
-- an optional request body may provide `replicas` for this load, but only while the model is `unloaded` or `failed`
+- an optional request body may provide `replicas` and `target_inflight` for this load, but only while the model is `unloaded` or `failed`
 - an optional request body may provide temporary backend-specific load overrides for this one live load
 
 Supported load override fields:
 
-- public model: `replicas`
+- public model: `replicas`, `target_inflight`
 - `llama_cpp`: `gguf_n_ctx`, `gguf_flash_attn`, `gguf_type_k`, `gguf_type_v`
 - ExLlamaV3: `exllama_cache_size`, `exllama_cache_quant`, `exllama_cache_k_bits`, `exllama_cache_v_bits`, `exllama_max_rq_tokens`
 - vLLM and vLLM Serve: `vllm_max_model_len`, `vllm_kv_cache_dtype`, `vllm_kv_cache_memory_bytes`, `vllm_max_pixels`, `vllm_speculative_method`, `vllm_speculative_model`, `vllm_speculative_moe_backend`, `vllm_speculative_attention_backend`, `vllm_num_speculative_tokens`
+- TensorRT-LLM Serve: `trtllm_max_seq_len`, `trtllm_kv_cache_memory_bytes`, `trtllm_max_num_tokens`, `trtllm_enable_chunked_prefill`, `trtllm_kv_cache_dtype`
+- SGLang Serve: `sglang_context_length`, `sglang_mem_fraction_static`, `sglang_max_total_tokens`, `sglang_chunked_prefill_size`, `sglang_kv_cache_dtype`, `sglang_speculative_algorithm`, `sglang_speculative_draft_model`, `sglang_speculative_num_steps`, `sglang_speculative_num_draft_tokens`, `sglang_speculative_eagle_topk`
 - llama-server: `llama_server_n_ctx`, `llama_server_image_max_tokens`, `llama_server_spec_type`, `llama_server_spec_draft_n_max`, `llama_server_spec_draft_p_min`
-
-`trtllm_serve` has no backend-specific runtime load overrides. The common `replicas` field is still accepted. TensorRT-LLM model, binary, environment, YAML, parser, timeout, and CLI settings remain in the model definition.
 
 Example load bodies:
 
 ```json
 {
-  "replicas": 3
+  "replicas": 3,
+  "target_inflight": 4
 }
 ```
 
@@ -801,6 +925,33 @@ Example load bodies:
 
 ```json
 {
+  "target_inflight": 4,
+  "trtllm_max_seq_len": 20480,
+  "trtllm_kv_cache_memory_bytes": 8589934592,
+  "trtllm_max_num_tokens": 8192,
+  "trtllm_enable_chunked_prefill": false,
+  "trtllm_kv_cache_dtype": "fp8"
+}
+```
+
+```json
+{
+  "target_inflight": 4,
+  "sglang_context_length": 20480,
+  "sglang_mem_fraction_static": 0.35,
+  "sglang_max_total_tokens": 20480,
+  "sglang_chunked_prefill_size": 8192,
+  "sglang_kv_cache_dtype": "fp8_e4m3",
+  "sglang_speculative_algorithm": "NEXTN",
+  "sglang_speculative_draft_model": "google/gemma-4-26B-A4B-it-assistant",
+  "sglang_speculative_num_steps": 5,
+  "sglang_speculative_num_draft_tokens": 6,
+  "sglang_speculative_eagle_topk": 1
+}
+```
+
+```json
+{
   "llama_server_n_ctx": 4096,
   "llama_server_image_max_tokens": 512,
   "llama_server_spec_type": "draft-mtp",
@@ -813,6 +964,7 @@ Example load bodies:
 
 vLLM and vLLM Serve load override notes:
 
+- For `vllm_serve`, `target_inflight` maps to `--max-num-seqs` and also controls llm-pool admission.
 - `vllm_max_model_len` is the per-load context length.
 - `vllm_kv_cache_dtype` quantizes the KV cache; allowed UI values are `auto`, `fp8`, `fp8_e4m3`, `fp8_e5m2`. The service accepts any dtype string vLLM supports.
 - `vllm_kv_cache_memory_bytes` sets an absolute KV cache size in bytes. It is machine-independent and overrides `vllm_gpu_memory_utilization` for KV sizing. The `load_constraints` entry carries `unit: "bytes"` and `display_unit: "mib"` so the UI can present it in MiB.
@@ -828,13 +980,30 @@ vLLM and vLLM Serve load override notes:
 
 TensorRT-LLM Serve load notes:
 
-- `trtllm_serve` accepts no backend-specific load overrides. Only the common `replicas` field can be changed for one load.
-- Target model, binary, library path, environment, YAML config, parser names, host, port, timeouts, and extra CLI args are configured in the model definition.
+- `target_inflight` maps to TensorRT-LLM `max_batch_size` and also controls llm-pool admission.
+- `trtllm_max_seq_len`, `trtllm_max_num_tokens`, and `trtllm_enable_chunked_prefill` map to the same top-level TensorRT-LLM YAML fields.
+- `trtllm_kv_cache_memory_bytes` maps to `kv_cache_config.max_gpu_total_bytes`. The API uses bytes; `load_constraints` tells clients to display MiB.
+- `trtllm_kv_cache_dtype` maps to `kv_cache_config.dtype` and accepts `auto`, `fp8`, or `nvfp4`.
+- llm-pool reads the configured base YAML, merges the effective values and the `target_inflight` batch size into a temporary YAML file, and passes that file through `--config`. The source YAML is unchanged. Normal runtime cleanup removes the temporary file.
+- TensorRT-LLM limits KV-cache memory to the lower result of `max_gpu_total_bytes` and `free_gpu_memory_fraction`. Keep the fractional value high enough to act only as a safety ceiling when an absolute budget should control allocation. This differs from the vLLM pattern of configuring a deliberately low utilization fraction alongside an absolute cache size.
+- Target model, binary, library path, environment, base YAML, parser names, host, port, timeouts, and extra CLI args remain in the model definition. `trtllm_serve_extra_args` must not set `max_batch_size`.
 - Loading starts a local `trtllm-serve` process group. Unloading terminates that group, so VRAM is released by process exit.
+
+SGLang Serve load notes:
+
+- `target_inflight` maps to SGLang `--max-running-requests` and also controls llm-pool admission.
+- `sglang_context_length`, `sglang_max_total_tokens`, `sglang_chunked_prefill_size`, and `sglang_kv_cache_dtype` map to the corresponding SGLang server flags.
+- `sglang_max_total_tokens` sets the absolute KV-cache token capacity. `sglang_mem_fraction_static` remains a startup safety ceiling and must still be high enough to hold the target and assistant weights.
+- `sglang_speculative_algorithm: "NEXTN"` with a Gemma 4 assistant checkpoint selects SGLang's Frozen-KV MTP path. Set the algorithm to `null` to disable speculative decoding for one load.
+- The speculative step count, draft-token count, and top-k map directly to the SGLang server flags.
+- Target model, binary, library path, environment, quantization, attention backend, host, port, parser names, timeouts, and extra CLI arguments remain in the model definition.
+- Loading starts a local `sglang serve` process group. Unloading terminates that group, so VRAM is released by process exit.
 
 llama-server load override notes:
 
+- `target_inflight` maps to llama-server `--parallel` and also controls llm-pool admission.
 - `llama_server_n_ctx` maps to the native `llama-server -c/--ctx-size` flag for this load.
+- llama-server shares `llama_server_n_ctx` across its parallel slots. The approximate per-request context limit is `llama_server_n_ctx / target_inflight`.
 - `llama_server_image_max_tokens` maps to native `--image-max-tokens` and controls the per-image vision token budget.
 - `llama_server_spec_type` currently accepts only `"draft-mtp"` or `null`.
 - `llama_server_spec_draft_n_max` maps to native `--spec-draft-n-max`; the API constrains it to `1..6`.
@@ -883,6 +1052,7 @@ These overrides are runtime-only:
 - they do not modify `local.json`
 - they are returned separately from the configured definition in admin responses
 - `replicas` in the load request does not modify `definition.replicas`; it only selects the replica count for that one live load
+- `target_inflight` in the load request does not modify `definition.target_inflight`; it sets scheduler and managed-server concurrency for that one live load
 
 Example response:
 
@@ -1006,9 +1176,11 @@ Validation behavior:
 
 - `422` means the request body failed schema validation before runtime logic ran
   Examples:
+  `target_inflight: 0`
   `gguf_n_ctx: 0`
   `exllama_cache_size: 0`
   `exllama_max_rq_tokens: 0`
+  `trtllm_kv_cache_memory_bytes: 0`
 - `400` with `code: "invalid_load_request"` means the body was structurally valid, but the values were invalid for the resolved backend or runtime rules
   Examples:
   `gguf_type_k: "q8-0"`
@@ -1020,6 +1192,7 @@ Validation behavior:
   `llama_server_spec_type: "medusa"`
   `llama_server_spec_draft_n_max: 7`
   `llama_server_spec_draft_p_min: 1.5`
+  `trtllm_kv_cache_dtype: "int8"`
   sending ExLlamaV3-only fields to a llama_cpp model
   sending llama-server-only fields to a vLLM model
   sending load overrides while the model is already loaded and not first unloading it

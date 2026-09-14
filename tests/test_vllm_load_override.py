@@ -34,6 +34,7 @@ class VllmLoadConstraintsTests(unittest.TestCase):
         self.assertEqual(
             set(constraints.keys()),
             {
+                "target_inflight",
                 "vllm_max_model_len",
                 "vllm_kv_cache_dtype",
                 "vllm_kv_cache_memory_bytes",

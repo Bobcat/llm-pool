@@ -107,8 +107,6 @@
           "VLLM_USE_FLASHINFER_SAMPLER": "0"
         },
         "vllm_serve_extra_args": [
-          "--max-num-seqs",
-          "4",
           "--max-num-batched-tokens",
           "8192",
           "--reasoning-parser",
@@ -176,10 +174,6 @@
         "vllm_serve_env": {
           "VLLM_USE_FLASHINFER_SAMPLER": "0"
         },
-        "vllm_serve_extra_args": [
-          "--max-num-seqs",
-          "4"
-        ],
         "enabled": false
       },
       "gemma-4-26b-a4b-it-nvidia-nvfp4-vllm": {
@@ -238,10 +232,6 @@
         "vllm_serve_env": {
           "VLLM_USE_FLASHINFER_SAMPLER": "0"
         },
-        "vllm_serve_extra_args": [
-          "--max-num-seqs",
-          "16"
-        ],
         "enabled": false
       },
       "gemma-4-26b-a4b-it-nvidia-nvfp4-trtllm-serve": {
@@ -255,6 +245,11 @@
           "image"
         ],
         "trtllm_model": "/home/gunnar/models/nvidia/Gemma-4-26B-A4B-NVFP4",
+        "trtllm_max_seq_len": 20480,
+        "trtllm_kv_cache_memory_bytes": 8589934592,
+        "trtllm_max_num_tokens": 8192,
+        "trtllm_enable_chunked_prefill": false,
+        "trtllm_kv_cache_dtype": "fp8",
         "trtllm_serve_binary": "/home/gunnar/.cache/llm-pool/trtllm-v130rc25-cu130/bin/trtllm-serve",
         "trtllm_serve_model_alias": "gemma-4-26b-a4b-it-nvidia-nvfp4-trtllm-serve",
         "trtllm_serve_start_timeout_s": 900.0,
@@ -273,6 +268,153 @@
         "trtllm_serve_config_path": "/home/gunnar/projects/llm-pool/config/trtllm/gemma-4-26b-a4b-nvfp4.yaml",
         "trtllm_serve_reasoning_parser": "gemma4",
         "trtllm_serve_tool_parser": "gemma4",
+        "enabled": false
+      },
+      "gemma-4-26b-a4b-it-nvidia-nvfp4-sglang-serve": {
+        "backend": "sglang_serve",
+        "model_path": null,
+        "prompt_format": "gemma4_template",
+        "enable_thinking": false,
+        "target_inflight": 4,
+        "modalities": [
+          "text",
+          "image"
+        ],
+        "sglang_model": "/home/gunnar/models/nvidia/Gemma-4-26B-A4B-NVFP4",
+        "sglang_context_length": 20480,
+        "sglang_mem_fraction_static": 0.35,
+        "sglang_max_total_tokens": 20480,
+        "sglang_chunked_prefill_size": 8192,
+        "sglang_kv_cache_dtype": "fp8_e4m3",
+        "sglang_quantization": "modelopt_fp4",
+        "sglang_tensor_parallel_size": 1,
+        "sglang_attention_backend": "triton",
+        "sglang_fp4_gemm_backend": "auto",
+        "sglang_speculative_algorithm": "NEXTN",
+        "sglang_speculative_draft_model": "google/gemma-4-26B-A4B-it-assistant",
+        "sglang_speculative_num_steps": 5,
+        "sglang_speculative_num_draft_tokens": 6,
+        "sglang_speculative_eagle_topk": 1,
+        "sglang_serve_binary": "/home/gunnar/.cache/llm-pool/sglang-v0519-cu130/bin/sglang",
+        "sglang_serve_model_alias": "gemma-4-26b-a4b-it-nvidia-nvfp4-sglang-serve",
+        "sglang_serve_start_timeout_s": 900.0,
+        "sglang_serve_stop_timeout_s": 60.0,
+        "sglang_serve_library_path": [
+          "/home/gunnar/.cache/llm-pool/sglang-v0519-cu130/lib/python3.12/site-packages/nvidia/cu13/lib",
+          "/home/gunnar/.cache/llm-pool/sglang-v0519-cu130/lib/python3.12/site-packages/nvidia/cudnn/lib",
+          "/home/gunnar/.cache/llm-pool/sglang-v0519-cu130/lib/python3.12/site-packages/nvidia/cusparselt/lib",
+          "/home/gunnar/.cache/llm-pool/sglang-v0519-cu130/lib/python3.12/site-packages/nvidia/nccl/lib",
+          "/home/gunnar/.cache/llm-pool/sglang-v0519-cu130/lib/python3.12/site-packages/nvidia/nvshmem/lib"
+        ],
+        "sglang_serve_env": {
+          "CUDA_HOME": "/home/gunnar/.cache/llm-pool/sglang-v0519-cu130/lib/python3.12/site-packages/nvidia/cu13",
+          "CUDA_PATH": "/home/gunnar/.cache/llm-pool/sglang-v0519-cu130/lib/python3.12/site-packages/nvidia/cu13",
+          "MAX_JOBS": "4",
+          "FLASHINFER_NVCC_THREADS": "1",
+          "CMAKE_BUILD_PARALLEL_LEVEL": "4",
+          "TORCHINDUCTOR_COMPILE_THREADS": "4"
+        },
+        "sglang_serve_reasoning_parser": "gemma4",
+        "sglang_serve_tool_parser": "gemma4",
+        "sglang_serve_extra_args": [
+          "--cuda-graph-backend-decode",
+          "disabled",
+          "--cuda-graph-backend-prefill",
+          "disabled"
+        ],
+        "enabled": false
+      },
+      "qwen3.5-2b-bf16-vllm-serve": {
+        "backend": "vllm_serve",
+        "model_path": null,
+        "prompt_format": "qwen3_template",
+        "enable_thinking": false,
+        "target_inflight": 16,
+        "modalities": [
+          "text",
+          "image"
+        ],
+        "vllm_model": "/home/gunnar/models/Qwen/Qwen3.5-2B",
+        "vllm_dtype": "bfloat16",
+        "vllm_gpu_memory_utilization": 0.01,
+        "vllm_kv_cache_memory_bytes": 4294967296,
+        "vllm_max_model_len": 4096,
+        "vllm_limit_mm_per_prompt": {
+          "image": 1
+        },
+        "vllm_mm_processor_kwargs": {
+          "max_pixels": 1572864
+        },
+        "vllm_serve_binary": "/home/gunnar/.cache/llm-pool/vllm-v025-cu130/bin/vllm",
+        "vllm_serve_model_alias": "qwen3.5-2b-bf16-vllm-serve",
+        "vllm_serve_start_timeout_s": 900.0,
+        "vllm_serve_library_path": [
+          "/home/gunnar/.cache/llm-pool/vllm-v025-cu130/lib/python3.13/site-packages/nvidia/cu13/lib",
+          "/home/gunnar/.cache/llm-pool/vllm-v025-cu130/lib/python3.13/site-packages/nvidia/cudnn/lib",
+          "/home/gunnar/.cache/llm-pool/vllm-v025-cu130/lib/python3.13/site-packages/nvidia/cusparselt/lib",
+          "/home/gunnar/.cache/llm-pool/vllm-v025-cu130/lib/python3.13/site-packages/nvidia/nccl/lib",
+          "/home/gunnar/.cache/llm-pool/vllm-v025-cu130/lib/python3.13/site-packages/nvidia/nvshmem/lib"
+        ],
+        "vllm_serve_env": {
+          "CUDA_HOME": "/home/gunnar/.cache/llm-pool/vllm-v025-cu130/lib/python3.13/site-packages/nvidia/cu13",
+          "CUDA_PATH": "/home/gunnar/.cache/llm-pool/vllm-v025-cu130/lib/python3.13/site-packages/nvidia/cu13",
+          "FLASHINFER_EXTRA_CUDAFLAGS": "",
+          "MAX_JOBS": "1",
+          "VLLM_USE_FLASHINFER_SAMPLER": "0"
+        },
+        "vllm_serve_extra_args": [
+          "--max-num-batched-tokens",
+          "32768",
+          "--default-chat-template-kwargs",
+          "{\"enable_thinking\": false}"
+        ],
+        "enabled": false
+      },
+      "qwen3.5-9b-axionml-nvfp4-vllm-serve": {
+        "backend": "vllm_serve",
+        "model_path": null,
+        "prompt_format": "qwen3_template",
+        "enable_thinking": false,
+        "target_inflight": 16,
+        "modalities": [
+          "text",
+          "image"
+        ],
+        "vllm_model": "/home/gunnar/models/AxionML/Qwen3.5-9B-NVFP4",
+        "vllm_dtype": "auto",
+        "vllm_gpu_memory_utilization": 0.01,
+        "vllm_kv_cache_memory_bytes": 2147483648,
+        "vllm_kv_cache_dtype": "fp8",
+        "vllm_max_model_len": 4096,
+        "vllm_limit_mm_per_prompt": {
+          "image": 1
+        },
+        "vllm_mm_processor_kwargs": {
+          "max_pixels": 1572864
+        },
+        "vllm_serve_binary": "/home/gunnar/.cache/llm-pool/vllm-v025-cu130/bin/vllm",
+        "vllm_serve_model_alias": "qwen3.5-9b-axionml-nvfp4-vllm-serve",
+        "vllm_serve_start_timeout_s": 900.0,
+        "vllm_serve_library_path": [
+          "/home/gunnar/.cache/llm-pool/vllm-v025-cu130/lib/python3.13/site-packages/nvidia/cu13/lib",
+          "/home/gunnar/.cache/llm-pool/vllm-v025-cu130/lib/python3.13/site-packages/nvidia/cudnn/lib",
+          "/home/gunnar/.cache/llm-pool/vllm-v025-cu130/lib/python3.13/site-packages/nvidia/cusparselt/lib",
+          "/home/gunnar/.cache/llm-pool/vllm-v025-cu130/lib/python3.13/site-packages/nvidia/nccl/lib",
+          "/home/gunnar/.cache/llm-pool/vllm-v025-cu130/lib/python3.13/site-packages/nvidia/nvshmem/lib"
+        ],
+        "vllm_serve_env": {
+          "CUDA_HOME": "/home/gunnar/.cache/llm-pool/vllm-v025-cu130/lib/python3.13/site-packages/nvidia/cu13",
+          "CUDA_PATH": "/home/gunnar/.cache/llm-pool/vllm-v025-cu130/lib/python3.13/site-packages/nvidia/cu13",
+          "FLASHINFER_EXTRA_CUDAFLAGS": "",
+          "MAX_JOBS": "1",
+          "VLLM_USE_FLASHINFER_SAMPLER": "0"
+        },
+        "vllm_serve_extra_args": [
+          "--max-num-batched-tokens",
+          "32768",
+          "--default-chat-template-kwargs",
+          "{\"enable_thinking\": false}"
+        ],
         "enabled": false
       },
       "qwen3.6-35b-a3b-nvfp4-vllm-serve": {
@@ -337,8 +479,6 @@
           "marlin",
           "--load-format",
           "fastsafetensors",
-          "--max-num-seqs",
-          "4",
           "--max-num-batched-tokens",
           "8192",
           "--reasoning-parser",

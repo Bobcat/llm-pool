@@ -25,6 +25,18 @@ _GGUF_FLASH_ATTN_ALLOWED_VALUES = ("on", "off", "auto")
 _EXLLAMA_CACHE_BIT_ALLOWED_VALUES = (2, 3, 4, 5, 6, 7, 8)
 
 _VLLM_KV_CACHE_DTYPE_ALLOWED_VALUES = ("auto", "fp8", "fp8_e4m3", "fp8_e5m2")
+_TRTLLM_KV_CACHE_DTYPE_ALLOWED_VALUES = ("auto", "fp8", "nvfp4")
+_SGLANG_KV_CACHE_DTYPE_ALLOWED_VALUES = (
+    "auto",
+    "bf16",
+    "bfloat16",
+    "fp8_e4m3",
+    "fp8_e5m2",
+    "mxfp8",
+    "nvfp4",
+    "fp4_mx_block16",
+    "fp4_e2m1",
+)
 
 _COMMON_MODEL_DEFINITION_FIELDS = (
     "model_path",
@@ -147,6 +159,11 @@ _BACKEND_MODEL_DEFINITION_FIELDS = {
     "trtllm_serve": (
         "trtllm_model",
         "trtllm_trust_remote_code",
+        "trtllm_max_seq_len",
+        "trtllm_kv_cache_memory_bytes",
+        "trtllm_max_num_tokens",
+        "trtllm_enable_chunked_prefill",
+        "trtllm_kv_cache_dtype",
         "trtllm_serve_binary",
         "trtllm_serve_host",
         "trtllm_serve_port",
@@ -160,6 +177,37 @@ _BACKEND_MODEL_DEFINITION_FIELDS = {
         "trtllm_serve_reasoning_parser",
         "trtllm_serve_tool_parser",
         "trtllm_serve_extra_args",
+    ),
+    "sglang_serve": (
+        "sglang_model",
+        "sglang_context_length",
+        "sglang_mem_fraction_static",
+        "sglang_max_total_tokens",
+        "sglang_chunked_prefill_size",
+        "sglang_kv_cache_dtype",
+        "sglang_quantization",
+        "sglang_tensor_parallel_size",
+        "sglang_trust_remote_code",
+        "sglang_attention_backend",
+        "sglang_fp4_gemm_backend",
+        "sglang_speculative_algorithm",
+        "sglang_speculative_draft_model",
+        "sglang_speculative_num_steps",
+        "sglang_speculative_num_draft_tokens",
+        "sglang_speculative_eagle_topk",
+        "sglang_serve_binary",
+        "sglang_serve_host",
+        "sglang_serve_port",
+        "sglang_serve_model_alias",
+        "sglang_serve_timeout_s",
+        "sglang_serve_start_timeout_s",
+        "sglang_serve_stop_timeout_s",
+        "sglang_serve_library_path",
+        "sglang_serve_env",
+        "sglang_serve_api_key",
+        "sglang_serve_reasoning_parser",
+        "sglang_serve_tool_parser",
+        "sglang_serve_extra_args",
     ),
 }
 
@@ -177,6 +225,7 @@ _THINKING_CONTROL_PROMPT_FORMATS = {
     "ct2": frozenset({"qwen3_template"}),
     "exllamav3": frozenset({"gemma4_template", "qwen3_template"}),
     "llama_cpp": frozenset({"gemma4_template"}),
+    "sglang_serve": frozenset({"gemma4_template"}),
     "trtllm_serve": frozenset({"gemma4_template"}),
     "vllm": frozenset({"gemma4_template", "qwen3_template"}),
 }
@@ -191,6 +240,7 @@ def _model_supports_multi_turn(backend: str, prompt_format: str | None) -> bool:
     if normalized_backend in {
         "llama_server",
         "openai_remote",
+        "sglang_serve",
         "trtllm_serve",
         "vllm",
         "vllm_serve",
@@ -374,8 +424,15 @@ def _empty_cuda_allocator_cache() -> None:
 
 def _load_constraints_for_backend(backend: str) -> dict[str, object]:
     normalized_backend = backend.strip().lower()
+    common_constraints = {
+        "target_inflight": {
+            "kind": "integer",
+            "minimum": 1,
+            "step": 1,
+        }
+    }
     if normalized_backend == "llama_cpp":
-        return {
+        return common_constraints | {
             "gguf_n_ctx": {
                 "kind": "integer",
                 "minimum": 1,
@@ -403,7 +460,7 @@ def _load_constraints_for_backend(backend: str) -> dict[str, object]:
             },
         }
     if normalized_backend == "llama_server":
-        return {
+        return common_constraints | {
             "llama_server_n_ctx": {
                 "kind": "integer",
                 "minimum": 1,
@@ -435,7 +492,7 @@ def _load_constraints_for_backend(backend: str) -> dict[str, object]:
             },
         }
     if normalized_backend == "exllamav3":
-        return {
+        return common_constraints | {
             "exllama_cache_size": {
                 "kind": "integer",
                 "minimum": 256,
@@ -468,7 +525,7 @@ def _load_constraints_for_backend(backend: str) -> dict[str, object]:
             },
         }
     if normalized_backend in {"vllm", "vllm_serve"}:
-        return {
+        return common_constraints | {
             "vllm_max_model_len": {
                 "kind": "integer",
                 "minimum": 256,
@@ -524,7 +581,98 @@ def _load_constraints_for_backend(backend: str) -> dict[str, object]:
                 "default": 1,
             },
         }
-    return {}
+    if normalized_backend == "trtllm_serve":
+        return common_constraints | {
+            "trtllm_max_seq_len": {
+                "kind": "integer",
+                "minimum": 256,
+                "step": 256,
+            },
+            "trtllm_kv_cache_memory_bytes": {
+                "kind": "integer",
+                "minimum": 268435456,
+                "step": 268435456,
+                "unit": "bytes",
+                "display_unit": "mib",
+            },
+            "trtllm_max_num_tokens": {
+                "kind": "integer",
+                "minimum": 256,
+                "step": 256,
+            },
+            "trtllm_enable_chunked_prefill": {
+                "kind": "boolean",
+                "default": False,
+            },
+            "trtllm_kv_cache_dtype": {
+                "kind": "enum",
+                "default": "auto",
+                "allowed_values": list(_TRTLLM_KV_CACHE_DTYPE_ALLOWED_VALUES),
+                "examples": ["auto", "fp8", "nvfp4"],
+            },
+        }
+    if normalized_backend == "sglang_serve":
+        return common_constraints | {
+            "sglang_context_length": {
+                "kind": "integer",
+                "minimum": 256,
+                "step": 256,
+            },
+            "sglang_mem_fraction_static": {
+                "kind": "float",
+                "minimum": 0.01,
+                "maximum": 1.0,
+                "step": 0.01,
+            },
+            "sglang_max_total_tokens": {
+                "kind": "integer",
+                "minimum": 256,
+                "step": 256,
+                "unit": "tokens",
+            },
+            "sglang_chunked_prefill_size": {
+                "kind": "integer",
+                "minimum": -1,
+                "step": 1,
+            },
+            "sglang_kv_cache_dtype": {
+                "kind": "enum",
+                "default": "auto",
+                "allowed_values": list(_SGLANG_KV_CACHE_DTYPE_ALLOWED_VALUES),
+                "examples": ["auto", "fp8_e4m3"],
+            },
+            "sglang_speculative_algorithm": {
+                "kind": "string_or_null",
+                "format": "sglang_speculative_algorithm",
+                "default": None,
+                "examples": ["NEXTN"],
+            },
+            "sglang_speculative_draft_model": {
+                "kind": "string_or_null",
+                "format": "hf_id_or_local_path",
+                "default": None,
+                "examples": ["google/gemma-4-26B-A4B-it-assistant"],
+            },
+            "sglang_speculative_num_steps": {
+                "kind": "integer",
+                "minimum": 1,
+                "step": 1,
+                "default": 5,
+            },
+            "sglang_speculative_num_draft_tokens": {
+                "kind": "integer",
+                "minimum": 1,
+                "step": 1,
+                "default": 6,
+            },
+            "sglang_speculative_eagle_topk": {
+                "kind": "integer",
+                "minimum": 1,
+                "step": 1,
+                "default": 1,
+            },
+        }
+    return common_constraints
 
 
 def _load_recommendations_for_backend(backend: str) -> dict[str, object]:

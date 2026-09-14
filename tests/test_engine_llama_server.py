@@ -73,6 +73,7 @@ class LlamaServerEngineTests(unittest.TestCase):
                     "gemma4": ModelSettings(
                         model_path="/models/gemma.gguf",
                         backend="llama_server",
+                        target_inflight=3,
                         llama_server_binary="/opt/llama-server",
                         llama_server_host="127.0.0.1",
                         llama_server_port=18089,
@@ -156,6 +157,7 @@ class LlamaServerEngineTests(unittest.TestCase):
         self.assertIn("--no-ui", command)
         self.assertEqual(command[command.index("-fa") + 1], "on")
         self.assertEqual(command[command.index("-c") + 1], "4096")
+        self.assertEqual(command[command.index("--parallel") + 1], "3")
         self.assertEqual(command[command.index("-ngl") + 1], "999")
         self.assertEqual(command[command.index("--mmproj") + 1], "/models/mmproj.gguf")
         self.assertEqual(command[command.index("--image-max-tokens") + 1], "512")

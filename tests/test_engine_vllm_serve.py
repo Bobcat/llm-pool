@@ -90,6 +90,7 @@ class VllmServeEngineTests(unittest.TestCase):
                     "gemma4": ModelSettings(
                         model_path=None,
                         backend="vllm_serve",
+                        target_inflight=7,
                         vllm_model="/models/nvidia/Gemma-4-26B-A4B-NVFP4",
                         vllm_dtype="auto",
                         vllm_gpu_memory_utilization=0.55,
@@ -200,6 +201,7 @@ class VllmServeEngineTests(unittest.TestCase):
         self.assertEqual(command[command.index("--served-model-name") + 1], "gemma-local")
         self.assertEqual(command[command.index("--dtype") + 1], "auto")
         self.assertEqual(command[command.index("--tensor-parallel-size") + 1], "1")
+        self.assertEqual(command[command.index("--max-num-seqs") + 1], "7")
         self.assertEqual(command[command.index("--gpu-memory-utilization") + 1], "0.55")
         self.assertEqual(command[command.index("--kv-cache-memory-bytes") + 1], "2147483648")
         self.assertEqual(command[command.index("--kv-cache-dtype") + 1], "fp8")

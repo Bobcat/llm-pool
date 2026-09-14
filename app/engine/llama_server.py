@@ -199,6 +199,7 @@ class LlamaServerEngine:
         if settings.llama_server_api_key is not None:
             command.extend(["--api-key", settings.llama_server_api_key])
         command.extend(settings.llama_server_extra_args)
+        command.extend(["--parallel", str(settings.target_inflight)])
         return command
 
     def _start_process(self, command: list[str], *, settings: ModelSettings) -> subprocess.Popen:

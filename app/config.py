@@ -112,6 +112,11 @@ class ModelSettings:
     vllm_serve_extra_args: tuple[str, ...] = ()
     trtllm_model: str | None = None
     trtllm_trust_remote_code: bool = False
+    trtllm_max_seq_len: int | None = None
+    trtllm_kv_cache_memory_bytes: int | None = None
+    trtllm_max_num_tokens: int | None = None
+    trtllm_enable_chunked_prefill: bool | None = None
+    trtllm_kv_cache_dtype: str | None = None
     trtllm_serve_binary: str = "trtllm-serve"
     trtllm_serve_host: str = "127.0.0.1"
     trtllm_serve_port: int | None = None
@@ -125,6 +130,35 @@ class ModelSettings:
     trtllm_serve_reasoning_parser: str | None = None
     trtllm_serve_tool_parser: str | None = None
     trtllm_serve_extra_args: tuple[str, ...] = ()
+    sglang_model: str | None = None
+    sglang_context_length: int | None = None
+    sglang_mem_fraction_static: float | None = None
+    sglang_max_total_tokens: int | None = None
+    sglang_chunked_prefill_size: int | None = None
+    sglang_kv_cache_dtype: str = "auto"
+    sglang_quantization: str | None = None
+    sglang_tensor_parallel_size: int = 1
+    sglang_trust_remote_code: bool = False
+    sglang_attention_backend: str | None = None
+    sglang_fp4_gemm_backend: str | None = None
+    sglang_speculative_algorithm: str | None = None
+    sglang_speculative_draft_model: str | None = None
+    sglang_speculative_num_steps: int = 5
+    sglang_speculative_num_draft_tokens: int = 6
+    sglang_speculative_eagle_topk: int = 1
+    sglang_serve_binary: str = "sglang"
+    sglang_serve_host: str = "127.0.0.1"
+    sglang_serve_port: int | None = None
+    sglang_serve_model_alias: str | None = None
+    sglang_serve_timeout_s: float = 120.0
+    sglang_serve_start_timeout_s: float = 600.0
+    sglang_serve_stop_timeout_s: float = 30.0
+    sglang_serve_library_path: tuple[str, ...] = ()
+    sglang_serve_env: tuple[tuple[str, str], ...] = ()
+    sglang_serve_api_key: str | None = None
+    sglang_serve_reasoning_parser: str | None = None
+    sglang_serve_tool_parser: str | None = None
+    sglang_serve_extra_args: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -207,6 +241,7 @@ def load_settings(path: str | Path | None = None) -> AppSettings:
         model_path = _coerce_optional_str(model_payload.get("model_path"))
         if model_path is None and resolved_backend not in {
             "openai_remote",
+            "sglang_serve",
             "trtllm_serve",
             "vllm",
             "vllm_serve",
@@ -391,6 +426,22 @@ def load_settings(path: str | Path | None = None) -> AppSettings:
             trtllm_trust_remote_code=bool(
                 model_payload.get("trtllm_trust_remote_code", False)
             ),
+            trtllm_max_seq_len=_coerce_optional_positive_int(
+                model_payload.get("trtllm_max_seq_len")
+            ),
+            trtllm_kv_cache_memory_bytes=_coerce_optional_positive_int(
+                model_payload.get("trtllm_kv_cache_memory_bytes")
+            ),
+            trtllm_max_num_tokens=_coerce_optional_positive_int(
+                model_payload.get("trtllm_max_num_tokens")
+            ),
+            trtllm_enable_chunked_prefill=_coerce_optional_bool(
+                model_payload.get("trtllm_enable_chunked_prefill"),
+                "trtllm_enable_chunked_prefill",
+            ),
+            trtllm_kv_cache_dtype=_coerce_optional_str(
+                model_payload.get("trtllm_kv_cache_dtype")
+            ),
             trtllm_serve_binary=(
                 str(
                     model_payload.get("trtllm_serve_binary", "trtllm-serve")
@@ -437,6 +488,100 @@ def load_settings(path: str | Path | None = None) -> AppSettings:
             trtllm_serve_extra_args=_coerce_str_tuple(
                 model_payload.get("trtllm_serve_extra_args"),
                 "trtllm_serve_extra_args",
+            ),
+            sglang_model=_coerce_optional_str(model_payload.get("sglang_model")),
+            sglang_context_length=_coerce_optional_positive_int(
+                model_payload.get("sglang_context_length")
+            ),
+            sglang_mem_fraction_static=_coerce_optional_float(
+                model_payload.get("sglang_mem_fraction_static")
+            ),
+            sglang_max_total_tokens=_coerce_optional_positive_int(
+                model_payload.get("sglang_max_total_tokens")
+            ),
+            sglang_chunked_prefill_size=_coerce_optional_int(
+                model_payload.get("sglang_chunked_prefill_size")
+            ),
+            sglang_kv_cache_dtype=(
+                str(model_payload.get("sglang_kv_cache_dtype", "auto") or "auto").strip()
+                or "auto"
+            ),
+            sglang_quantization=_coerce_optional_str(
+                model_payload.get("sglang_quantization")
+            ),
+            sglang_tensor_parallel_size=max(
+                1, int(model_payload.get("sglang_tensor_parallel_size", 1))
+            ),
+            sglang_trust_remote_code=bool(
+                model_payload.get("sglang_trust_remote_code", False)
+            ),
+            sglang_attention_backend=_coerce_optional_str(
+                model_payload.get("sglang_attention_backend")
+            ),
+            sglang_fp4_gemm_backend=_coerce_optional_str(
+                model_payload.get("sglang_fp4_gemm_backend")
+            ),
+            sglang_speculative_algorithm=_coerce_optional_str(
+                model_payload.get("sglang_speculative_algorithm")
+            ),
+            sglang_speculative_draft_model=_coerce_optional_str(
+                model_payload.get("sglang_speculative_draft_model")
+            ),
+            sglang_speculative_num_steps=max(
+                1, int(model_payload.get("sglang_speculative_num_steps", 5))
+            ),
+            sglang_speculative_num_draft_tokens=max(
+                1, int(model_payload.get("sglang_speculative_num_draft_tokens", 6))
+            ),
+            sglang_speculative_eagle_topk=max(
+                1, int(model_payload.get("sglang_speculative_eagle_topk", 1))
+            ),
+            sglang_serve_binary=(
+                str(model_payload.get("sglang_serve_binary", "sglang") or "sglang").strip()
+                or "sglang"
+            ),
+            sglang_serve_host=(
+                str(
+                    model_payload.get("sglang_serve_host", "127.0.0.1")
+                    or "127.0.0.1"
+                ).strip()
+                or "127.0.0.1"
+            ),
+            sglang_serve_port=_coerce_optional_positive_int(
+                model_payload.get("sglang_serve_port")
+            ),
+            sglang_serve_model_alias=_coerce_optional_str(
+                model_payload.get("sglang_serve_model_alias")
+            ),
+            sglang_serve_timeout_s=float(
+                model_payload.get("sglang_serve_timeout_s", 120.0)
+            ),
+            sglang_serve_start_timeout_s=float(
+                model_payload.get("sglang_serve_start_timeout_s", 600.0)
+            ),
+            sglang_serve_stop_timeout_s=float(
+                model_payload.get("sglang_serve_stop_timeout_s", 30.0)
+            ),
+            sglang_serve_library_path=_coerce_path_tuple(
+                model_payload.get("sglang_serve_library_path"),
+                "sglang_serve_library_path",
+            ),
+            sglang_serve_env=_coerce_str_str_map(
+                model_payload.get("sglang_serve_env"),
+                "sglang_serve_env",
+            ),
+            sglang_serve_api_key=_coerce_optional_str(
+                model_payload.get("sglang_serve_api_key")
+            ),
+            sglang_serve_reasoning_parser=_coerce_optional_str(
+                model_payload.get("sglang_serve_reasoning_parser")
+            ),
+            sglang_serve_tool_parser=_coerce_optional_str(
+                model_payload.get("sglang_serve_tool_parser")
+            ),
+            sglang_serve_extra_args=_coerce_str_tuple(
+                model_payload.get("sglang_serve_extra_args"),
+                "sglang_serve_extra_args",
             ),
         )
         if models[str(model_name)].replicas > models[str(model_name)].replica_max:
@@ -548,10 +693,24 @@ def _coerce_optional_positive_int(value: object) -> int | None:
     return parsed
 
 
+def _coerce_optional_int(value: object) -> int | None:
+    if value is None or value == "":
+        return None
+    return int(value)
+
+
 def _coerce_optional_float(value: object) -> float | None:
     if value is None or value == "":
         return None
     return float(value)
+
+
+def _coerce_optional_bool(value: object, field_name: str) -> bool | None:
+    if value is None or value == "":
+        return None
+    if isinstance(value, bool):
+        return value
+    raise ValueError(f"{field_name} must be a boolean")
 
 
 def _coerce_positive_float(value: object, field_name: str) -> float:

@@ -38,10 +38,11 @@ how much work may wait in a queue.
   - [ExLlamaV3](#exllamav3)
   - [llama_cpp (in-process GGUF)](#llama_cpp-in-process-gguf)
   - [vLLM](#vllm)
-- [Pool-managed Backends](#pool-managed-backends) — llama_server, vllm_serve, trtllm_serve
+- [Pool-managed Backends](#pool-managed-backends) — llama_server, vllm_serve, trtllm_serve, sglang_serve
   - [llama_server](#llama_server)
   - [vllm_serve](#vllm_serve)
   - [trtllm_serve](#trtllm_serve)
+  - [sglang_serve](#sglang_serve)
 - [Remote Backends](#remote-backends) — openai_remote
   - [Remote prompt caching](#remote-prompt-caching)
   - [Remote file input](#remote-file-input)
@@ -111,6 +112,7 @@ The names above describe the local project family. This repo should remain usabl
 | `app/engine/vllm.py` | In-process vLLM adapter. |
 | `app/engine/vllm_serve.py` | Managed `vllm serve` subprocess adapter. |
 | `app/engine/trtllm_serve.py` | Managed `trtllm-serve` subprocess adapter. |
+| `app/engine/sglang_serve.py` | Managed `sglang serve` subprocess adapter. |
 | `app/engine/openai_remote.py` | Remote OpenAI-compatible Chat Completions adapter. |
 | `config/settings.json` | Shared model and service defaults. |
 | `config/local.json` | Optional ignored machine-local overrides. |
@@ -135,7 +137,7 @@ At runtime:
 A runtime model currently runs in one of three different shapes:
 
 - in-process Python runtimes: CT2, ExLlamaV3, `llama_cpp`/GGUF, vLLM
-- managed local subprocess runtimes: `llama_server`, `vllm_serve`, `trtllm_serve`
+- managed local subprocess runtimes: `llama_server`, `vllm_serve`, `trtllm_serve`, `sglang_serve`
 - remote upstream API runtime: `openai_remote`
 
 The managed subprocess backends are useful when native upstream dependencies, CUDA libraries, or backend build variants should be isolated from the main Python API process.
@@ -245,7 +247,7 @@ Supported `decoding` fields:
 | Field | Type | Notes |
 | --- | --- | --- |
 | `beam_size` | `int` | Used by CT2. Accepted but ignored by most sampling backends. |
-| `top_k` | `int` | Used by CT2, ExLlamaV3, `llama_cpp`, `trtllm_serve`, vLLM, and `vllm_serve`; ignored by `llama_server` and `openai_remote`. |
+| `top_k` | `int` | Used by CT2, ExLlamaV3, `llama_cpp`, `trtllm_serve`, `sglang_serve`, vLLM, and `vllm_serve`; ignored by `llama_server` and `openai_remote`. |
 | `top_p` | `float` | Sampling control where supported. |
 | `temperature` | `float` | Sampling control where supported. |
 | `repetition_penalty` | `float` | Repetition penalty where supported. |
@@ -335,7 +337,7 @@ Important behavior:
 - A model declares image or audio support with values such as `"modalities": ["text", "image", "audio"]`; the default is `["text"]`.
 - Text-only models reject image content with `modality_unsupported`.
 - Models without configured file support reject file content with `file_input_unsupported`.
-- `llama_server`, vLLM, `vllm_serve`, `trtllm_serve`, and remote OpenAI-compatible vision models are the current intended vision paths.
+- `llama_server`, vLLM, `vllm_serve`, `trtllm_serve`, `sglang_serve`, and remote OpenAI-compatible vision models are the current intended vision paths.
 - `vllm_serve` is the supported local audio path; clients should send audio only when the model advertises that modality.
 - In-process GGUF via `llama-cpp-python` remains text-only.
 - A text-only content array is accepted by text backends and concatenated into one prompt.
@@ -374,6 +376,7 @@ Current support:
 - `llama_server`: multi-turn text and image, depending on model capabilities.
 - `openai_remote`: multi-turn text, image, and configured document-file input.
 - `trtllm_serve`: multi-turn text and image, depending on model capabilities.
+- `sglang_serve`: multi-turn text and image, depending on model capabilities.
 - `vllm`: multi-turn text and image, depending on model capabilities.
 - `vllm_serve`: multi-turn text, image, and audio, depending on model capabilities.
 - `llama_cpp`: text-only multi-turn for selected prompt formats: `generic`, `mistral_template`, `qwen3_template`, and `gemma4_template`.
@@ -418,7 +421,8 @@ Backends add their own fields:
 - `llama_server`: binary, host, port, library path, context, GPU layers, flash attention, `mmproj`, image token budget, MTP/speculative decoding, reasoning, and extra native args
 - vLLM: model id/path, dtype, KV cache, model length, tensor parallelism, multimodal limits, processor kwargs, speculative decoding
 - `vllm_serve`: the same vLLM model/runtime fields plus binary path, host, port, library path, environment, API key, timeout, and extra CLI args
-- `trtllm_serve`: model id/path, binary path, host, port, library path, environment, TensorRT-LLM config file, reasoning and tool parsers, timeouts, and extra CLI args
+- `trtllm_serve`: model id/path, sequence and batch limits, absolute KV-cache budget and dtype, chunked prefill, binary path, host, port, library path, environment, TensorRT-LLM config file, reasoning and tool parsers, timeouts, and extra CLI args
+- `sglang_serve`: model id/path, context and cache limits, MTP settings, binary path, host, port, library path, environment, reasoning and tool parsers, timeouts, and extra CLI args
 - remote OpenAI-compatible: base URL, API key env var, upstream model name, timeout, retry, thinking, prompt-cache opt-in, and provider-specific file settings
 
 Minimal local override example:
@@ -441,6 +445,12 @@ Admin load overrides are temporary. They let a UI adjust supported runtime
 knobs before pressing load without editing config files. The live
 `load_constraints` object from `GET /v1/admin/models` defines the allowed fields
 and constraints.
+
+`replicas` and `target_inflight` are common load settings. For managed local
+servers, `target_inflight` sets both llm-pool admission and the backend's native
+concurrency limit. It maps to llama-server `--parallel`, vLLM
+`--max-num-seqs`, TensorRT-LLM `max_batch_size`, and SGLang
+`--max-running-requests`. Overrides apply only to that load.
 
 ![A model's expanded detail panel in the Workbench, exposing runtime load overrides such as max model length, KV cache size and dtype, max image pixels, and speculative-decoding settings before the model is loaded](docs/images/wb-llm-pool-models-detail.png)
 
@@ -693,7 +703,7 @@ Blackwell runtime note:
 
 ## Pool-managed Backends
 
-These backends run as local subprocesses that the pool starts, supervises, and stops: `llama_server`, `vllm_serve`, and `trtllm_serve`. Each has its own dependency stack, so its native libraries and CUDA toolkit stay isolated from the pool's environment — `*_library_path` is prepended to the subprocess `LD_LIBRARY_PATH`. Unloading terminates the process, so VRAM is released by process exit.
+These backends run as local subprocesses that the pool starts, supervises, and stops: `llama_server`, `vllm_serve`, `trtllm_serve`, and `sglang_serve`. Each has its own dependency stack, so its native libraries and CUDA toolkit stay isolated from the pool's environment — `*_library_path` is prepended to the subprocess `LD_LIBRARY_PATH`. Unloading terminates the process, so VRAM is released by process exit.
 
 ### llama_server
 
@@ -741,6 +751,7 @@ Notes:
 - `model_path`, `llama_server_binary`, `llama_server_mmproj_path`, draft model path, host, port, library path, and extra args can only be changed in configuration files.
 - `llama_server_library_path` is prepended to `LD_LIBRARY_PATH` for the subprocess. Use it when the native `llama-server` build needs CUDA or GGML libraries outside the default dynamic linker path.
 - `llama_server_mmproj_path` enables vision for GGUF models that require a multimodal projector.
+- `target_inflight` maps to llama-server `--parallel`.
 - `llama_server_image_max_tokens` maps to upstream `--image-max-tokens`. It caps the per-image dynamic-resolution token budget. It affects prompt/context pressure, not loaded model weight VRAM directly.
 - `llama_server_spec_type`, `llama_server_spec_draft_n_max`, `llama_server_spec_draft_p_min`, and `llama_server_spec_draft_ngl` map to llama.cpp speculative/MTP flags.
 - `llama_server_spec_draft_n_max` is constrained to `1..6` by the admin API.
@@ -786,10 +797,6 @@ Example:
         "vllm_serve_env": {
           "VLLM_USE_FLASHINFER_SAMPLER": "0"
         },
-        "vllm_serve_extra_args": [
-          "--max-num-seqs",
-          "4"
-        ],
         "enabled": false
       }
     }
@@ -812,8 +819,8 @@ Notes:
 - The directory containing `vllm_serve_binary` is prepended to `PATH`, so subprocess helpers use the same isolated runtime.
 - `vllm_serve_library_path` is prepended to `LD_LIBRARY_PATH` for the subprocess.
 - `vllm_serve_extra_args` is an escape hatch for upstream CLI flags that are model-specific but should still live in config.
-- For concurrent `vllm_serve` routes, align scheduler `target_inflight` with vLLM `--max-num-seqs`. The KV-cache budget and request lengths still determine whether all configured sequences fit at once.
-- For single-user Workbench models, keep `--max-num-seqs` small. vLLM can otherwise infer broad CUDA graph capture sizes that reserve much more VRAM than the explicit KV-cache budget suggests.
+- `target_inflight` maps to vLLM `--max-num-seqs`. The KV-cache budget and request lengths still determine whether all configured sequences fit at once.
+- Keep `target_inflight` small for single-user Workbench models. A large vLLM sequence limit can cause broad CUDA graph capture sizes that reserve more VRAM than the explicit KV-cache budget suggests.
 - Live admin overrides currently include `vllm_max_model_len`, `vllm_kv_cache_dtype`, `vllm_kv_cache_memory_bytes`, `vllm_max_pixels`, `vllm_speculative_method`, `vllm_speculative_model`, `vllm_speculative_moe_backend`, `vllm_speculative_attention_backend`, and `vllm_num_speculative_tokens`.
 - vLLM sleep mode is not used; load and unload start and stop the subprocess.
 
@@ -867,8 +874,6 @@ Example Qwen 3.6 definition:
           "marlin",
           "--load-format",
           "fastsafetensors",
-          "--max-num-seqs",
-          "1",
           "--max-num-batched-tokens",
           "2048",
           "--reasoning-parser",
@@ -918,6 +923,11 @@ Example:
           "TORCHINDUCTOR_COMPILE_THREADS": "4"
         },
         "trtllm_serve_config_path": "/etc/llm-pool/trtllm/gemma4.yaml",
+        "trtllm_max_seq_len": 20480,
+        "trtllm_kv_cache_memory_bytes": 8589934592,
+        "trtllm_max_num_tokens": 8192,
+        "trtllm_enable_chunked_prefill": false,
+        "trtllm_kv_cache_dtype": "fp8",
         "trtllm_serve_start_timeout_s": 900.0,
         "trtllm_serve_stop_timeout_s": 60.0,
         "trtllm_serve_reasoning_parser": "gemma4",
@@ -932,14 +942,24 @@ Example:
 Notes:
 
 - `trtllm_model` is the model id, local checkpoint path, or TensorRT engine path passed to `trtllm-serve`; `model_path` is not required.
-- `trtllm_serve_config_path` is passed to the child as `--config`. TensorRT-LLM reads the YAML; llm-pool does not parse it. Explicit CLI arguments take precedence over YAML values.
-- The target model, executable, library paths, environment, YAML config, parser names, and extra CLI arguments stay in the model definition. The admin load body can only override the common `replicas` field.
-- `target_inflight` controls how many requests the pool may submit concurrently. TensorRT-LLM's batch and KV-cache limits still determine whether that concurrency fits.
+- `trtllm_serve_config_path` names a base YAML file. llm-pool merges effective load settings into a temporary YAML and passes that file as `--config`; the source file is unchanged. Explicit CLI arguments take precedence over YAML values.
+- The admin load body can override `replicas`, `target_inflight`, sequence length, absolute KV-cache bytes, scheduled-token budget, chunked prefill, and KV-cache dtype. The target model, executable, library paths, environment, base YAML, parser names, and extra CLI arguments stay in the model definition.
+- TensorRT-LLM applies the lower of its absolute KV-cache byte limit and `free_gpu_memory_fraction`. Keep the fraction high enough to be a safety ceiling when the absolute value should control allocation.
+- `target_inflight` also sets TensorRT-LLM `max_batch_size`. The token and KV-cache limits still determine whether that many requests fit at once.
 - Compiler limits in `trtllm_serve_env` bound cold JIT compilation. Cached kernels normally avoid that work on later starts, but upgrades and new kernel variants may compile again.
 
 The checked-in Gemma 4 NVFP4 definition is disabled by default.
 
 See [TensorRT-LLM Serve Backend Notes](docs/trtllm-serve-backend.md) for the complete setting map, validated runtime, MTP status, and operational limits.
+
+### sglang_serve
+
+The `sglang_serve` backend starts a local `sglang serve` subprocess and forwards
+requests through its OpenAI-compatible chat endpoint. Its load controls cover
+context length, GPU memory fraction, KV-cache token capacity and dtype, chunked
+prefill, and MTP. `target_inflight` maps to SGLang
+`--max-running-requests`. Model paths, quantization backends, parsers, binaries,
+and environment settings remain in the model definition.
 
 ## Remote Backends
 
@@ -1164,6 +1184,7 @@ Heavy backend dependencies are loaded lazily. Install the dependencies for the b
 - vLLM and its CUDA/PyTorch stack for `vllm`
 - a `vllm` executable and matching CUDA/PyTorch environment for `vllm_serve`
 - a `trtllm-serve` executable and matching CUDA/OpenMPI environment for `trtllm_serve`
+- an `sglang` executable and matching CUDA/PyTorch environment for `sglang_serve`
 
 ## Tests
 
@@ -1180,6 +1201,7 @@ python3 -m unittest \
   tests.test_config \
   tests.test_engine_router \
   tests.test_engine_llama_server \
+  tests.test_engine_sglang_serve \
   tests.test_engine_trtllm_serve \
   tests.test_engine_vllm_serve
 ```

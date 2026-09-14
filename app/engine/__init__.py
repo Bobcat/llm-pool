@@ -27,6 +27,8 @@ from .llama_server import LlamaServerModelRuntime
 from .openai_remote import OpenAIRemoteEngine
 from .openai_remote import OpenAIRemoteModelRuntime
 from .router import ModelRouterEngine
+from .sglang_serve import SglangServeEngine
+from .sglang_serve import SglangServeModelRuntime
 from .stub import StubEngine
 from .trtllm_serve import TrtllmServeEngine
 from .trtllm_serve import TrtllmServeModelRuntime
