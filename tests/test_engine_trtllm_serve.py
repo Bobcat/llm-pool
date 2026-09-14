@@ -57,28 +57,35 @@ class FakeProcess:
 @unittest.skipUnless(HAS_PYDANTIC, "pydantic not installed")
 class TrtllmServeEngineTests(unittest.TestCase):
     def test_rejects_max_batch_size_in_extra_args(self) -> None:
-        settings = ModelSettings(
-            model_path=None,
-            backend="trtllm_serve",
-            trtllm_serve_extra_args=("--max_batch_size", "8"),
-        )
+        for extra_args in (
+            ("--max_batch_size", "8"),
+            ("--max-batch-size=8",),
+        ):
+            with self.subTest(extra_args=extra_args):
+                settings = ModelSettings(
+                    model_path=None,
+                    backend="trtllm_serve",
+                    trtllm_serve_extra_args=extra_args,
+                )
 
-        with self.assertRaisesRegex(ValueError, "controlled by target_inflight"):
-            trtllm_serve_module.TrtllmServeEngine.__new__(
-                trtllm_serve_module.TrtllmServeEngine
-            )._command(
-                settings=settings,
-                model_ref="/models/gemma4",
-                host="127.0.0.1",
-                port=18091,
-                remote_model="gemma4",
-                config_path=None,
-            )
+                with self.assertRaisesRegex(ValueError, "controlled by target_inflight"):
+                    trtllm_serve_module.TrtllmServeEngine.__new__(
+                        trtllm_serve_module.TrtllmServeEngine
+                    )._command(
+                        settings=settings,
+                        model_ref="/models/gemma4",
+                        host="127.0.0.1",
+                        port=18091,
+                        remote_model="gemma4",
+                        config_path=None,
+                    )
 
     def test_runtime_config_merges_load_settings_into_base_yaml(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             base_config_path = Path(tmpdir) / "base.yaml"
             base_config_path.write_text(
+                "speculative_config:\n"
+                "  decoding_type: MTP\n"
                 "kv_cache_config:\n"
                 "  enable_block_reuse: false\n"
                 "  free_gpu_memory_fraction: 0.9\n",
@@ -106,6 +113,7 @@ class TrtllmServeEngineTests(unittest.TestCase):
         self.assertEqual(payload["max_batch_size"], 4)
         self.assertEqual(payload["max_num_tokens"], 8192)
         self.assertTrue(payload["enable_chunked_prefill"])
+        self.assertEqual(payload["speculative_config"], {"decoding_type": "MTP"})
         self.assertEqual(
             payload["kv_cache_config"],
             {
@@ -116,6 +124,19 @@ class TrtllmServeEngineTests(unittest.TestCase):
             },
         )
         self.assertEqual(config_path, generated_config_path)
+
+    def test_runtime_config_rejects_base_max_batch_size(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            base_config_path = Path(tmpdir) / "base.yaml"
+            base_config_path.write_text("max_batch_size: 8\n", encoding="utf-8")
+            settings = ModelSettings(
+                model_path=None,
+                backend="trtllm_serve",
+                trtllm_serve_config_path=str(base_config_path),
+            )
+
+            with self.assertRaisesRegex(ValueError, "controlled by target_inflight"):
+                trtllm_serve_module.TrtllmServeEngine._prepare_runtime_config(settings)
 
     def test_starts_server_and_posts_multimodal_chat_completion(self) -> None:
         settings = AppSettings(

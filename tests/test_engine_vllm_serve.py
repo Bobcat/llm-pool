@@ -62,6 +62,27 @@ class FakeProcess:
 
 @unittest.skipUnless(HAS_PYDANTIC, "pydantic not installed")
 class VllmServeEngineTests(unittest.TestCase):
+    def test_rejects_max_num_seqs_in_extra_args(self) -> None:
+        for extra_args in (("--max-num-seqs", "8"), ("--max-num-seqs=8",)):
+            with self.subTest(extra_args=extra_args):
+                settings = ModelSettings(
+                    model_path=None,
+                    backend="vllm_serve",
+                    vllm_model="/models/gemma4",
+                    vllm_serve_extra_args=extra_args,
+                )
+
+                with self.assertRaisesRegex(ValueError, "controlled by target_inflight"):
+                    vllm_serve_module.VllmServeEngine.__new__(
+                        vllm_serve_module.VllmServeEngine
+                    )._command(
+                        settings=settings,
+                        model_ref="/models/gemma4",
+                        host="127.0.0.1",
+                        port=18090,
+                        remote_model="gemma4",
+                    )
+
     def test_chat_completion_payload_uses_default_top_k(self) -> None:
         engine = vllm_serve_module.VllmServeEngine.__new__(
             vllm_serve_module.VllmServeEngine

@@ -60,6 +60,26 @@ class FakeProcess:
 
 @unittest.skipUnless(HAS_PYDANTIC, "pydantic not installed")
 class LlamaServerEngineTests(unittest.TestCase):
+    def test_rejects_parallel_in_extra_args(self) -> None:
+        for extra_args in (("--parallel", "8"), ("--parallel=8",)):
+            with self.subTest(extra_args=extra_args):
+                settings = ModelSettings(
+                    model_path="/models/gemma.gguf",
+                    backend="llama_server",
+                    llama_server_extra_args=extra_args,
+                )
+
+                with self.assertRaisesRegex(ValueError, "controlled by target_inflight"):
+                    llama_server_module.LlamaServerEngine.__new__(
+                        llama_server_module.LlamaServerEngine
+                    )._command(
+                        settings=settings,
+                        model_path="/models/gemma.gguf",
+                        host="127.0.0.1",
+                        port=18089,
+                        remote_model="gemma4",
+                    )
+
     def test_starts_llama_server_and_posts_multimodal_chat_completion(self) -> None:
         settings = AppSettings(
             engine=EngineSettings(

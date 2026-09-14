@@ -34,7 +34,6 @@ class VllmLoadConstraintsTests(unittest.TestCase):
         self.assertEqual(
             set(constraints.keys()),
             {
-                "target_inflight",
                 "vllm_max_model_len",
                 "vllm_kv_cache_dtype",
                 "vllm_kv_cache_memory_bytes",
@@ -57,11 +56,15 @@ class VllmLoadConstraintsTests(unittest.TestCase):
         self.assertIn("triton_attn", constraints["vllm_speculative_attention_backend"]["examples"])
         self.assertEqual(constraints["vllm_num_speculative_tokens"]["minimum"], 1)
 
-    def test_vllm_serve_exposes_the_same_overrides(self) -> None:
+    def test_vllm_serve_also_exposes_target_inflight(self) -> None:
+        serve_constraints = _load_constraints_for_backend("vllm_serve")
+        target_constraint = serve_constraints.pop("target_inflight")
+
         self.assertEqual(
-            _load_constraints_for_backend("vllm_serve"),
-            _load_constraints_for_backend("vllm"),
+            target_constraint,
+            {"kind": "integer", "minimum": 1, "step": 1},
         )
+        self.assertEqual(serve_constraints, _load_constraints_for_backend("vllm"))
 
 
 @unittest.skipUnless(HAS_PYDANTIC, "pydantic not installed")

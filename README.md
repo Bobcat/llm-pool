@@ -446,9 +446,9 @@ knobs before pressing load without editing config files. The live
 `load_constraints` object from `GET /v1/admin/models` defines the allowed fields
 and constraints.
 
-`replicas` and `target_inflight` are common load settings. For managed local
-servers, `target_inflight` sets both llm-pool admission and the backend's native
-concurrency limit. It maps to llama-server `--parallel`, vLLM
+`replicas` is a common load setting. Managed local servers also accept
+`target_inflight`, which sets llm-pool admission and supplies the requested
+native concurrency limit. It maps to llama-server `--parallel`, vLLM
 `--max-num-seqs`, TensorRT-LLM `max_batch_size`, and SGLang
 `--max-running-requests`. Overrides apply only to that load.
 
@@ -819,6 +819,7 @@ Notes:
 - The directory containing `vllm_serve_binary` is prepended to `PATH`, so subprocess helpers use the same isolated runtime.
 - `vllm_serve_library_path` is prepended to `LD_LIBRARY_PATH` for the subprocess.
 - `vllm_serve_extra_args` is an escape hatch for upstream CLI flags that are model-specific but should still live in config.
+- Do not set `--max-num-seqs` in `vllm_serve_extra_args`; `target_inflight` owns it.
 - `target_inflight` maps to vLLM `--max-num-seqs`. The KV-cache budget and request lengths still determine whether all configured sequences fit at once.
 - Keep `target_inflight` small for single-user Workbench models. A large vLLM sequence limit can cause broad CUDA graph capture sizes that reserve more VRAM than the explicit KV-cache budget suggests.
 - Live admin overrides currently include `vllm_max_model_len`, `vllm_kv_cache_dtype`, `vllm_kv_cache_memory_bytes`, `vllm_max_pixels`, `vllm_speculative_method`, `vllm_speculative_model`, `vllm_speculative_moe_backend`, `vllm_speculative_attention_backend`, and `vllm_num_speculative_tokens`.
@@ -946,6 +947,7 @@ Notes:
 - The admin load body can override `replicas`, `target_inflight`, sequence length, absolute KV-cache bytes, scheduled-token budget, chunked prefill, and KV-cache dtype. The target model, executable, library paths, environment, base YAML, parser names, and extra CLI arguments stay in the model definition.
 - TensorRT-LLM applies the lower of its absolute KV-cache byte limit and `free_gpu_memory_fraction`. Keep the fraction high enough to be a safety ceiling when the absolute value should control allocation.
 - `target_inflight` also sets TensorRT-LLM `max_batch_size`. The token and KV-cache limits still determine whether that many requests fit at once.
+- Do not set `max_batch_size` in the base YAML or extra CLI arguments; `target_inflight` owns it.
 - Compiler limits in `trtllm_serve_env` bound cold JIT compilation. Cached kernels normally avoid that work on later starts, but upgrades and new kernel variants may compile again.
 
 The checked-in Gemma 4 NVFP4 definition is disabled by default.

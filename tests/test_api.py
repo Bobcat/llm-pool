@@ -240,10 +240,7 @@ class ApiTests(unittest.TestCase):
         self.assertIsNone(enabled_model["last_error"])
         self.assertIn("vram_estimate_mib", enabled_model)
         self.assertIn("vram_estimate_source", enabled_model)
-        self.assertEqual(
-            enabled_model["load_constraints"],
-            {"target_inflight": {"kind": "integer", "minimum": 1, "step": 1}},
-        )
+        self.assertEqual(enabled_model["load_constraints"], {})
         self.assertEqual(enabled_model["load_recommendations"], {})
         self.assertEqual(enabled_model["definition"]["model_path"], "/tmp/test-model")
         self.assertTrue(enabled_model["definition"]["enabled"])
@@ -275,10 +272,7 @@ class ApiTests(unittest.TestCase):
         self.assertIsNone(disabled_model["last_error"])
         self.assertIn("vram_estimate_mib", disabled_model)
         self.assertIn("vram_estimate_source", disabled_model)
-        self.assertEqual(
-            disabled_model["load_constraints"],
-            {"target_inflight": {"kind": "integer", "minimum": 1, "step": 1}},
-        )
+        self.assertEqual(disabled_model["load_constraints"], {})
         self.assertEqual(disabled_model["load_recommendations"], {})
         self.assertEqual(disabled_model["definition"]["model_path"], "/tmp/disabled-model")
         self.assertFalse(disabled_model["definition"]["enabled"])

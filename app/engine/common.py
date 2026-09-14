@@ -424,13 +424,21 @@ def _empty_cuda_allocator_cache() -> None:
 
 def _load_constraints_for_backend(backend: str) -> dict[str, object]:
     normalized_backend = backend.strip().lower()
-    common_constraints = {
-        "target_inflight": {
-            "kind": "integer",
-            "minimum": 1,
-            "step": 1,
+    common_constraints = {}
+    if normalized_backend in {
+        "llama_server",
+        "openai_remote",
+        "sglang_serve",
+        "trtllm_serve",
+        "vllm_serve",
+    }:
+        common_constraints = {
+            "target_inflight": {
+                "kind": "integer",
+                "minimum": 1,
+                "step": 1,
+            }
         }
-    }
     if normalized_backend == "llama_cpp":
         return common_constraints | {
             "gguf_n_ctx": {

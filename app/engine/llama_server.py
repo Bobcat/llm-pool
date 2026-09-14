@@ -162,6 +162,11 @@ class LlamaServerEngine:
         port: int,
         remote_model: str,
     ) -> list[str]:
+        if any(
+            argument == "--parallel" or argument.startswith("--parallel=")
+            for argument in settings.llama_server_extra_args
+        ):
+            raise ValueError("llama-server --parallel is controlled by target_inflight")
         command = [
             settings.llama_server_binary,
             "--model",

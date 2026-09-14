@@ -17,7 +17,7 @@ Current reality note:
 - the runtime admin API already uses the scheduler boundary for load/unload semantics
 - `llama_server`, `trtllm_serve`, `sglang_serve`, and `vllm_serve` now run through the same scheduler path, while their native subprocess lifecycles remain backend-owned
 - scheduler-visible capacity for most in-process local backends is still conservative; managed local servers use configured `target_inflight` because their HTTP runtimes support concurrent requests
-- managed local servers map `target_inflight` to their native concurrency limit
+- managed local servers map `target_inflight` to their requested native concurrency limit
 - this note now describes the broader scheduler design space beyond that first implemented cut
 
 ## Why This Is Worth Doing

@@ -2,6 +2,9 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import signal
+import subprocess
+import tempfile
 import unittest
 from unittest import mock
 
@@ -51,6 +54,52 @@ class FakeProcess:
 
 @unittest.skipUnless(HAS_PYDANTIC, "pydantic not installed")
 class SglangServeEngineTests(unittest.TestCase):
+    def test_rejects_max_running_requests_in_extra_args(self) -> None:
+        for extra_args in (
+            ("--max-running-requests", "8"),
+            ("--max-running-requests=8",),
+        ):
+            with self.subTest(extra_args=extra_args):
+                settings = ModelSettings(
+                    model_path=None,
+                    backend="sglang_serve",
+                    sglang_model="/models/gemma4",
+                    sglang_serve_extra_args=extra_args,
+                )
+
+                with self.assertRaisesRegex(ValueError, "controlled by target_inflight"):
+                    sglang_serve_module.SglangServeEngine.__new__(
+                        sglang_serve_module.SglangServeEngine
+                    )._command(
+                        settings=settings,
+                        model_ref="/models/gemma4",
+                        host="127.0.0.1",
+                        port=18092,
+                        remote_model="gemma4",
+                    )
+
+    def test_rejects_invalid_topk_one_draft_token_count(self) -> None:
+        settings = ModelSettings(
+            model_path=None,
+            backend="sglang_serve",
+            sglang_model="/models/gemma4",
+            sglang_speculative_algorithm="NEXTN",
+            sglang_speculative_num_steps=5,
+            sglang_speculative_num_draft_tokens=4,
+            sglang_speculative_eagle_topk=1,
+        )
+
+        with self.assertRaisesRegex(ValueError, "must equal"):
+            sglang_serve_module.SglangServeEngine.__new__(
+                sglang_serve_module.SglangServeEngine
+            )._command(
+                settings=settings,
+                model_ref="/models/gemma4",
+                host="127.0.0.1",
+                port=18092,
+                remote_model="gemma4",
+            )
+
     def test_omits_speculative_flags_when_algorithm_is_disabled(self) -> None:
         settings = ModelSettings(
             model_path=None,
@@ -204,13 +253,13 @@ class SglangServeEngineTests(unittest.TestCase):
                 "google/gemma-4-26B-A4B-it-assistant"
             ),
             "--speculative-num-steps": "5",
-            "--speculative-num-draft-tokens": "6",
             "--speculative-eagle-topk": "1",
             "--api-key": "local-secret",
             "--cuda-graph-backend-decode": "disabled",
         }
         for argument, expected_value in expected_arguments.items():
             self.assertEqual(command[command.index(argument) + 1], expected_value)
+        self.assertNotIn("--speculative-num-draft-tokens", command)
         self.assertIn("--trust-remote-code", command)
 
         popen_kwargs = captured["popen_kwargs"]
@@ -255,6 +304,188 @@ class SglangServeEngineTests(unittest.TestCase):
         self.assertEqual(result.metrics.engine_prompt_tokens, 11)
         self.assertEqual(result.metrics.engine_output_tokens, 3)
         killpg.assert_called_once_with(4321, sglang_serve_module.signal.SIGTERM)
+
+    def test_build_runtime_closes_process_after_readiness_failure(self) -> None:
+        settings = ModelSettings(
+            model_path=None,
+            backend="sglang_serve",
+            sglang_model="/models/gemma4",
+            sglang_serve_port=18092,
+        )
+        output_log = tempfile.TemporaryFile()
+        self.addCleanup(output_log.close)
+        engine = sglang_serve_module.SglangServeEngine.__new__(
+            sglang_serve_module.SglangServeEngine
+        )
+
+        with (
+            mock.patch.object(
+                engine,
+                "_start_process",
+                return_value=(FakeProcess(), output_log),
+            ),
+            mock.patch.object(
+                engine,
+                "_wait_until_ready",
+                side_effect=RuntimeError("not ready"),
+            ),
+            mock.patch.object(
+                sglang_serve_module.SglangServeModelRuntime,
+                "close",
+            ) as close,
+            self.assertRaisesRegex(RuntimeError, "not ready"),
+        ):
+            engine._build_runtime("gemma4", settings)
+
+        close.assert_called_once_with()
+
+    def test_close_kills_process_group_after_timeout(self) -> None:
+        process = FakeProcess()
+        process.wait = mock.Mock(
+            side_effect=[
+                subprocess.TimeoutExpired(cmd="sglang", timeout=2.0),
+                -9,
+            ]
+        )
+        runtime = self._runtime(process, stop_timeout_s=2.0)
+
+        with mock.patch.object(sglang_serve_module.os, "killpg") as killpg:
+            runtime.close()
+
+        self.assertEqual(
+            killpg.call_args_list,
+            [mock.call(4321, signal.SIGTERM), mock.call(4321, signal.SIGKILL)],
+        )
+        self.assertTrue(runtime.output_log.closed)
+
+    def test_close_escalates_after_process_leader_exits(self) -> None:
+        process = FakeProcess()
+        process.return_code = 1
+        process.wait = mock.Mock()
+        runtime = self._runtime(process, stop_timeout_s=0.0)
+
+        with mock.patch.object(sglang_serve_module.os, "killpg") as killpg:
+            runtime.close()
+            runtime.close()
+
+        self.assertEqual(
+            killpg.call_args_list,
+            [mock.call(4321, signal.SIGTERM), mock.call(4321, signal.SIGKILL)],
+        )
+        process.wait.assert_not_called()
+        self.assertTrue(runtime.output_log.closed)
+
+    def test_close_stops_when_orphan_group_is_gone_or_not_permitted(self) -> None:
+        for terminal_error in (ProcessLookupError, PermissionError):
+            with self.subTest(terminal_error=terminal_error):
+                process = FakeProcess()
+                process.return_code = 1
+                process.wait = mock.Mock()
+                runtime = self._runtime(process, stop_timeout_s=2.0)
+
+                with (
+                    mock.patch.object(
+                        sglang_serve_module.os,
+                        "killpg",
+                        side_effect=[None, terminal_error],
+                    ) as killpg,
+                    mock.patch.object(
+                        sglang_serve_module.time,
+                        "monotonic",
+                        return_value=10.0,
+                    ),
+                ):
+                    runtime.close()
+
+                self.assertEqual(
+                    killpg.call_args_list,
+                    [mock.call(4321, signal.SIGTERM), mock.call(4321, 0)],
+                )
+                process.wait.assert_not_called()
+                self.assertTrue(runtime.output_log.closed)
+
+    def test_close_logs_when_process_survives_sigkill(self) -> None:
+        process = FakeProcess()
+        process.wait = mock.Mock(
+            side_effect=[
+                subprocess.TimeoutExpired(cmd="sglang", timeout=2.0),
+                subprocess.TimeoutExpired(cmd="sglang", timeout=5.0),
+            ]
+        )
+        runtime = self._runtime(process, stop_timeout_s=2.0)
+
+        with (
+            mock.patch.object(sglang_serve_module.os, "killpg") as killpg,
+            self.assertLogs(sglang_serve_module.LOGGER, level="WARNING") as logs,
+        ):
+            runtime.close()
+
+        self.assertEqual(
+            killpg.call_args_list,
+            [mock.call(4321, signal.SIGTERM), mock.call(4321, signal.SIGKILL)],
+        )
+        self.assertIn("did not exit after SIGKILL", logs.output[0])
+        self.assertTrue(runtime.output_log.closed)
+
+    def test_startup_exit_includes_process_output_tail(self) -> None:
+        process = FakeProcess()
+        process.return_code = 17
+        output_log = tempfile.TemporaryFile()
+        output_log.write(b"engine initialized\naddress already in use\n")
+        output_log.flush()
+        runtime = self._runtime(process, output_log=output_log)
+        engine = sglang_serve_module.SglangServeEngine.__new__(
+            sglang_serve_module.SglangServeEngine
+        )
+
+        with self.assertRaises(RuntimeError) as exc_info:
+            engine._wait_until_ready(runtime, 1.0)
+
+        self.assertIn("exited during startup with code 17", str(exc_info.exception))
+        self.assertIn("address already in use", str(exc_info.exception))
+        output_log.close()
+
+    def test_empty_final_content_with_reasoning_is_incomplete(self) -> None:
+        payload = {
+            "choices": [
+                {
+                    "finish_reason": "length",
+                    "message": {
+                        "content": "",
+                        "reasoning_content": "unfinished reasoning",
+                    },
+                }
+            ]
+        }
+
+        with self.assertRaises(
+            sglang_serve_module.BackendExecutionError
+        ) as exc_info:
+            sglang_serve_module.SglangServeEngine._extract_text(payload)
+
+        self.assertEqual(
+            exc_info.exception.code,
+            "sglang_serve_incomplete_response",
+        )
+
+    @staticmethod
+    def _runtime(
+        process: FakeProcess,
+        *,
+        stop_timeout_s: float = 2.0,
+        output_log=None,
+    ):
+        return sglang_serve_module.SglangServeModelRuntime(
+            config=mock.Mock(),
+            process=process,
+            base_url="http://127.0.0.1:18092/v1",
+            health_url="http://127.0.0.1:18092/v1/models",
+            remote_model="gemma-local",
+            timeout_s=12.5,
+            api_key=None,
+            stop_timeout_s=stop_timeout_s,
+            output_log=output_log or tempfile.TemporaryFile(),
+        )
 
 
 if __name__ == "__main__":

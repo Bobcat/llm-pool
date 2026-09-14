@@ -59,7 +59,7 @@ The five fields marked load-overridable can be changed for one load without edit
 
 ## TensorRT-LLM YAML
 
-`trtllm_serve_config_path` names a base YAML file. llm-pool parses that file, merges the effective model and load settings, and passes a temporary YAML file through `--config`. The generated `max_batch_size` comes from `target_inflight`. The source file remains unchanged, and normal runtime cleanup removes the temporary file. Do not set `max_batch_size` through `trtllm_serve_extra_args`.
+`trtllm_serve_config_path` names a base YAML file. llm-pool parses that file, merges the effective model and load settings, and passes a temporary YAML file through `--config`. The generated `max_batch_size` comes from `target_inflight`. The source file remains unchanged, and normal runtime cleanup removes the temporary file. Do not set `max_batch_size` in the base YAML or through `trtllm_serve_extra_args`.
 
 The checked-in [Gemma 4 profile](../config/trtllm/gemma-4-26b-a4b-nvfp4.yaml) contains:
 

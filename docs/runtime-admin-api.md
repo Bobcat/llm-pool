@@ -16,7 +16,7 @@ It controls live runtime state only:
 Managed backend behavior:
 
 - this admin API is implemented and is the live control plane used by the workbench
-- `replicas` and `target_inflight` are common runtime-only load overrides; backend-specific overrides are implemented for `llama_cpp`, `exllamav3`, `vllm`, `vllm_serve`, `trtllm_serve`, `sglang_serve`, and `llama_server`
+- `replicas` is a common runtime-only load override; `target_inflight` is available for `llama_server`, `openai_remote`, `vllm_serve`, `trtllm_serve`, and `sglang_serve`; backend-specific overrides are implemented for `llama_cpp`, `exllamav3`, `vllm`, `vllm_serve`, `trtllm_serve`, `sglang_serve`, and `llama_server`
 - `llama_server` load/unload starts and stops a managed native `llama-server` subprocess; binary path, model path, library path, `mmproj`, draft model path, host, port, and extra native args stay in model config
 - `vllm_serve` load/unload starts and stops a managed local `vllm serve` subprocess; binary path, target model id/path, library path, environment, host, port, API key, and extra CLI args stay in model config
 - `trtllm_serve` load/unload starts and stops a managed local `trtllm-serve` process group; binary path, target model id/path, library path, environment, host, port, TensorRT-LLM config, parser names, and extra CLI args stay in model config
@@ -387,7 +387,7 @@ The UI should parse `exllama_cache_quant` itself when it wants to display separa
 
 #### Current `load_constraints` Shapes
 
-Every backend includes this common constraint:
+Backends that support a load-time inflight target include this constraint:
 
 ```json
 {
@@ -827,12 +827,14 @@ Rules:
 - transition `unloaded -> loading -> loaded`
 - transition `failed -> loading -> loaded`
 - if load fails, transition to `failed` and retain `last_error`
-- an optional request body may provide `replicas` and `target_inflight` for this load, but only while the model is `unloaded` or `failed`
+- an optional request body may provide `replicas` for this load, but only while the model is `unloaded` or `failed`
+- `llama_server`, `openai_remote`, `vllm_serve`, `trtllm_serve`, and `sglang_serve` also accept `target_inflight`
 - an optional request body may provide temporary backend-specific load overrides for this one live load
 
 Supported load override fields:
 
-- public model: `replicas`, `target_inflight`
+- public model: `replicas`
+- supported concurrent server backends: `target_inflight`
 - `llama_cpp`: `gguf_n_ctx`, `gguf_flash_attn`, `gguf_type_k`, `gguf_type_v`
 - ExLlamaV3: `exllama_cache_size`, `exllama_cache_quant`, `exllama_cache_k_bits`, `exllama_cache_v_bits`, `exllama_max_rq_tokens`
 - vLLM and vLLM Serve: `vllm_max_model_len`, `vllm_kv_cache_dtype`, `vllm_kv_cache_memory_bytes`, `vllm_max_pixels`, `vllm_speculative_method`, `vllm_speculative_model`, `vllm_speculative_moe_backend`, `vllm_speculative_attention_backend`, `vllm_num_speculative_tokens`
@@ -976,6 +978,7 @@ vLLM and vLLM Serve load override notes:
 - `vllm_speculative_attention_backend` maps to vLLM `speculative_config.attention_backend`. `null` clears the configured override for this load.
 - `vllm_num_speculative_tokens` maps to vLLM `speculative_config.num_speculative_tokens`.
 - For `vllm_serve`, target model id/path, binary path, library path, environment, host, port, API key, and extra CLI args are configured in the model definition, not overridden through the admin load body.
+- `vllm_serve_extra_args` must not set `--max-num-seqs`; `target_inflight` owns it.
 - Loading a `vllm_serve` model starts a local `vllm serve` subprocess. Unloading terminates that subprocess, so VRAM is released by the server process rather than by Python object cleanup alone.
 
 TensorRT-LLM Serve load notes:
@@ -986,16 +989,17 @@ TensorRT-LLM Serve load notes:
 - `trtllm_kv_cache_dtype` maps to `kv_cache_config.dtype` and accepts `auto`, `fp8`, or `nvfp4`.
 - llm-pool reads the configured base YAML, merges the effective values and the `target_inflight` batch size into a temporary YAML file, and passes that file through `--config`. The source YAML is unchanged. Normal runtime cleanup removes the temporary file.
 - TensorRT-LLM limits KV-cache memory to the lower result of `max_gpu_total_bytes` and `free_gpu_memory_fraction`. Keep the fractional value high enough to act only as a safety ceiling when an absolute budget should control allocation. This differs from the vLLM pattern of configuring a deliberately low utilization fraction alongside an absolute cache size.
-- Target model, binary, library path, environment, base YAML, parser names, host, port, timeouts, and extra CLI args remain in the model definition. `trtllm_serve_extra_args` must not set `max_batch_size`.
+- Target model, binary, library path, environment, base YAML, parser names, host, port, timeouts, and extra CLI args remain in the model definition. Neither the base YAML nor `trtllm_serve_extra_args` may set `max_batch_size`.
 - Loading starts a local `trtllm-serve` process group. Unloading terminates that group, so VRAM is released by process exit.
 
 SGLang Serve load notes:
 
-- `target_inflight` maps to SGLang `--max-running-requests` and also controls llm-pool admission.
+- `target_inflight` is passed to SGLang as `--max-running-requests` and also controls llm-pool admission. SGLang may reduce its native limit during KV-cache sizing; excess admitted requests then wait inside SGLang.
 - `sglang_context_length`, `sglang_max_total_tokens`, `sglang_chunked_prefill_size`, and `sglang_kv_cache_dtype` map to the corresponding SGLang server flags.
 - `sglang_max_total_tokens` sets the absolute KV-cache token capacity. `sglang_mem_fraction_static` remains a startup safety ceiling and must still be high enough to hold the target and assistant weights.
 - `sglang_speculative_algorithm: "NEXTN"` with a Gemma 4 assistant checkpoint selects SGLang's Frozen-KV MTP path. Set the algorithm to `null` to disable speculative decoding for one load.
-- The speculative step count, draft-token count, and top-k map directly to the SGLang server flags.
+- The speculative step count and top-k map directly to SGLang server flags. When top-k is 1, SGLang derives the draft-token count as the step count plus 1; a conflicting explicit override is rejected.
+- `sglang_serve_extra_args` must not set `--max-running-requests`; `target_inflight` owns it.
 - Target model, binary, library path, environment, quantization, attention backend, host, port, parser names, timeouts, and extra CLI arguments remain in the model definition.
 - Loading starts a local `sglang serve` process group. Unloading terminates that group, so VRAM is released by process exit.
 
@@ -1009,6 +1013,7 @@ llama-server load override notes:
 - `llama_server_spec_draft_n_max` maps to native `--spec-draft-n-max`; the API constrains it to `1..6`.
 - `llama_server_spec_draft_p_min` maps to native `--spec-draft-p-min`; the API constrains it to `0.0..1.0`.
 - Model path, binary path, library path, `mmproj`, draft model path, GPU layers, flash attention, reasoning, host, port, API key, and extra native args are configured in the model definition, not overridden through the admin load body.
+- `llama_server_extra_args` must not set `--parallel`; `target_inflight` owns it.
 - Loading a `llama_server` model starts a local `llama-server` subprocess. Unloading terminates that subprocess, so VRAM is released by the native server process rather than by Python object cleanup alone.
 
 `exllama_cache_quant` format:

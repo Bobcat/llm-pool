@@ -105,6 +105,40 @@ class SglangLoadOverrideTests(unittest.TestCase):
         self.assertIsNone(result.sglang_speculative_algorithm)
         self.assertEqual(result.sglang_speculative_draft_model, "assistant")
 
+    def test_topk_one_derives_draft_tokens_from_overridden_steps(self) -> None:
+        result = _router()._apply_load_override(
+            ModelSettings(
+                model_path=None,
+                backend="sglang_serve",
+                sglang_model="/models/gemma4",
+                sglang_speculative_algorithm="NEXTN",
+                sglang_speculative_num_steps=5,
+                sglang_speculative_num_draft_tokens=6,
+                sglang_speculative_eagle_topk=1,
+            ),
+            resolved_backend="sglang_serve",
+            load_override={"sglang_speculative_num_steps": 3},
+        )
+
+        self.assertEqual(result.sglang_speculative_num_steps, 3)
+        self.assertEqual(result.sglang_speculative_num_draft_tokens, 4)
+
+    def test_topk_one_rejects_conflicting_explicit_draft_tokens(self) -> None:
+        with self.assertRaisesRegex(ValueError, "must equal"):
+            _router()._apply_load_override(
+                ModelSettings(
+                    model_path=None,
+                    backend="sglang_serve",
+                    sglang_model="/models/gemma4",
+                    sglang_speculative_algorithm="NEXTN",
+                    sglang_speculative_num_steps=5,
+                    sglang_speculative_num_draft_tokens=6,
+                    sglang_speculative_eagle_topk=1,
+                ),
+                resolved_backend="sglang_serve",
+                load_override={"sglang_speculative_num_draft_tokens": 4},
+            )
+
 
 if __name__ == "__main__":
     unittest.main()

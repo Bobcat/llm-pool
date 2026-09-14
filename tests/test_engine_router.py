@@ -526,10 +526,7 @@ class ModelRouterEngineTests(unittest.TestCase):
         self.assertEqual(loaded_model["effective_target_inflight"], 1)
         self.assertIn("vram_estimate_mib", loaded_model)
         self.assertIn("vram_estimate_source", loaded_model)
-        self.assertEqual(
-            loaded_model["load_constraints"],
-            {"target_inflight": {"kind": "integer", "minimum": 1, "step": 1}},
-        )
+        self.assertEqual(loaded_model["load_constraints"], {})
         self.assertEqual(loaded_model["load_recommendations"], {})
         self.assertIn("device", loaded_model["definition"])
         self.assertIn("compute_type", loaded_model["definition"])
@@ -550,10 +547,7 @@ class ModelRouterEngineTests(unittest.TestCase):
         self.assertEqual(failed_model["effective_target_inflight"], 1)
         self.assertIn("vram_estimate_mib", failed_model)
         self.assertIn("vram_estimate_source", failed_model)
-        self.assertEqual(
-            failed_model["load_constraints"],
-            {"target_inflight": {"kind": "integer", "minimum": 1, "step": 1}},
-        )
+        self.assertEqual(failed_model["load_constraints"], {})
         self.assertEqual(failed_model["load_recommendations"], {})
         self.assertIn("device", failed_model["definition"])
         self.assertIn("compute_type", failed_model["definition"])
@@ -574,10 +568,7 @@ class ModelRouterEngineTests(unittest.TestCase):
         self.assertEqual(unloaded_model["effective_target_inflight"], 1)
         self.assertIn("vram_estimate_mib", unloaded_model)
         self.assertIn("vram_estimate_source", unloaded_model)
-        self.assertEqual(
-            unloaded_model["load_constraints"],
-            {"target_inflight": {"kind": "integer", "minimum": 1, "step": 1}},
-        )
+        self.assertEqual(unloaded_model["load_constraints"], {})
         self.assertEqual(unloaded_model["load_recommendations"], {})
         self.assertIn("device", unloaded_model["definition"])
         self.assertIn("compute_type", unloaded_model["definition"])
@@ -610,11 +601,6 @@ class ModelRouterEngineTests(unittest.TestCase):
         self.assertEqual(
             payload["models"][0]["load_constraints"],
             {
-                "target_inflight": {
-                    "kind": "integer",
-                    "minimum": 1,
-                    "step": 1,
-                },
                 "gguf_n_ctx": {
                     "kind": "integer",
                     "minimum": 1,
@@ -706,11 +692,6 @@ class ModelRouterEngineTests(unittest.TestCase):
         self.assertEqual(
             payload["models"][0]["load_constraints"],
             {
-                "target_inflight": {
-                    "kind": "integer",
-                    "minimum": 1,
-                    "step": 1,
-                },
                 "exllama_cache_size": {
                     "kind": "integer",
                     "minimum": 256,
@@ -1125,6 +1106,14 @@ class ModelRouterEngineTests(unittest.TestCase):
         self.assertEqual(unloaded["configured_target_inflight"], 2)
         self.assertEqual(unloaded["effective_target_inflight"], 1)
         self.assertEqual(unloaded["load_override"], {})
+
+    def test_target_inflight_load_override_is_rejected_for_clamped_backend(self) -> None:
+        with self.assertRaisesRegex(ValueError, "unsupported load override"):
+            ModelRouterEngine.__new__(ModelRouterEngine)._apply_load_override(
+                ModelSettings(model_path="/models/test.gguf", backend="llama_cpp"),
+                resolved_backend="llama_cpp",
+                load_override={"target_inflight": 2},
+            )
 
     def test_scheduler_distributes_work_across_loaded_replicas(self) -> None:
         settings = AppSettings(

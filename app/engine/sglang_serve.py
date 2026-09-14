@@ -221,6 +221,25 @@ class SglangServeEngine:
         port: int,
         remote_model: str,
     ) -> list[str]:
+        if any(
+            argument == "--max-running-requests"
+            or argument.startswith("--max-running-requests=")
+            for argument in settings.sglang_serve_extra_args
+        ):
+            raise ValueError(
+                "SGLang --max-running-requests is controlled by target_inflight"
+            )
+        if (
+            settings.sglang_speculative_algorithm is not None
+            and settings.sglang_speculative_eagle_topk == 1
+            and settings.sglang_speculative_num_draft_tokens
+            != settings.sglang_speculative_num_steps + 1
+        ):
+            raise ValueError(
+                "sglang_speculative_num_draft_tokens must equal "
+                "sglang_speculative_num_steps + 1 when "
+                "sglang_speculative_eagle_topk is 1"
+            )
         command = [
             settings.sglang_serve_binary,
             "serve",
@@ -260,12 +279,13 @@ class SglangServeEngine:
             command.extend(
                 ["--speculative-num-steps", str(settings.sglang_speculative_num_steps)]
             )
-            command.extend(
-                [
-                    "--speculative-num-draft-tokens",
-                    str(settings.sglang_speculative_num_draft_tokens),
-                ]
-            )
+            if settings.sglang_speculative_eagle_topk != 1:
+                command.extend(
+                    [
+                        "--speculative-num-draft-tokens",
+                        str(settings.sglang_speculative_num_draft_tokens),
+                    ]
+                )
             command.extend(
                 ["--speculative-eagle-topk", str(settings.sglang_speculative_eagle_topk)]
             )

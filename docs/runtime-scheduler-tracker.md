@@ -14,7 +14,7 @@ Current reality note:
 - per-key and per-executor pending limits provide bounded backpressure
 - local runtime capability is still effectively `1` in-flight request per replica except for `openai_remote` and the managed local server backends, which can use configured `target_inflight`
 - `llama_server`, `trtllm_serve`, `sglang_serve`, and `vllm_serve` use the same scheduler/executor path; their native subprocess lifecycles are backend-owned, not the general runtime-subprocess design from `runtime-subprocess-notes.md`
-- each managed local server maps `target_inflight` to its native concurrency limit
+- each managed local server maps `target_inflight` to its requested native concurrency limit
 
 ## Status Labels
 

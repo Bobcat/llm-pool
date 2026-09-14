@@ -815,6 +815,16 @@ class ModelRouterEngine:
 
         load_override = dict(load_override)
         if "target_inflight" in load_override:
+            if resolved_backend not in {
+                "llama_server",
+                "openai_remote",
+                "sglang_serve",
+                "trtllm_serve",
+                "vllm_serve",
+            }:
+                raise ValueError(
+                    f"unsupported load override for {resolved_backend} backend: target_inflight"
+                )
             target_inflight = load_override.pop("target_inflight")
             if not isinstance(target_inflight, int) or target_inflight <= 0:
                 raise ValueError("target_inflight load override must be a positive integer")
@@ -1136,7 +1146,29 @@ class ModelRouterEngine:
                     )
                 replacement_kwargs["sglang_kv_cache_dtype"] = value.strip().lower()
 
-            return replace(model_settings, **replacement_kwargs)
+            effective_settings = replace(model_settings, **replacement_kwargs)
+            if (
+                effective_settings.sglang_speculative_algorithm is not None
+                and effective_settings.sglang_speculative_eagle_topk == 1
+            ):
+                expected_draft_tokens = (
+                    effective_settings.sglang_speculative_num_steps + 1
+                )
+                if (
+                    "sglang_speculative_num_draft_tokens" in load_override
+                    and effective_settings.sglang_speculative_num_draft_tokens
+                    != expected_draft_tokens
+                ):
+                    raise ValueError(
+                        "sglang_speculative_num_draft_tokens must equal "
+                        "sglang_speculative_num_steps + 1 when "
+                        "sglang_speculative_eagle_topk is 1"
+                    )
+                effective_settings = replace(
+                    effective_settings,
+                    sglang_speculative_num_draft_tokens=expected_draft_tokens,
+                )
+            return effective_settings
 
         if resolved_backend == "llama_server":
             unsupported = sorted(

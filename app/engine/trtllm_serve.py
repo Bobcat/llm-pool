@@ -247,8 +247,13 @@ class TrtllmServeEngine:
         remote_model: str,
         config_path: str | None,
     ) -> list[str]:
+        reserved_batch_arguments = {"--max_batch_size", "--max-batch-size"}
         if any(
-            argument in {"--max_batch_size", "--max-batch-size"}
+            argument in reserved_batch_arguments
+            or any(
+                argument.startswith(f"{reserved_argument}=")
+                for reserved_argument in reserved_batch_arguments
+            )
             for argument in settings.trtllm_serve_extra_args
         ):
             raise ValueError(
@@ -308,6 +313,10 @@ class TrtllmServeEngine:
                 raise ValueError("TensorRT-LLM config root must be a mapping")
             if isinstance(loaded, dict):
                 payload = loaded
+        if "max_batch_size" in payload:
+            raise ValueError(
+                "TensorRT-LLM base config max_batch_size is controlled by target_inflight"
+            )
 
         for key, value in top_level_overrides.items():
             if value is not None:
