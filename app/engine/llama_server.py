@@ -163,7 +163,8 @@ class LlamaServerEngine:
         remote_model: str,
     ) -> list[str]:
         if any(
-            argument == "--parallel" or argument.startswith("--parallel=")
+            argument in {"-np", "--parallel"}
+            or argument.startswith("--parallel=")
             for argument in settings.llama_server_extra_args
         ):
             raise ValueError("llama-server --parallel is controlled by target_inflight")

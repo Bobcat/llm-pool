@@ -229,17 +229,6 @@ class SglangServeEngine:
             raise ValueError(
                 "SGLang --max-running-requests is controlled by target_inflight"
             )
-        if (
-            settings.sglang_speculative_algorithm is not None
-            and settings.sglang_speculative_eagle_topk == 1
-            and settings.sglang_speculative_num_draft_tokens
-            != settings.sglang_speculative_num_steps + 1
-        ):
-            raise ValueError(
-                "sglang_speculative_num_draft_tokens must equal "
-                "sglang_speculative_num_steps + 1 when "
-                "sglang_speculative_eagle_topk is 1"
-            )
         command = [
             settings.sglang_serve_binary,
             "serve",
@@ -279,13 +268,17 @@ class SglangServeEngine:
             command.extend(
                 ["--speculative-num-steps", str(settings.sglang_speculative_num_steps)]
             )
-            if settings.sglang_speculative_eagle_topk != 1:
-                command.extend(
-                    [
-                        "--speculative-num-draft-tokens",
-                        str(settings.sglang_speculative_num_draft_tokens),
-                    ]
-                )
+            speculative_num_draft_tokens = (
+                settings.sglang_speculative_num_steps + 1
+                if settings.sglang_speculative_eagle_topk == 1
+                else settings.sglang_speculative_num_draft_tokens
+            )
+            command.extend(
+                [
+                    "--speculative-num-draft-tokens",
+                    str(speculative_num_draft_tokens),
+                ]
+            )
             command.extend(
                 ["--speculative-eagle-topk", str(settings.sglang_speculative_eagle_topk)]
             )

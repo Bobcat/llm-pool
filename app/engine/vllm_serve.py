@@ -164,7 +164,9 @@ class VllmServeEngine:
         remote_model: str,
     ) -> list[str]:
         if any(
-            argument == "--max-num-seqs" or argument.startswith("--max-num-seqs=")
+            argument in {"--max-num-seqs", "--max_num_seqs"}
+            or argument.startswith("--max-num-seqs=")
+            or argument.startswith("--max_num_seqs=")
             for argument in settings.vllm_serve_extra_args
         ):
             raise ValueError("vLLM --max-num-seqs is controlled by target_inflight")

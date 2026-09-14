@@ -78,7 +78,7 @@ class SglangServeEngineTests(unittest.TestCase):
                         remote_model="gemma4",
                     )
 
-    def test_rejects_invalid_topk_one_draft_token_count(self) -> None:
+    def test_derives_topk_one_draft_token_count(self) -> None:
         settings = ModelSettings(
             model_path=None,
             backend="sglang_serve",
@@ -89,16 +89,20 @@ class SglangServeEngineTests(unittest.TestCase):
             sglang_speculative_eagle_topk=1,
         )
 
-        with self.assertRaisesRegex(ValueError, "must equal"):
-            sglang_serve_module.SglangServeEngine.__new__(
-                sglang_serve_module.SglangServeEngine
-            )._command(
-                settings=settings,
-                model_ref="/models/gemma4",
-                host="127.0.0.1",
-                port=18092,
-                remote_model="gemma4",
-            )
+        command = sglang_serve_module.SglangServeEngine.__new__(
+            sglang_serve_module.SglangServeEngine
+        )._command(
+            settings=settings,
+            model_ref="/models/gemma4",
+            host="127.0.0.1",
+            port=18092,
+            remote_model="gemma4",
+        )
+
+        self.assertEqual(
+            command[command.index("--speculative-num-draft-tokens") + 1],
+            "6",
+        )
 
     def test_omits_speculative_flags_when_algorithm_is_disabled(self) -> None:
         settings = ModelSettings(
@@ -253,13 +257,13 @@ class SglangServeEngineTests(unittest.TestCase):
                 "google/gemma-4-26B-A4B-it-assistant"
             ),
             "--speculative-num-steps": "5",
+            "--speculative-num-draft-tokens": "6",
             "--speculative-eagle-topk": "1",
             "--api-key": "local-secret",
             "--cuda-graph-backend-decode": "disabled",
         }
         for argument, expected_value in expected_arguments.items():
             self.assertEqual(command[command.index(argument) + 1], expected_value)
-        self.assertNotIn("--speculative-num-draft-tokens", command)
         self.assertIn("--trust-remote-code", command)
 
         popen_kwargs = captured["popen_kwargs"]

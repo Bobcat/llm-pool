@@ -63,7 +63,12 @@ class FakeProcess:
 @unittest.skipUnless(HAS_PYDANTIC, "pydantic not installed")
 class VllmServeEngineTests(unittest.TestCase):
     def test_rejects_max_num_seqs_in_extra_args(self) -> None:
-        for extra_args in (("--max-num-seqs", "8"), ("--max-num-seqs=8",)):
+        for extra_args in (
+            ("--max-num-seqs", "8"),
+            ("--max-num-seqs=8",),
+            ("--max_num_seqs", "8"),
+            ("--max_num_seqs=8",),
+        ):
             with self.subTest(extra_args=extra_args):
                 settings = ModelSettings(
                     model_path=None,

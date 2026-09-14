@@ -998,7 +998,7 @@ SGLang Serve load notes:
 - `sglang_context_length`, `sglang_max_total_tokens`, `sglang_chunked_prefill_size`, and `sglang_kv_cache_dtype` map to the corresponding SGLang server flags.
 - `sglang_max_total_tokens` sets the absolute KV-cache token capacity. `sglang_mem_fraction_static` remains a startup safety ceiling and must still be high enough to hold the target and assistant weights.
 - `sglang_speculative_algorithm: "NEXTN"` with a Gemma 4 assistant checkpoint selects SGLang's Frozen-KV MTP path. Set the algorithm to `null` to disable speculative decoding for one load.
-- The speculative step count and top-k map directly to SGLang server flags. When top-k is 1, SGLang derives the draft-token count as the step count plus 1; a conflicting explicit override is rejected.
+- The speculative step count and top-k map directly to SGLang server flags. When top-k is 1, llm-pool derives the draft-token count as the step count plus 1 and passes it explicitly; a conflicting explicit override is rejected.
 - `sglang_serve_extra_args` must not set `--max-running-requests`; `target_inflight` owns it.
 - Target model, binary, library path, environment, quantization, attention backend, host, port, parser names, timeouts, and extra CLI arguments remain in the model definition.
 - Loading starts a local `sglang serve` process group. Unloading terminates that group, so VRAM is released by process exit.

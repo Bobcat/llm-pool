@@ -61,7 +61,7 @@ class FakeProcess:
 @unittest.skipUnless(HAS_PYDANTIC, "pydantic not installed")
 class LlamaServerEngineTests(unittest.TestCase):
     def test_rejects_parallel_in_extra_args(self) -> None:
-        for extra_args in (("--parallel", "8"), ("--parallel=8",)):
+        for extra_args in (("-np", "8"), ("--parallel", "8"), ("--parallel=8",)):
             with self.subTest(extra_args=extra_args):
                 settings = ModelSettings(
                     model_path="/models/gemma.gguf",
