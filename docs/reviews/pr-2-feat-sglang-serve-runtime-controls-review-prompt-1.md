@@ -24,8 +24,8 @@ read-only.
 ## Review priorities
 
 Report correctness bugs, regressions, unsafe lifecycle behavior, and missing
-tests. Give each finding a severity and an exact file and line. Check both
-repositories before concluding that an API/UI mismatch is harmless.
+tests. Check both repositories before concluding that an API/UI mismatch is
+harmless.
 
 Focus on:
 
@@ -66,7 +66,12 @@ normalized value must win, or conflicting configuration must be rejected.
 Do not treat unmeasured throughput differences as defects. Report performance
 concerns only when they follow from a concrete configuration or code path.
 
-End with one of:
+Write the review to:
+
+`docs/reviews/pr-2-feat-sglang-serve-runtime-controls-review-findings-1.md`
+
+Put findings first, ordered by severity. Give every finding an exact file and
+line reference. End the file with one of:
 
 - `APPROVE` when no blocking or medium-severity findings remain.
 - `REQUEST CHANGES` with the unresolved findings listed first.
