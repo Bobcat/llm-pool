@@ -1,9 +1,11 @@
 # Review prompt: SGLang backend and normalized load controls
 
-Review these two changes together:
+Review these two pull requests together:
 
-- `llm-pool`: compare `feat/sglang-serve-runtime-controls` with `main`.
-- `llm-workbench`: compare `feat/llm-pool-sglang-load-controls` with `main`.
+- [llm-pool #2](https://github.com/Bobcat/llm-pool/pull/2): compare
+  `feat/sglang-serve-runtime-controls` with `main`.
+- [llm-workbench #12](https://github.com/Bobcat/llm-workbench/pull/12): compare
+  `feat/llm-pool-sglang-load-controls` with `main`.
 
 The pool change adds a managed `sglang_serve` backend and extends the existing
 TensorRT-LLM load controls. It also makes `target_inflight` the normalized
