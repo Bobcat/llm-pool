@@ -23,6 +23,9 @@ class ServiceSettings:
 
 _ALLOWED_MODALITIES = ("text", "image", "audio")
 _REMOTE_FILE_MODES = ("chat_completions_inline", "files_extract")
+_VLLM_SERVE_REASONING_EFFORTS = frozenset(
+    ("none", "minimal", "low", "medium", "high", "xhigh", "max")
+)
 
 
 @dataclass(frozen=True)
@@ -290,6 +293,17 @@ def load_settings(path: str | Path | None = None) -> AppSettings:
         reasoning_efforts = _coerce_reasoning_efforts(
             model_payload.get("reasoning_efforts")
         )
+        if resolved_backend == "vllm_serve":
+            unsupported_efforts = tuple(
+                effort
+                for effort in reasoning_efforts
+                if effort not in _VLLM_SERVE_REASONING_EFFORTS
+            )
+            if unsupported_efforts:
+                raise ValueError(
+                    "vllm_serve reasoning_efforts contains unsupported values: "
+                    + ", ".join(unsupported_efforts)
+                )
         vllm_serve_extra_args = _coerce_str_tuple(
             model_payload.get("vllm_serve_extra_args"),
             "vllm_serve_extra_args",

@@ -83,6 +83,48 @@ class ConfigTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "reasoning-parser"):
                 load_settings(path)
 
+    def test_load_settings_validates_vllm_reasoning_efforts(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = Path(tmpdir) / "settings.json"
+
+            def write_settings(reasoning_efforts: list[str]) -> None:
+                path.write_text(
+                    json.dumps(
+                        {
+                            "engine": {
+                                "models": {
+                                    "gemma4-vllm": {
+                                        "backend": "vllm_serve",
+                                        "vllm_model": "/models/gemma4",
+                                        "reasoning_efforts": reasoning_efforts,
+                                    }
+                                }
+                            }
+                        }
+                    ),
+                    encoding="utf-8",
+                )
+
+            supported_efforts = [
+                "none",
+                "minimal",
+                "low",
+                "medium",
+                "high",
+                "xhigh",
+                "max",
+            ]
+            write_settings(supported_efforts)
+            settings = load_settings(path)
+            self.assertEqual(
+                settings.engine.models["gemma4-vllm"].reasoning_efforts,
+                tuple(supported_efforts),
+            )
+
+            write_settings(["off", "thorough"])
+            with self.assertRaisesRegex(ValueError, "vllm_serve reasoning_efforts"):
+                load_settings(path)
+
     def test_load_settings_rejects_excessive_thinking_token_budget(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             path = Path(tmpdir) / "settings.json"
