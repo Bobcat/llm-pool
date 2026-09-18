@@ -214,6 +214,12 @@ Response:
 }
 ```
 
+`reasoning_text` contains provider reasoning when available. `metrics.engine_finish_reason`
+mirrors the first upstream completion choice's finish reason. `metadata` is an
+extensible object; chat-completions backends place upstream response fields in
+`metadata.upstream_response`, excluding generated message text and token-level
+logs because those can duplicate prompt or output content.
+
 `stream: true` currently uses the service-side SSE path. It emits:
 
 - `response.created`
