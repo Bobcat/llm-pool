@@ -25,7 +25,11 @@ from app.schemas import TextContent
 from .common import BackendExecutionError
 from .common import LOGGER
 from .common import ResolvedDecoding
+from .common import _chat_completion_finish_reason
+from .common import _chat_completion_metadata
 from .common import _exception_message
+from .common import _request_explicitly_enables_thinking
+from .common import _resolve_request_enable_thinking
 
 
 _DEFAULT_SYSTEM_PROMPT = "You are a helpful assistant. Return only the response."
@@ -96,17 +100,28 @@ class VllmServeEngine:
         response_payload = self._post_json(runtime, payload)
         wall_s = max(0.0, time.perf_counter() - started)
 
-        text = self._extract_text(response_payload)
+        text = self._extract_text(
+            response_payload,
+            allow_reasoning_only=_request_explicitly_enables_thinking(request),
+        )
+        choice = response_payload["choices"][0]
+        message = choice["message"]
+        reasoning = message.get("reasoning")
+        reasoning_text = reasoning if isinstance(reasoning, str) and reasoning else None
+        finish_reason = _chat_completion_finish_reason(response_payload)
         prompt_tokens, output_tokens = self._extract_usage(response_payload)
         tokens_per_second = None
         if output_tokens is not None and wall_s > 0.0:
             tokens_per_second = output_tokens / wall_s
         return EngineResult(
             text=text,
+            reasoning_text=reasoning_text,
+            metadata={"upstream_response": _chat_completion_metadata(response_payload)},
             metrics=ResponseMetrics(
                 backend_inference_wall_ms=wall_s * 1000.0,
                 engine_prompt_tokens=prompt_tokens,
                 engine_output_tokens=output_tokens,
+                engine_finish_reason=finish_reason,
                 engine_tokens_per_second=tokens_per_second,
             ),
         )
@@ -310,6 +325,18 @@ class VllmServeEngine:
         }
         if decoding.stop:
             payload["stop"] = decoding.stop
+        enable_thinking = _resolve_request_enable_thinking(
+            request,
+            runtime.config.enable_thinking,
+        )
+        if runtime.config.prompt_format == "gemma4_template" and enable_thinking is not None:
+            payload["chat_template_kwargs"] = {
+                "enable_thinking": enable_thinking
+            }
+        if request.thinking_token_budget is not None:
+            payload["thinking_token_budget"] = request.thinking_token_budget
+        if request.reasoning_effort is not None:
+            payload["reasoning_effort"] = request.reasoning_effort
         if request.response_format is not None:
             payload["response_format"] = request.response_format.model_dump(
                 mode="python",
@@ -445,7 +472,12 @@ class VllmServeEngine:
             message=f"vllm serve chat completion failed with HTTP {status}",
         )
 
-    def _extract_text(self, payload: dict[str, object]) -> str:
+    def _extract_text(
+        self,
+        payload: dict[str, object],
+        *,
+        allow_reasoning_only: bool = False,
+    ) -> str:
         choices = payload.get("choices")
         if not isinstance(choices, list) or not choices:
             raise BackendExecutionError(
@@ -470,6 +502,13 @@ class VllmServeEngine:
         content = message.get("content")
         if isinstance(content, str):
             return content.strip()
+        if (
+            allow_reasoning_only
+            and content is None
+            and isinstance(message.get("reasoning"), str)
+            and first_choice.get("finish_reason") == "length"
+        ):
+            return ""
         raise BackendExecutionError(
             code="vllm_serve_response_parse_failure",
             status_code=502,

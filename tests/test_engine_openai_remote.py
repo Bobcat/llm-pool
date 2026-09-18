@@ -90,10 +90,22 @@ class OpenAIRemoteEngineTests(unittest.TestCase):
             captured["timeout"] = timeout
             return FakeResponse(
                 {
+                    "id": "upstream-123",
+                    "model": "provider-model",
+                    "created": 12345,
+                    "service_tier": "default",
+                    "prompt_token_ids": [1, 2, 3],
+                    "prompt_logprobs": [{"token": "Hello"}],
                     "choices": [
                         {
+                            "finish_reason": "stop",
+                            "logprobs": [{"token": "done"}],
+                            "routed_experts": [["expert-1"]],
                             "message": {
                                 "content": "  done  ",
+                                "role": "assistant",
+                                "refusal": "No.",
+                                "annotations": [{"type": "citation"}],
                             }
                         }
                     ],
@@ -139,6 +151,21 @@ class OpenAIRemoteEngineTests(unittest.TestCase):
         self.assertEqual(result.metrics.engine_prompt_tokens, 12)
         self.assertEqual(result.metrics.engine_cached_prompt_tokens, 8)
         self.assertEqual(result.metrics.engine_output_tokens, 5)
+        self.assertEqual(result.metrics.engine_finish_reason, "stop")
+        self.assertEqual(result.metadata["upstream_response"]["id"], "upstream-123")
+        self.assertEqual(result.metadata["upstream_response"]["model"], "provider-model")
+        self.assertEqual(result.metadata["upstream_response"]["service_tier"], "default")
+        self.assertEqual(result.metadata["upstream_response"]["usage"]["cached_tokens"], 8)
+        self.assertEqual(result.metadata["upstream_response"]["choices"][0]["finish_reason"], "stop")
+        self.assertNotIn("content", result.metadata["upstream_response"]["choices"][0]["message"])
+        self.assertEqual(
+            result.metadata["upstream_response"]["choices"][0]["message"],
+            {"role": "assistant"},
+        )
+        self.assertNotIn("logprobs", result.metadata["upstream_response"]["choices"][0])
+        self.assertNotIn("routed_experts", result.metadata["upstream_response"]["choices"][0])
+        self.assertNotIn("prompt_token_ids", result.metadata["upstream_response"])
+        self.assertNotIn("prompt_logprobs", result.metadata["upstream_response"])
         self.assertIsNotNone(result.metrics.engine_tokens_per_second)
         self.assertEqual(captured["url"], "https://api.example.com/v1/chat/completions")
         self.assertEqual(captured["timeout"], 12.5)
@@ -159,6 +186,82 @@ class OpenAIRemoteEngineTests(unittest.TestCase):
                 "prompt_cache_key": "chat-123",
             },
         )
+
+    def test_extracts_deepseek_cache_hit_tokens(self) -> None:
+        engine = openai_remote_module.OpenAIRemoteEngine.__new__(
+            openai_remote_module.OpenAIRemoteEngine
+        )
+
+        self.assertEqual(
+            engine._extract_usage(
+                {
+                    "usage": {
+                        "prompt_tokens": 100,
+                        "prompt_cache_hit_tokens": 75,
+                        "prompt_cache_miss_tokens": 25,
+                        "completion_tokens": 12,
+                        "total_tokens": 112,
+                    }
+                }
+            ),
+            (100, 12, 75),
+        )
+
+    def test_complete_exposes_reasoning_separately_from_answer(self) -> None:
+        engine = openai_remote_module.OpenAIRemoteEngine.__new__(
+            openai_remote_module.OpenAIRemoteEngine
+        )
+        engine.decoding_defaults = DecodingDefaults()
+        engine._models = {
+            "deepseek-flash": openai_remote_module.OpenAIRemoteModelRuntime(
+                config=ModelSettings(model_path=None, remote_thinking="disabled"),
+                base_url="https://api.deepseek.com",
+                api_key_env="DEEPSEEK_API_KEY",
+                remote_model="deepseek-flash",
+                timeout_s=10.0,
+            )
+        }
+        upstream = {
+            "choices": [{"message": {"content": "391", "reasoning_content": "17 times 23 is 391."}}],
+            "usage": {"prompt_tokens": 10, "completion_tokens": 8},
+        }
+        with mock.patch.object(engine, "_post_json", return_value=upstream) as post:
+            result = engine.complete(
+                ResponseRequest(model="deepseek-flash", input="17 * 23?", thinking="enabled")
+            )
+
+        self.assertEqual(post.call_args.args[1]["thinking"], {"type": "enabled"})
+        self.assertEqual(result.text, "391")
+        self.assertEqual(result.reasoning_text, "17 times 23 is 391.")
+
+    def test_reasoning_effort_controls_remote_thinking(self) -> None:
+        engine = openai_remote_module.OpenAIRemoteEngine.__new__(
+            openai_remote_module.OpenAIRemoteEngine
+        )
+        engine.decoding_defaults = DecodingDefaults()
+        runtime = openai_remote_module.OpenAIRemoteModelRuntime(
+            config=ModelSettings(
+                model_path=None,
+                remote_thinking="disabled",
+                reasoning_efforts=("none", "low", "high", "max"),
+            ),
+            base_url="https://api.deepseek.com",
+            api_key_env="DEEPSEEK_API_KEY",
+            remote_model="deepseek-flash",
+            timeout_s=10.0,
+        )
+        payload = engine._chat_completions_payload(
+            runtime=runtime,
+            request=ResponseRequest(
+                model="deepseek-flash",
+                input="17 * 23?",
+                reasoning_effort="low",
+            ),
+            decoding=engine._resolve_decoding(DecodingParams()),
+        )
+
+        self.assertEqual(payload["reasoning_effort"], "low")
+        self.assertEqual(payload["thinking"], {"type": "enabled"})
 
     def test_prompt_cache_key_requires_model_opt_in(self) -> None:
         engine = openai_remote_module.OpenAIRemoteEngine.__new__(

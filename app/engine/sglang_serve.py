@@ -28,6 +28,8 @@ from app.schemas import TextContent
 from .common import BackendExecutionError
 from .common import LOGGER
 from .common import ResolvedDecoding
+from .common import _chat_completion_finish_reason
+from .common import _chat_completion_metadata
 from .common import _exception_message
 from .common import _resolve_request_enable_thinking
 
@@ -150,10 +152,12 @@ class SglangServeEngine:
             tokens_per_second = output_tokens / wall_s
         return EngineResult(
             text=text,
+            metadata={"upstream_response": _chat_completion_metadata(response_payload)},
             metrics=ResponseMetrics(
                 backend_inference_wall_ms=wall_s * 1000.0,
                 engine_prompt_tokens=prompt_tokens,
                 engine_output_tokens=output_tokens,
+                engine_finish_reason=_chat_completion_finish_reason(response_payload),
                 engine_tokens_per_second=tokens_per_second,
             ),
         )

@@ -7,6 +7,7 @@ import math
 import os
 from pathlib import Path
 
+from app.limits import MAX_OUTPUT_TOKENS
 
 DEFAULT_SETTINGS_PATH = Path(__file__).resolve().parents[1] / "config" / "settings.json"
 DEFAULT_LOCAL_SETTINGS_PATH = Path(__file__).resolve().parents[1] / "config" / "local.json"
@@ -22,6 +23,9 @@ class ServiceSettings:
 
 _ALLOWED_MODALITIES = ("text", "image", "audio")
 _REMOTE_FILE_MODES = ("chat_completions_inline", "files_extract")
+_VLLM_SERVE_REASONING_EFFORTS = frozenset(
+    ("none", "minimal", "low", "medium", "high", "xhigh", "max")
+)
 
 
 @dataclass(frozen=True)
@@ -59,6 +63,8 @@ class ModelSettings:
     remote_health_check: str = "config_only"
     remote_max_retries: int = 0
     remote_thinking: str | None = None
+    reasoning_efforts: tuple[str, ...] = ()
+    thinking_token_budget_max: int | None = None
     remote_prompt_cache_key_enabled: bool = False
     remote_file_mode: str | None = None
     remote_file_purpose: str | None = None
@@ -284,6 +290,44 @@ def load_settings(path: str | Path | None = None) -> AppSettings:
         remote_thinking = _coerce_optional_str(model_payload.get("remote_thinking"))
         if remote_thinking is not None:
             remote_thinking = remote_thinking.lower()
+        reasoning_efforts = _coerce_reasoning_efforts(
+            model_payload.get("reasoning_efforts")
+        )
+        if resolved_backend == "vllm_serve":
+            unsupported_efforts = tuple(
+                effort
+                for effort in reasoning_efforts
+                if effort not in _VLLM_SERVE_REASONING_EFFORTS
+            )
+            if unsupported_efforts:
+                raise ValueError(
+                    "vllm_serve reasoning_efforts contains unsupported values: "
+                    + ", ".join(unsupported_efforts)
+                )
+        vllm_serve_extra_args = _coerce_str_tuple(
+            model_payload.get("vllm_serve_extra_args"),
+            "vllm_serve_extra_args",
+        )
+        thinking_token_budget_max = _coerce_optional_positive_int(
+            model_payload.get("thinking_token_budget_max")
+        )
+        if (
+            thinking_token_budget_max is not None
+            and thinking_token_budget_max > MAX_OUTPUT_TOKENS
+        ):
+            raise ValueError(
+                f"thinking_token_budget_max must be at most {MAX_OUTPUT_TOKENS}"
+            )
+        if thinking_token_budget_max is not None:
+            if resolved_backend != "vllm_serve":
+                raise ValueError(
+                    "thinking_token_budget_max is supported only by vllm_serve"
+                )
+            if not _has_vllm_serve_reasoning_parser(vllm_serve_extra_args):
+                raise ValueError(
+                    "thinking_token_budget_max requires --reasoning-parser in "
+                    "vllm_serve_extra_args"
+                )
         remote_file_mode = _coerce_optional_str(model_payload.get("remote_file_mode"))
         if remote_file_mode is not None:
             remote_file_mode = remote_file_mode.lower()
@@ -330,6 +374,8 @@ def load_settings(path: str | Path | None = None) -> AppSettings:
             remote_health_check=remote_health_check,
             remote_max_retries=int(model_payload.get("remote_max_retries", 0)),
             remote_thinking=remote_thinking,
+            reasoning_efforts=reasoning_efforts,
+            thinking_token_budget_max=thinking_token_budget_max,
             remote_prompt_cache_key_enabled=bool(
                 model_payload.get("remote_prompt_cache_key_enabled", False)
             ),
@@ -418,10 +464,7 @@ def load_settings(path: str | Path | None = None) -> AppSettings:
                 "vllm_serve_env",
             ),
             vllm_serve_api_key=_coerce_optional_str(model_payload.get("vllm_serve_api_key")),
-            vllm_serve_extra_args=_coerce_str_tuple(
-                model_payload.get("vllm_serve_extra_args"),
-                "vllm_serve_extra_args",
-            ),
+            vllm_serve_extra_args=vllm_serve_extra_args,
             trtllm_model=_coerce_optional_str(model_payload.get("trtllm_model")),
             trtllm_trust_remote_code=bool(
                 model_payload.get("trtllm_trust_remote_code", False)
@@ -754,12 +797,39 @@ def _coerce_fairness_weights(value: object) -> dict[str, float]:
     return parsed
 
 
+def _coerce_reasoning_efforts(value: object) -> tuple[str, ...]:
+    if value is None:
+        return ()
+    if not isinstance(value, (list, tuple)):
+        raise ValueError("reasoning_efforts must be a list of strings")
+    parsed: list[str] = []
+    for raw_effort in value:
+        effort = str(raw_effort).strip().lower()
+        if effort == "":
+            raise ValueError("reasoning_efforts must not contain blank values")
+        if effort not in parsed:
+            parsed.append(effort)
+    return tuple(parsed)
+
+
 def _coerce_str_tuple(value: object, field_name: str) -> tuple[str, ...]:
     if value is None:
         return ()
     if not isinstance(value, (list, tuple)):
         raise ValueError(f"{field_name} must be a list of strings")
     return tuple(str(item) for item in value)
+
+
+def _has_vllm_serve_reasoning_parser(arguments: tuple[str, ...]) -> bool:
+    for index, argument in enumerate(arguments):
+        if argument.startswith("--reasoning-parser="):
+            return argument.split("=", 1)[1].strip() != ""
+        if argument == "--reasoning-parser":
+            if index + 1 >= len(arguments):
+                return False
+            parser_name = arguments[index + 1].strip()
+            return parser_name != "" and not parser_name.startswith("-")
+    return False
 
 
 def _coerce_path_tuple(value: object, field_name: str) -> tuple[str, ...]:

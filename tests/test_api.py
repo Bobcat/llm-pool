@@ -75,6 +75,35 @@ class ApiTests(unittest.TestCase):
         self.assertIn("engine_outside_backend_wall_ms", payload["metrics"])
         self.assertIn("pool_total_wall_ms", payload["metrics"])
         self.assertIn("gpu_generate_total_ms", payload["metrics"])
+        self.assertEqual(payload["metadata"], {})
+
+    def test_provider_metadata_reaches_json_and_stream_responses(self) -> None:
+        client = self._create_client()
+        from app.engine.stub import StubEngine
+        from app.schemas import EngineResult
+
+        result = EngineResult(
+            text="OK",
+            reasoning_text="Check first.",
+            metadata={"upstream_response": {"id": "provider-1", "model": "kimi-k2.6"}},
+        )
+        with mock.patch.object(StubEngine, "complete", return_value=result):
+            response = client.post(
+                "/v1/responses",
+                json={"model": "test-model", "input": "Hello"},
+            )
+            streamed = client.post(
+                "/v1/responses",
+                json={"model": "test-model", "input": "Hello", "stream": True},
+            )
+
+        expected = result.metadata
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["metadata"], expected)
+        self.assertEqual(response.json()["reasoning_text"], "Check first.")
+        self.assertEqual(streamed.status_code, 200)
+        self.assertIn('"metadata": {"upstream_response": {"id": "provider-1", "model": "kimi-k2.6"}}', streamed.text)
+        self.assertIn('"reasoning_text": "Check first."', streamed.text)
 
     def test_inference_log_includes_normalized_fairness_key(self) -> None:
         main = importlib.import_module("app.main")

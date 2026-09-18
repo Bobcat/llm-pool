@@ -19,6 +19,7 @@ if HAS_PYDANTIC:
     from app.config import ServiceSettings
     import app.engine as engine_module
     import app.engine.router as router_module
+    from app.engine.common import _model_definition_payload
     from app.engine import ModelRouterEngine
     from app.engine import build_engine
     from app.schemas import AdminLoadRequest
@@ -30,6 +31,22 @@ if HAS_PYDANTIC:
 
 @unittest.skipUnless(HAS_PYDANTIC, "pydantic not installed")
 class ModelRouterEngineTests(unittest.TestCase):
+    def test_model_definition_scopes_thinking_budget_to_vllm_serve(self) -> None:
+        model = ModelSettings(
+            model_path=None,
+            backend="vllm_serve",
+            thinking_token_budget_max=512,
+        )
+
+        self.assertIn(
+            "thinking_token_budget_max",
+            _model_definition_payload(model, resolved_backend="vllm_serve"),
+        )
+        self.assertNotIn(
+            "thinking_token_budget_max",
+            _model_definition_payload(model, resolved_backend="ct2"),
+        )
+
     def test_dispatches_by_model_backend(self) -> None:
         settings = AppSettings(
             service=ServiceSettings(),
@@ -311,7 +328,9 @@ class ModelRouterEngineTests(unittest.TestCase):
                     "vllm-model": ModelSettings(
                         model_path=None,
                         backend="vllm_serve",
+                        prompt_format="gemma4_template",
                         vllm_model="/models/gemma4",
+                        thinking_token_budget_max=512,
                         target_inflight=3,
                     ),
                 },
@@ -334,14 +353,62 @@ class ModelRouterEngineTests(unittest.TestCase):
 
         with mock.patch.object(engine_module, "VllmServeEngine", FakeVllmServeEngine):
             engine = ModelRouterEngine(settings)
-            result = engine.complete(ResponseRequest(model="vllm-model", input="hello"))
+            result = engine.complete(
+                ResponseRequest(model="vllm-model", input="hello", thinking="enabled")
+            )
             model = engine.admin_models_payload()["models"][0]
             entry = engine.unload_model("vllm-model")
 
         self.assertEqual(result.text, "vllm-serve:vllm-model#1")
         self.assertEqual(model["effective_target_inflight"], 3)
+        self.assertEqual(
+            model["capabilities"]["thinking_modes"],
+            ["default", "enabled", "disabled"],
+        )
+        self.assertEqual(
+            model["capabilities"]["thinking_token_budget"],
+            {"minimum": 1, "maximum": 512},
+        )
         self.assertEqual(entry["runtime_state"], "unloaded")
         self.assertTrue(runtime.closed)
+
+    def test_rejects_unsupported_reasoning_controls(self) -> None:
+        engine = ModelRouterEngine.__new__(ModelRouterEngine)
+        engine._settings = AppSettings(engine=EngineSettings())
+        model_settings = ModelSettings(
+            model_path=None,
+            reasoning_efforts=("none", "low"),
+            thinking_token_budget_max=512,
+        )
+
+        with self.assertRaises(engine_module.RequestAdmissionError) as exc_info:
+            engine._validate_reasoning_controls(
+                ResponseRequest(model="gemma4", input="hello", reasoning_effort="high"),
+                model_settings,
+            )
+        self.assertEqual(exc_info.exception.code, "reasoning_effort_unsupported")
+
+        with self.assertRaises(engine_module.RequestAdmissionError) as exc_info:
+            engine._validate_reasoning_controls(
+                ResponseRequest(
+                    model="gemma4",
+                    input="hello",
+                    thinking="enabled",
+                    thinking_token_budget=256,
+                ),
+                model_settings,
+            )
+        self.assertEqual(exc_info.exception.code, "thinking_token_budget_exhausts_output")
+
+        engine._validate_reasoning_controls(
+            ResponseRequest(
+                model="gemma4",
+                input="hello",
+                reasoning_effort="low",
+                thinking_token_budget=128,
+            ),
+            model_settings,
+        )
 
     def test_dispatches_trtllm_serve_backend_as_local_runtime(self) -> None:
         settings = AppSettings(

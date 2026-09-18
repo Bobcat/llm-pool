@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+import json
 import os
 import tempfile
 import unittest
 from pathlib import Path
 
+from app.config import DEFAULT_SETTINGS_PATH
 from app.config import load_settings
 
 
@@ -27,6 +29,131 @@ class ConfigTests(unittest.TestCase):
         )
         self.assertEqual(dict(model.sglang_serve_env)["MAX_JOBS"], "4")
         self.assertFalse(model.enabled)
+
+    def test_default_settings_leave_deepseek_disabled(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            previous_local_env = os.environ.get("LLM_POOL_LOCAL_SETTINGS_PATH")
+            os.environ["LLM_POOL_LOCAL_SETTINGS_PATH"] = str(
+                Path(tmpdir) / "missing-local.json"
+            )
+            try:
+                settings = load_settings(DEFAULT_SETTINGS_PATH)
+            finally:
+                if previous_local_env is None:
+                    os.environ.pop("LLM_POOL_LOCAL_SETTINGS_PATH", None)
+                else:
+                    os.environ["LLM_POOL_LOCAL_SETTINGS_PATH"] = previous_local_env
+
+        self.assertFalse(settings.engine.models["deepseek-flash"].enabled)
+
+    def test_load_settings_requires_reasoning_parser_for_vllm_thinking_budget(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = Path(tmpdir) / "settings.json"
+            def write_settings(extra_args: list[str] | None = None) -> None:
+                model = {
+                    "backend": "vllm_serve",
+                    "vllm_model": "/models/gemma4",
+                    "thinking_token_budget_max": 512,
+                }
+                if extra_args is not None:
+                    model["vllm_serve_extra_args"] = extra_args
+                path.write_text(
+                    json.dumps({"engine": {"models": {"gemma4-vllm": model}}}),
+                    encoding="utf-8",
+                )
+
+            write_settings()
+
+            with self.assertRaisesRegex(ValueError, "reasoning-parser"):
+                load_settings(path)
+
+            for extra_args in (
+                ["--reasoning-parser", "gemma4"],
+                ["--reasoning-parser=gemma4"],
+            ):
+                with self.subTest(extra_args=extra_args):
+                    write_settings(extra_args)
+                    settings = load_settings(path)
+                    self.assertEqual(
+                        settings.engine.models["gemma4-vllm"].vllm_serve_extra_args,
+                        tuple(extra_args),
+                    )
+
+            write_settings(["--reasoning-parser", "--max-num-seqs", "8"])
+            with self.assertRaisesRegex(ValueError, "reasoning-parser"):
+                load_settings(path)
+
+    def test_load_settings_validates_vllm_reasoning_efforts(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = Path(tmpdir) / "settings.json"
+
+            def write_settings(reasoning_efforts: list[str]) -> None:
+                path.write_text(
+                    json.dumps(
+                        {
+                            "engine": {
+                                "models": {
+                                    "gemma4-vllm": {
+                                        "backend": "vllm_serve",
+                                        "vllm_model": "/models/gemma4",
+                                        "reasoning_efforts": reasoning_efforts,
+                                    }
+                                }
+                            }
+                        }
+                    ),
+                    encoding="utf-8",
+                )
+
+            supported_efforts = [
+                "none",
+                "minimal",
+                "low",
+                "medium",
+                "high",
+                "xhigh",
+                "max",
+            ]
+            write_settings(supported_efforts)
+            settings = load_settings(path)
+            self.assertEqual(
+                settings.engine.models["gemma4-vllm"].reasoning_efforts,
+                tuple(supported_efforts),
+            )
+
+            write_settings(["off", "thorough"])
+            with self.assertRaisesRegex(ValueError, "vllm_serve reasoning_efforts"):
+                load_settings(path)
+
+    def test_load_settings_rejects_excessive_thinking_token_budget(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = Path(tmpdir) / "settings.json"
+            missing_local_path = Path(tmpdir) / "missing-local.json"
+            path.write_text(
+                (
+                    "{\n"
+                    '  "engine": {\n'
+                    '    "models": {\n'
+                    '      "test-model": {\n'
+                    '        "model_path": "/models/test",\n'
+                    '        "thinking_token_budget_max": 4097\n'
+                    "      }\n"
+                    "    }\n"
+                    "  }\n"
+                    "}\n"
+                ),
+                encoding="utf-8",
+            )
+            previous_local_env = os.environ.get("LLM_POOL_LOCAL_SETTINGS_PATH")
+            os.environ["LLM_POOL_LOCAL_SETTINGS_PATH"] = str(missing_local_path)
+            try:
+                with self.assertRaisesRegex(ValueError, "thinking_token_budget_max"):
+                    load_settings(path)
+            finally:
+                if previous_local_env is None:
+                    os.environ.pop("LLM_POOL_LOCAL_SETTINGS_PATH", None)
+                else:
+                    os.environ["LLM_POOL_LOCAL_SETTINGS_PATH"] = previous_local_env
 
     def test_load_settings_reads_engine_model_registry(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:

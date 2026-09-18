@@ -5,9 +5,62 @@ from dataclasses import field
 import logging
 from pathlib import Path
 import subprocess
+from typing import Any
 
 
 LOGGER = logging.getLogger("llm_pool.engine")
+
+_CHAT_COMPLETION_TOP_LEVEL_METADATA_FIELDS = {
+    "id",
+    "object",
+    "created",
+    "model",
+    "usage",
+    "service_tier",
+    "system_fingerprint",
+}
+_CHAT_COMPLETION_CHOICE_METADATA_FIELDS = {"index", "finish_reason", "stop_reason"}
+_CHAT_COMPLETION_MESSAGE_METADATA_FIELDS = {"role"}
+
+
+def _chat_completion_metadata(payload: dict[str, Any]) -> dict[str, Any]:
+    """Keep stable upstream metadata without generated or token-level content."""
+    metadata = {
+        key: value
+        for key, value in payload.items()
+        if key in _CHAT_COMPLETION_TOP_LEVEL_METADATA_FIELDS
+    }
+    choices = payload.get("choices")
+    if isinstance(choices, list):
+        metadata["choices"] = []
+        for choice in choices:
+            if not isinstance(choice, dict):
+                continue
+            choice_metadata = {
+                key: value
+                for key, value in choice.items()
+                if key in _CHAT_COMPLETION_CHOICE_METADATA_FIELDS
+            }
+            message = choice.get("message")
+            if isinstance(message, dict):
+                choice_metadata["message"] = {
+                    key: value
+                    for key, value in message.items()
+                    if key in _CHAT_COMPLETION_MESSAGE_METADATA_FIELDS
+                }
+            metadata["choices"].append(choice_metadata)
+    return metadata
+
+
+def _chat_completion_finish_reason(payload: dict[str, Any]) -> str | None:
+    choices = payload.get("choices")
+    if not isinstance(choices, list) or not choices:
+        return None
+    first_choice = choices[0]
+    if not isinstance(first_choice, dict):
+        return None
+    finish_reason = first_choice.get("finish_reason")
+    return finish_reason if isinstance(finish_reason, str) else None
 
 _GGUF_CACHE_TYPE_ALLOWED_VALUES = (
     "f32",
@@ -47,6 +100,7 @@ _COMMON_MODEL_DEFINITION_FIELDS = (
     "replicas",
     "replica_max",
     "target_inflight",
+    "reasoning_efforts",
 )
 
 _BACKEND_MODEL_DEFINITION_FIELDS = {
@@ -155,6 +209,7 @@ _BACKEND_MODEL_DEFINITION_FIELDS = {
         "vllm_serve_env",
         "vllm_serve_api_key",
         "vllm_serve_extra_args",
+        "thinking_token_budget_max",
     ),
     "trtllm_serve": (
         "trtllm_model",
@@ -228,6 +283,7 @@ _THINKING_CONTROL_PROMPT_FORMATS = {
     "sglang_serve": frozenset({"gemma4_template"}),
     "trtllm_serve": frozenset({"gemma4_template"}),
     "vllm": frozenset({"gemma4_template", "qwen3_template"}),
+    "vllm_serve": frozenset({"gemma4_template"}),
 }
 _DEFAULT_THINKING_MODES = ("default",)
 _OVERRIDE_THINKING_MODES = ("default", "enabled", "disabled")
@@ -282,6 +338,8 @@ def _model_response_formats(backend: str) -> list[str]:
 
 
 def _resolve_request_enable_thinking(request, default: bool | None) -> bool | None:
+    if request.reasoning_effort is not None:
+        return request.reasoning_effort != "none"
     if request.thinking == "enabled":
         return True
     if request.thinking == "disabled":
@@ -289,7 +347,14 @@ def _resolve_request_enable_thinking(request, default: bool | None) -> bool | No
     return default
 
 
+def _request_explicitly_enables_thinking(request) -> bool:
+    """Whether the request, rather than a model default, enabled thinking."""
+    return _resolve_request_enable_thinking(request, None) is True
+
+
 def _resolve_request_remote_thinking(request, default: str | None) -> str | None:
+    if request.reasoning_effort is not None:
+        return "disabled" if request.reasoning_effort == "none" else "enabled"
     if request.thinking == "enabled":
         return "enabled"
     if request.thinking == "disabled":
