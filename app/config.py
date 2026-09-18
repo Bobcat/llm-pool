@@ -811,7 +811,10 @@ def _has_vllm_serve_reasoning_parser(arguments: tuple[str, ...]) -> bool:
         if argument.startswith("--reasoning-parser="):
             return argument.split("=", 1)[1].strip() != ""
         if argument == "--reasoning-parser":
-            return index + 1 < len(arguments) and arguments[index + 1].strip() != ""
+            if index + 1 >= len(arguments):
+                return False
+            parser_name = arguments[index + 1].strip()
+            return parser_name != "" and not parser_name.startswith("-")
     return False
 
 

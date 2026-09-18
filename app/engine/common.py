@@ -101,7 +101,6 @@ _COMMON_MODEL_DEFINITION_FIELDS = (
     "replica_max",
     "target_inflight",
     "reasoning_efforts",
-    "thinking_token_budget_max",
 )
 
 _BACKEND_MODEL_DEFINITION_FIELDS = {
@@ -210,6 +209,7 @@ _BACKEND_MODEL_DEFINITION_FIELDS = {
         "vllm_serve_env",
         "vllm_serve_api_key",
         "vllm_serve_extra_args",
+        "thinking_token_budget_max",
     ),
     "trtllm_serve": (
         "trtllm_model",

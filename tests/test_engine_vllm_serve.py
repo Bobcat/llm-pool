@@ -187,6 +187,7 @@ class VllmServeEngineTests(unittest.TestCase):
             )
 
         self.assertEqual(post.call_args.args[1]["chat_template_kwargs"], {"enable_thinking": True})
+        self.assertEqual(post.call_args.args[1]["reasoning_effort"], "low")
         self.assertEqual(result.text, "")
         self.assertEqual(result.reasoning_text, "Still thinking.")
 

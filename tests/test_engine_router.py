@@ -19,6 +19,7 @@ if HAS_PYDANTIC:
     from app.config import ServiceSettings
     import app.engine as engine_module
     import app.engine.router as router_module
+    from app.engine.common import _model_definition_payload
     from app.engine import ModelRouterEngine
     from app.engine import build_engine
     from app.schemas import AdminLoadRequest
@@ -30,6 +31,22 @@ if HAS_PYDANTIC:
 
 @unittest.skipUnless(HAS_PYDANTIC, "pydantic not installed")
 class ModelRouterEngineTests(unittest.TestCase):
+    def test_model_definition_scopes_thinking_budget_to_vllm_serve(self) -> None:
+        model = ModelSettings(
+            model_path=None,
+            backend="vllm_serve",
+            thinking_token_budget_max=512,
+        )
+
+        self.assertIn(
+            "thinking_token_budget_max",
+            _model_definition_payload(model, resolved_backend="vllm_serve"),
+        )
+        self.assertNotIn(
+            "thinking_token_budget_max",
+            _model_definition_payload(model, resolved_backend="ct2"),
+        )
+
     def test_dispatches_by_model_backend(self) -> None:
         settings = AppSettings(
             service=ServiceSettings(),

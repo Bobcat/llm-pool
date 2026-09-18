@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import os
 import tempfile
 import unittest
@@ -48,40 +49,39 @@ class ConfigTests(unittest.TestCase):
     def test_load_settings_requires_reasoning_parser_for_vllm_thinking_budget(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             path = Path(tmpdir) / "settings.json"
-            path.write_text(
-                (
-                    "{\n"
-                    '  "engine": {\n'
-                    '    "models": {\n'
-                    '      "gemma4-vllm": {\n'
-                    '        "backend": "vllm_serve",\n'
-                    '        "vllm_model": "/models/gemma4",\n'
-                    '        "thinking_token_budget_max": 512\n'
-                    "      }\n"
-                    "    }\n"
-                    "  }\n"
-                    "}\n"
-                ),
-                encoding="utf-8",
-            )
+            def write_settings(extra_args: list[str] | None = None) -> None:
+                model = {
+                    "backend": "vllm_serve",
+                    "vllm_model": "/models/gemma4",
+                    "thinking_token_budget_max": 512,
+                }
+                if extra_args is not None:
+                    model["vllm_serve_extra_args"] = extra_args
+                path.write_text(
+                    json.dumps({"engine": {"models": {"gemma4-vllm": model}}}),
+                    encoding="utf-8",
+                )
+
+            write_settings()
 
             with self.assertRaisesRegex(ValueError, "reasoning-parser"):
                 load_settings(path)
 
-            path.write_text(
-                path.read_text(encoding="utf-8").replace(
-                    '"thinking_token_budget_max": 512',
-                    '"thinking_token_budget_max": 512,\n'
-                    '        "vllm_serve_extra_args": ["--reasoning-parser", "gemma4"]',
-                ),
-                encoding="utf-8",
-            )
-            settings = load_settings(path)
+            for extra_args in (
+                ["--reasoning-parser", "gemma4"],
+                ["--reasoning-parser=gemma4"],
+            ):
+                with self.subTest(extra_args=extra_args):
+                    write_settings(extra_args)
+                    settings = load_settings(path)
+                    self.assertEqual(
+                        settings.engine.models["gemma4-vllm"].vllm_serve_extra_args,
+                        tuple(extra_args),
+                    )
 
-        self.assertEqual(
-            settings.engine.models["gemma4-vllm"].vllm_serve_extra_args,
-            ("--reasoning-parser", "gemma4"),
-        )
+            write_settings(["--reasoning-parser", "--max-num-seqs", "8"])
+            with self.assertRaisesRegex(ValueError, "reasoning-parser"):
+                load_settings(path)
 
     def test_load_settings_rejects_excessive_thinking_token_budget(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
