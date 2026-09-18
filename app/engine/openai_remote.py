@@ -26,6 +26,7 @@ from .common import BackendExecutionError
 from .common import LOGGER
 from .common import ResolvedDecoding
 from .common import _chat_completion_metadata
+from .common import _chat_completion_finish_reason
 from .common import _exception_message
 from .common import _resolve_request_remote_thinking
 
@@ -111,6 +112,7 @@ class OpenAIRemoteEngine:
                 engine_prompt_tokens=prompt_tokens,
                 engine_cached_prompt_tokens=cached_prompt_tokens,
                 engine_output_tokens=output_tokens,
+                engine_finish_reason=_chat_completion_finish_reason(response_payload),
                 engine_tokens_per_second=tokens_per_second,
             ),
         )

@@ -28,6 +28,52 @@ class ConfigTests(unittest.TestCase):
         self.assertEqual(dict(model.sglang_serve_env)["MAX_JOBS"], "4")
         self.assertFalse(model.enabled)
 
+    def test_default_settings_leave_deepseek_disabled(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            previous_local_env = os.environ.get("LLM_POOL_LOCAL_SETTINGS_PATH")
+            os.environ["LLM_POOL_LOCAL_SETTINGS_PATH"] = str(
+                Path(tmpdir) / "missing-local.json"
+            )
+            try:
+                settings = load_settings()
+            finally:
+                if previous_local_env is None:
+                    os.environ.pop("LLM_POOL_LOCAL_SETTINGS_PATH", None)
+                else:
+                    os.environ["LLM_POOL_LOCAL_SETTINGS_PATH"] = previous_local_env
+
+        self.assertFalse(settings.engine.models["deepseek-flash"].enabled)
+
+    def test_load_settings_rejects_excessive_thinking_token_budget(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = Path(tmpdir) / "settings.json"
+            missing_local_path = Path(tmpdir) / "missing-local.json"
+            path.write_text(
+                (
+                    "{\n"
+                    '  "engine": {\n'
+                    '    "models": {\n'
+                    '      "test-model": {\n'
+                    '        "model_path": "/models/test",\n'
+                    '        "thinking_token_budget_max": 4097\n'
+                    "      }\n"
+                    "    }\n"
+                    "  }\n"
+                    "}\n"
+                ),
+                encoding="utf-8",
+            )
+            previous_local_env = os.environ.get("LLM_POOL_LOCAL_SETTINGS_PATH")
+            os.environ["LLM_POOL_LOCAL_SETTINGS_PATH"] = str(missing_local_path)
+            try:
+                with self.assertRaisesRegex(ValueError, "thinking_token_budget_max"):
+                    load_settings(path)
+            finally:
+                if previous_local_env is None:
+                    os.environ.pop("LLM_POOL_LOCAL_SETTINGS_PATH", None)
+                else:
+                    os.environ["LLM_POOL_LOCAL_SETTINGS_PATH"] = previous_local_env
+
     def test_load_settings_reads_engine_model_registry(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             path = Path(tmpdir) / "settings.json"

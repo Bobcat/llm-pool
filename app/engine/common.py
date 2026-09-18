@@ -13,7 +13,11 @@ LOGGER = logging.getLogger("llm_pool.engine")
 
 def _chat_completion_metadata(payload: dict[str, Any]) -> dict[str, Any]:
     """Keep upstream response fields without duplicating generated content."""
-    metadata = {key: value for key, value in payload.items() if key != "choices"}
+    metadata = {
+        key: value
+        for key, value in payload.items()
+        if key not in {"choices", "prompt_logprobs", "prompt_text", "prompt_token_ids"}
+    }
     choices = payload.get("choices")
     if isinstance(choices, list):
         metadata["choices"] = []
@@ -21,7 +25,9 @@ def _chat_completion_metadata(payload: dict[str, Any]) -> dict[str, Any]:
             if not isinstance(choice, dict):
                 continue
             choice_metadata = {
-                key: value for key, value in choice.items() if key not in {"message", "delta"}
+                key: value
+                for key, value in choice.items()
+                if key not in {"message", "delta", "logprobs", "token_ids"}
             }
             message = choice.get("message")
             if isinstance(message, dict):
@@ -31,6 +37,17 @@ def _chat_completion_metadata(payload: dict[str, Any]) -> dict[str, Any]:
                 }
             metadata["choices"].append(choice_metadata)
     return metadata
+
+
+def _chat_completion_finish_reason(payload: dict[str, Any]) -> str | None:
+    choices = payload.get("choices")
+    if not isinstance(choices, list) or not choices:
+        return None
+    first_choice = choices[0]
+    if not isinstance(first_choice, dict):
+        return None
+    finish_reason = first_choice.get("finish_reason")
+    return finish_reason if isinstance(finish_reason, str) else None
 
 _GGUF_CACHE_TYPE_ALLOWED_VALUES = (
     "f32",

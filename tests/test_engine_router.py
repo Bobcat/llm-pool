@@ -383,6 +383,16 @@ class ModelRouterEngineTests(unittest.TestCase):
             )
         self.assertEqual(exc_info.exception.code, "thinking_token_budget_exhausts_output")
 
+        engine._validate_reasoning_controls(
+            ResponseRequest(
+                model="gemma4",
+                input="hello",
+                reasoning_effort="low",
+                thinking_token_budget=128,
+            ),
+            model_settings,
+        )
+
     def test_dispatches_trtllm_serve_backend_as_local_runtime(self) -> None:
         settings = AppSettings(
             service=ServiceSettings(),

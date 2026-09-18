@@ -84,6 +84,7 @@ class ApiTests(unittest.TestCase):
 
         result = EngineResult(
             text="OK",
+            reasoning_text="Check first.",
             metadata={"upstream_response": {"id": "provider-1", "model": "kimi-k2.6"}},
         )
         with mock.patch.object(StubEngine, "complete", return_value=result):
@@ -99,8 +100,10 @@ class ApiTests(unittest.TestCase):
         expected = result.metadata
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json()["metadata"], expected)
+        self.assertEqual(response.json()["reasoning_text"], "Check first.")
         self.assertEqual(streamed.status_code, 200)
         self.assertIn('"metadata": {"upstream_response": {"id": "provider-1", "model": "kimi-k2.6"}}', streamed.text)
+        self.assertIn('"reasoning_text": "Check first."', streamed.text)
 
     def test_inference_log_includes_normalized_fairness_key(self) -> None:
         main = importlib.import_module("app.main")

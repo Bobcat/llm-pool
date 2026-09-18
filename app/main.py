@@ -78,7 +78,12 @@ def _stream_response(
     )
     yield _sse_event(
         "response.completed",
-        {"id": response_id, "output_text": output_text, "metadata": metadata or {}},
+        {
+            "id": response_id,
+            "output_text": output_text,
+            "reasoning_text": reasoning_text,
+            "metadata": metadata or {},
+        },
     )
 
 

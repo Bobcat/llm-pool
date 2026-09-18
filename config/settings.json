@@ -605,7 +605,7 @@
           "text",
           "image"
         ],
-        "enabled": true
+        "enabled": false
       }
     }
   }

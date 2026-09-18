@@ -198,11 +198,16 @@ class ModelRouterEngine:
                     f"{request.model!r}"
                 ),
             )
-        if request.thinking != "enabled":
+        thinking_enabled = (
+            request.reasoning_effort != "none"
+            if request.reasoning_effort is not None
+            else request.thinking == "enabled"
+        )
+        if not thinking_enabled:
             raise RequestAdmissionError(
                 code="thinking_token_budget_requires_thinking",
                 status_code=400,
-                message="thinking_token_budget requires thinking='enabled'",
+                message="thinking_token_budget requires enabled thinking",
             )
         max_tokens = request.decoding.max_tokens or self._settings.engine.decoding.max_tokens
         if budget >= max_tokens:

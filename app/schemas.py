@@ -13,6 +13,8 @@ from pydantic import Field
 from pydantic import field_validator
 from pydantic import model_validator
 
+from app.limits import MAX_OUTPUT_TOKENS
+
 
 class ModalityUnsupportedError(ValueError):
     """Raised when image content is passed to a text-only path."""
@@ -24,7 +26,7 @@ class DecodingParams(BaseModel):
     top_p: float | None = Field(default=None, gt=0.0, le=1.0)
     temperature: float | None = Field(default=None, ge=0.0, le=2.0)
     repetition_penalty: float | None = Field(default=None, ge=0.0, le=4.0)
-    max_tokens: int | None = Field(default=None, ge=1, le=4096)
+    max_tokens: int | None = Field(default=None, ge=1, le=MAX_OUTPUT_TOKENS)
     stop: list[str] | None = None
 
 
@@ -120,7 +122,7 @@ class ResponseRequest(BaseModel):
     stream: bool = False
     thinking: ThinkingMode = "default"
     reasoning_effort: str | None = Field(default=None, min_length=1, max_length=32)
-    thinking_token_budget: int | None = Field(default=None, ge=1, le=4096)
+    thinking_token_budget: int | None = Field(default=None, ge=1, le=MAX_OUTPUT_TOKENS)
     response_format: JsonSchemaResponseFormat | None = None
     decoding: DecodingParams = Field(default_factory=DecodingParams)
 
@@ -295,7 +297,7 @@ class AdminLoadRequest(BaseModel):
 
 class ThinkingTokenBudgetCapability(BaseModel):
     minimum: int = Field(default=1, ge=1)
-    maximum: int = Field(ge=1, le=4096)
+    maximum: int = Field(ge=1, le=MAX_OUTPUT_TOKENS)
 
 
 class ModelCapabilities(BaseModel):

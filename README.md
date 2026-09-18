@@ -194,6 +194,8 @@ Response:
     }
   ],
   "output_text": "Het weer is aangenaam vandaag en ik zou na de lunch graag een wandeling in het park willen maken.",
+  "reasoning_text": null,
+  "metadata": {},
   "metrics": {
     "backend_inference_wall_ms": 138.1,
     "engine_total_wall_ms": 138.6,
@@ -206,6 +208,7 @@ Response:
     "engine_prompt_tokens": 47,
     "engine_cached_prompt_tokens": null,
     "engine_output_tokens": 23,
+    "engine_finish_reason": "stop",
     "engine_tokens_per_second": 166.2
   }
 }
@@ -214,6 +217,7 @@ Response:
 `stream: true` currently uses the service-side SSE path. It emits:
 
 - `response.created`
+- `response.reasoning_text.delta`
 - `response.output_text.delta`
 - `response.metrics`
 - `response.completed`
@@ -235,6 +239,8 @@ This is not yet guaranteed to be backend-native live token streaming for every r
 | `prompt_cache_key` | `string \| null` | no | `null` | Stable conversation or task key used as a remote prompt-cache hint. It is forwarded only when the selected remote model opts in. It does not replace `messages`. |
 | `stream` | `boolean` | no | `false` | `false` returns one JSON response; `true` returns SSE events. |
 | `thinking` | `"default" \| "enabled" \| "disabled"` | no | `"default"` | Request-level thinking override. Accepted values are advertised per model in `capabilities.thinking_modes`. |
+| `reasoning_effort` | `string \| null` | no | `null` | Provider-defined thinking level. Accepted values are advertised in `capabilities.reasoning_efforts`; a non-`none` effort enables thinking. |
+| `thinking_token_budget` | `int \| null` | no | `null` | Upper bound for thinking tokens. Supported only when `capabilities.thinking_token_budget` is present; it must be less than `decoding.max_tokens`. |
 | `response_format` | `object \| null` | no | `null` | Strict JSON Schema output. Supported only by non-streaming `vllm_serve` requests. |
 | `decoding` | `object` | no | `{}` | Omitted subfields fall back to `engine.decoding` defaults. |
 
@@ -407,6 +413,8 @@ Common model fields:
 - `backend`
 - `prompt_format`
 - `enable_thinking`
+- `reasoning_efforts`
+- `thinking_token_budget_max`
 - `enabled`
 - `replicas`
 - `replica_max`
@@ -420,7 +428,7 @@ Backends add their own fields:
 - `llama_cpp`/GGUF in-process: `gguf_n_gpu_layers`, `gguf_n_ctx`, `gguf_flash_attn`, `gguf_type_k`, `gguf_type_v`
 - `llama_server`: binary, host, port, library path, context, GPU layers, flash attention, `mmproj`, image token budget, MTP/speculative decoding, reasoning, and extra native args
 - vLLM: model id/path, dtype, KV cache, model length, tensor parallelism, multimodal limits, processor kwargs, speculative decoding
-- `vllm_serve`: the same vLLM model/runtime fields plus binary path, host, port, library path, environment, API key, timeout, and extra CLI args
+- `vllm_serve`: the same vLLM model/runtime fields plus binary path, host, port, library path, environment, API key, timeout, and extra CLI args; Gemma4 thinking budgets are sent as vLLM's top-level `thinking_token_budget` request field
 - `trtllm_serve`: model id/path, sequence and batch limits, absolute KV-cache budget and dtype, chunked prefill, binary path, host, port, library path, environment, TensorRT-LLM config file, reasoning and tool parsers, timeouts, and extra CLI args
 - `sglang_serve`: model id/path, context and cache limits, MTP settings, binary path, host, port, library path, environment, reasoning and tool parsers, timeouts, and extra CLI args
 - remote OpenAI-compatible: base URL, API key env var, upstream model name, timeout, retry, thinking, prompt-cache opt-in, and provider-specific file settings

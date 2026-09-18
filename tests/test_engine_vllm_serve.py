@@ -109,7 +109,14 @@ class VllmServeEngineTests(unittest.TestCase):
         )
         engine.decoding_defaults = DecodingDefaults()
         payload = engine._chat_completions_payload(
-            runtime=mock.Mock(remote_model="gemma4"),
+            runtime=mock.Mock(
+                remote_model="gemma4",
+                config=ModelSettings(
+                    model_path=None,
+                    backend="vllm_serve",
+                    prompt_format="gemma4_template",
+                ),
+            ),
             request=ResponseRequest(
                 model="gemma4",
                 input="Write a story",
@@ -120,6 +127,29 @@ class VllmServeEngineTests(unittest.TestCase):
         )
 
         self.assertEqual(payload["thinking_token_budget"], 256)
+
+    def test_gemma4_default_thinking_uses_model_configuration(self) -> None:
+        engine = vllm_serve_module.VllmServeEngine.__new__(
+            vllm_serve_module.VllmServeEngine
+        )
+        engine.decoding_defaults = DecodingDefaults()
+        runtime = mock.Mock(
+            remote_model="gemma4",
+            config=ModelSettings(
+                model_path=None,
+                backend="vllm_serve",
+                prompt_format="gemma4_template",
+                enable_thinking=False,
+            ),
+        )
+
+        payload = engine._chat_completions_payload(
+            runtime=runtime,
+            request=ResponseRequest(model="gemma4", input="Hello"),
+            decoding=engine._resolve_decoding(DecodingParams()),
+        )
+
+        self.assertEqual(payload["chat_template_kwargs"], {"enable_thinking": False})
 
     def test_gemma4_thinking_uses_template_kwargs_and_exposes_reasoning(self) -> None:
         engine = vllm_serve_module.VllmServeEngine.__new__(
@@ -188,6 +218,10 @@ class VllmServeEngineTests(unittest.TestCase):
         self.assertEqual(result.text, "")
         self.assertEqual(result.reasoning_text, "Still thinking.")
         self.assertEqual(result.metrics.engine_finish_reason, "length")
+
+        with self.assertRaises(vllm_serve_module.BackendExecutionError):
+            with mock.patch.object(engine, "_post_json", return_value=upstream):
+                engine.complete(ResponseRequest(model="gemma4", input="Write a story"))
 
     def test_starts_vllm_serve_and_posts_multimodal_chat_completion(self) -> None:
         settings = AppSettings(

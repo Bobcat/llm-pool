@@ -94,9 +94,12 @@ class OpenAIRemoteEngineTests(unittest.TestCase):
                     "model": "provider-model",
                     "created": 12345,
                     "service_tier": "default",
+                    "prompt_token_ids": [1, 2, 3],
+                    "prompt_logprobs": [{"token": "Hello"}],
                     "choices": [
                         {
                             "finish_reason": "stop",
+                            "logprobs": [{"token": "done"}],
                             "message": {
                                 "content": "  done  ",
                                 "role": "assistant",
@@ -145,12 +148,16 @@ class OpenAIRemoteEngineTests(unittest.TestCase):
         self.assertEqual(result.metrics.engine_prompt_tokens, 12)
         self.assertEqual(result.metrics.engine_cached_prompt_tokens, 8)
         self.assertEqual(result.metrics.engine_output_tokens, 5)
+        self.assertEqual(result.metrics.engine_finish_reason, "stop")
         self.assertEqual(result.metadata["upstream_response"]["id"], "upstream-123")
         self.assertEqual(result.metadata["upstream_response"]["model"], "provider-model")
         self.assertEqual(result.metadata["upstream_response"]["service_tier"], "default")
         self.assertEqual(result.metadata["upstream_response"]["usage"]["cached_tokens"], 8)
         self.assertEqual(result.metadata["upstream_response"]["choices"][0]["finish_reason"], "stop")
         self.assertNotIn("content", result.metadata["upstream_response"]["choices"][0]["message"])
+        self.assertNotIn("logprobs", result.metadata["upstream_response"]["choices"][0])
+        self.assertNotIn("prompt_token_ids", result.metadata["upstream_response"])
+        self.assertNotIn("prompt_logprobs", result.metadata["upstream_response"])
         self.assertIsNotNone(result.metrics.engine_tokens_per_second)
         self.assertEqual(captured["url"], "https://api.example.com/v1/chat/completions")
         self.assertEqual(captured["timeout"], 12.5)

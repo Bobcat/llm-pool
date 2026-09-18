@@ -7,6 +7,7 @@ import math
 import os
 from pathlib import Path
 
+from app.limits import MAX_OUTPUT_TOKENS
 
 DEFAULT_SETTINGS_PATH = Path(__file__).resolve().parents[1] / "config" / "settings.json"
 DEFAULT_LOCAL_SETTINGS_PATH = Path(__file__).resolve().parents[1] / "config" / "local.json"
@@ -292,6 +293,13 @@ def load_settings(path: str | Path | None = None) -> AppSettings:
         thinking_token_budget_max = _coerce_optional_positive_int(
             model_payload.get("thinking_token_budget_max")
         )
+        if (
+            thinking_token_budget_max is not None
+            and thinking_token_budget_max > MAX_OUTPUT_TOKENS
+        ):
+            raise ValueError(
+                f"thinking_token_budget_max must be at most {MAX_OUTPUT_TOKENS}"
+            )
         remote_file_mode = _coerce_optional_str(model_payload.get("remote_file_mode"))
         if remote_file_mode is not None:
             remote_file_mode = remote_file_mode.lower()
