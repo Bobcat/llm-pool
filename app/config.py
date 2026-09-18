@@ -290,6 +290,10 @@ def load_settings(path: str | Path | None = None) -> AppSettings:
         reasoning_efforts = _coerce_reasoning_efforts(
             model_payload.get("reasoning_efforts")
         )
+        vllm_serve_extra_args = _coerce_str_tuple(
+            model_payload.get("vllm_serve_extra_args"),
+            "vllm_serve_extra_args",
+        )
         thinking_token_budget_max = _coerce_optional_positive_int(
             model_payload.get("thinking_token_budget_max")
         )
@@ -300,6 +304,16 @@ def load_settings(path: str | Path | None = None) -> AppSettings:
             raise ValueError(
                 f"thinking_token_budget_max must be at most {MAX_OUTPUT_TOKENS}"
             )
+        if thinking_token_budget_max is not None:
+            if resolved_backend != "vllm_serve":
+                raise ValueError(
+                    "thinking_token_budget_max is supported only by vllm_serve"
+                )
+            if not _has_vllm_serve_reasoning_parser(vllm_serve_extra_args):
+                raise ValueError(
+                    "thinking_token_budget_max requires --reasoning-parser in "
+                    "vllm_serve_extra_args"
+                )
         remote_file_mode = _coerce_optional_str(model_payload.get("remote_file_mode"))
         if remote_file_mode is not None:
             remote_file_mode = remote_file_mode.lower()
@@ -436,10 +450,7 @@ def load_settings(path: str | Path | None = None) -> AppSettings:
                 "vllm_serve_env",
             ),
             vllm_serve_api_key=_coerce_optional_str(model_payload.get("vllm_serve_api_key")),
-            vllm_serve_extra_args=_coerce_str_tuple(
-                model_payload.get("vllm_serve_extra_args"),
-                "vllm_serve_extra_args",
-            ),
+            vllm_serve_extra_args=vllm_serve_extra_args,
             trtllm_model=_coerce_optional_str(model_payload.get("trtllm_model")),
             trtllm_trust_remote_code=bool(
                 model_payload.get("trtllm_trust_remote_code", False)
@@ -793,6 +804,15 @@ def _coerce_str_tuple(value: object, field_name: str) -> tuple[str, ...]:
     if not isinstance(value, (list, tuple)):
         raise ValueError(f"{field_name} must be a list of strings")
     return tuple(str(item) for item in value)
+
+
+def _has_vllm_serve_reasoning_parser(arguments: tuple[str, ...]) -> bool:
+    for index, argument in enumerate(arguments):
+        if argument.startswith("--reasoning-parser="):
+            return argument.split("=", 1)[1].strip() != ""
+        if argument == "--reasoning-parser":
+            return index + 1 < len(arguments) and arguments[index + 1].strip() != ""
+    return False
 
 
 def _coerce_path_tuple(value: object, field_name: str) -> tuple[str, ...]:

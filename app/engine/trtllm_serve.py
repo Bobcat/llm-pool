@@ -31,8 +31,8 @@ from app.schemas import TextContent
 from .common import BackendExecutionError
 from .common import LOGGER
 from .common import ResolvedDecoding
-from .common import _chat_completion_metadata
 from .common import _chat_completion_finish_reason
+from .common import _chat_completion_metadata
 from .common import _exception_message
 from .common import _resolve_request_enable_thinking
 

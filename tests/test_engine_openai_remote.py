@@ -100,9 +100,12 @@ class OpenAIRemoteEngineTests(unittest.TestCase):
                         {
                             "finish_reason": "stop",
                             "logprobs": [{"token": "done"}],
+                            "routed_experts": [["expert-1"]],
                             "message": {
                                 "content": "  done  ",
                                 "role": "assistant",
+                                "refusal": "No.",
+                                "annotations": [{"type": "citation"}],
                             }
                         }
                     ],
@@ -155,7 +158,12 @@ class OpenAIRemoteEngineTests(unittest.TestCase):
         self.assertEqual(result.metadata["upstream_response"]["usage"]["cached_tokens"], 8)
         self.assertEqual(result.metadata["upstream_response"]["choices"][0]["finish_reason"], "stop")
         self.assertNotIn("content", result.metadata["upstream_response"]["choices"][0]["message"])
+        self.assertEqual(
+            result.metadata["upstream_response"]["choices"][0]["message"],
+            {"role": "assistant"},
+        )
         self.assertNotIn("logprobs", result.metadata["upstream_response"]["choices"][0])
+        self.assertNotIn("routed_experts", result.metadata["upstream_response"]["choices"][0])
         self.assertNotIn("prompt_token_ids", result.metadata["upstream_response"])
         self.assertNotIn("prompt_logprobs", result.metadata["upstream_response"])
         self.assertIsNotNone(result.metrics.engine_tokens_per_second)

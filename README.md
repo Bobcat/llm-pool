@@ -216,9 +216,9 @@ Response:
 
 `reasoning_text` contains provider reasoning when available. `metrics.engine_finish_reason`
 mirrors the first upstream completion choice's finish reason. `metadata` is an
-extensible object; chat-completions backends place upstream response fields in
-`metadata.upstream_response`, excluding generated message text and token-level
-logs because those can duplicate prompt or output content.
+extensible object. Chat-completions backends place stable, non-content upstream
+fields in `metadata.upstream_response`; generated message text and token-level
+logs stay out because they can duplicate prompt or output content.
 
 `stream: true` currently uses the service-side SSE path. It emits:
 
@@ -434,7 +434,7 @@ Backends add their own fields:
 - `llama_cpp`/GGUF in-process: `gguf_n_gpu_layers`, `gguf_n_ctx`, `gguf_flash_attn`, `gguf_type_k`, `gguf_type_v`
 - `llama_server`: binary, host, port, library path, context, GPU layers, flash attention, `mmproj`, image token budget, MTP/speculative decoding, reasoning, and extra native args
 - vLLM: model id/path, dtype, KV cache, model length, tensor parallelism, multimodal limits, processor kwargs, speculative decoding
-- `vllm_serve`: the same vLLM model/runtime fields plus binary path, host, port, library path, environment, API key, timeout, and extra CLI args; Gemma4 thinking budgets are sent as vLLM's top-level `thinking_token_budget` request field
+- `vllm_serve`: the same vLLM model/runtime fields plus binary path, host, port, library path, environment, API key, timeout, and extra CLI args; Gemma4 thinking budgets are sent as vLLM's top-level `thinking_token_budget` request field and require `--reasoning-parser`
 - `trtllm_serve`: model id/path, sequence and batch limits, absolute KV-cache budget and dtype, chunked prefill, binary path, host, port, library path, environment, TensorRT-LLM config file, reasoning and tool parsers, timeouts, and extra CLI args
 - `sglang_serve`: model id/path, context and cache limits, MTP settings, binary path, host, port, library path, environment, reasoning and tool parsers, timeouts, and extra CLI args
 - remote OpenAI-compatible: base URL, API key env var, upstream model name, timeout, retry, thinking, prompt-cache opt-in, and provider-specific file settings

@@ -245,7 +245,8 @@ class LlamaCppEngine:
         engine_tokens_per_second = None
         if output_tokens is not None and generate_total_ms > 0.0:
             engine_tokens_per_second = output_tokens / (generate_total_ms / 1000.0)
-        text = response["choices"][0]["message"]["content"].strip()
+        choice = response["choices"][0]
+        text = choice["message"]["content"].strip()
         reasoning_text = None
         if runtime.config.prompt_format == "gemma4_template" and text.startswith("<|channel>thought"):
             thought, separator, answer = text[len("<|channel>thought") :].partition("<channel|>")
@@ -258,6 +259,11 @@ class LlamaCppEngine:
                 gpu_generate_total_ms=generate_total_ms,
                 engine_prompt_tokens=prompt_token_count,
                 engine_output_tokens=output_tokens,
+                engine_finish_reason=(
+                    choice.get("finish_reason")
+                    if isinstance(choice.get("finish_reason"), str)
+                    else None
+                ),
                 engine_tokens_per_second=engine_tokens_per_second,
             ),
         )

@@ -219,7 +219,7 @@ class LlamaCppEngineTests(unittest.TestCase):
             def create_chat_completion(self, **kwargs):
                 self.chat_kwargs = kwargs
                 return {
-                    "choices": [{"message": {"content": "OK"}}],
+                    "choices": [{"finish_reason": "stop", "message": {"content": "OK"}}],
                     "usage": {"prompt_tokens": 12, "completion_tokens": 1},
                 }
 
@@ -247,6 +247,7 @@ class LlamaCppEngineTests(unittest.TestCase):
         self.assertEqual(result.text, "OK")
         self.assertEqual(result.metrics.engine_prompt_tokens, 12)
         self.assertEqual(result.metrics.engine_output_tokens, 1)
+        self.assertEqual(result.metrics.engine_finish_reason, "stop")
         self.assertEqual(
             runtime.llm.chat_kwargs["messages"],
             [

@@ -5,6 +5,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
+from app.config import DEFAULT_SETTINGS_PATH
 from app.config import load_settings
 
 
@@ -35,7 +36,7 @@ class ConfigTests(unittest.TestCase):
                 Path(tmpdir) / "missing-local.json"
             )
             try:
-                settings = load_settings()
+                settings = load_settings(DEFAULT_SETTINGS_PATH)
             finally:
                 if previous_local_env is None:
                     os.environ.pop("LLM_POOL_LOCAL_SETTINGS_PATH", None)
@@ -43,6 +44,44 @@ class ConfigTests(unittest.TestCase):
                     os.environ["LLM_POOL_LOCAL_SETTINGS_PATH"] = previous_local_env
 
         self.assertFalse(settings.engine.models["deepseek-flash"].enabled)
+
+    def test_load_settings_requires_reasoning_parser_for_vllm_thinking_budget(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = Path(tmpdir) / "settings.json"
+            path.write_text(
+                (
+                    "{\n"
+                    '  "engine": {\n'
+                    '    "models": {\n'
+                    '      "gemma4-vllm": {\n'
+                    '        "backend": "vllm_serve",\n'
+                    '        "vllm_model": "/models/gemma4",\n'
+                    '        "thinking_token_budget_max": 512\n'
+                    "      }\n"
+                    "    }\n"
+                    "  }\n"
+                    "}\n"
+                ),
+                encoding="utf-8",
+            )
+
+            with self.assertRaisesRegex(ValueError, "reasoning-parser"):
+                load_settings(path)
+
+            path.write_text(
+                path.read_text(encoding="utf-8").replace(
+                    '"thinking_token_budget_max": 512',
+                    '"thinking_token_budget_max": 512,\n'
+                    '        "vllm_serve_extra_args": ["--reasoning-parser", "gemma4"]',
+                ),
+                encoding="utf-8",
+            )
+            settings = load_settings(path)
+
+        self.assertEqual(
+            settings.engine.models["gemma4-vllm"].vllm_serve_extra_args,
+            ("--reasoning-parser", "gemma4"),
+        )
 
     def test_load_settings_rejects_excessive_thinking_token_budget(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:

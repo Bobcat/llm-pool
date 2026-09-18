@@ -29,6 +29,7 @@ from .common import _normalize_gguf_flash_attn_mode
 from .common import _query_gpu_memory
 from .common import _query_primary_gpu_used_mib
 from .common import _resolve_gguf_cache_type_constant
+from .common import _request_explicitly_enables_thinking
 from .common import ModelRuntimeState
 from .common import ModelStateError
 from .common import RequestAdmissionError
@@ -198,12 +199,7 @@ class ModelRouterEngine:
                     f"{request.model!r}"
                 ),
             )
-        thinking_enabled = (
-            request.reasoning_effort != "none"
-            if request.reasoning_effort is not None
-            else request.thinking == "enabled"
-        )
-        if not thinking_enabled:
+        if not _request_explicitly_enables_thinking(request):
             raise RequestAdmissionError(
                 code="thinking_token_budget_requires_thinking",
                 status_code=400,

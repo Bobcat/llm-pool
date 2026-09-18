@@ -10,13 +10,25 @@ from typing import Any
 
 LOGGER = logging.getLogger("llm_pool.engine")
 
+_CHAT_COMPLETION_TOP_LEVEL_METADATA_FIELDS = {
+    "id",
+    "object",
+    "created",
+    "model",
+    "usage",
+    "service_tier",
+    "system_fingerprint",
+}
+_CHAT_COMPLETION_CHOICE_METADATA_FIELDS = {"index", "finish_reason", "stop_reason"}
+_CHAT_COMPLETION_MESSAGE_METADATA_FIELDS = {"role"}
+
 
 def _chat_completion_metadata(payload: dict[str, Any]) -> dict[str, Any]:
-    """Keep upstream response fields without duplicating generated content."""
+    """Keep stable upstream metadata without generated or token-level content."""
     metadata = {
         key: value
         for key, value in payload.items()
-        if key not in {"choices", "prompt_logprobs", "prompt_text", "prompt_token_ids"}
+        if key in _CHAT_COMPLETION_TOP_LEVEL_METADATA_FIELDS
     }
     choices = payload.get("choices")
     if isinstance(choices, list):
@@ -27,13 +39,14 @@ def _chat_completion_metadata(payload: dict[str, Any]) -> dict[str, Any]:
             choice_metadata = {
                 key: value
                 for key, value in choice.items()
-                if key not in {"message", "delta", "logprobs", "token_ids"}
+                if key in _CHAT_COMPLETION_CHOICE_METADATA_FIELDS
             }
             message = choice.get("message")
             if isinstance(message, dict):
                 choice_metadata["message"] = {
-                    key: value for key, value in message.items()
-                    if key not in {"content", "reasoning_content", "reasoning", "tool_calls", "function_call", "audio"}
+                    key: value
+                    for key, value in message.items()
+                    if key in _CHAT_COMPLETION_MESSAGE_METADATA_FIELDS
                 }
             metadata["choices"].append(choice_metadata)
     return metadata
@@ -325,11 +338,18 @@ def _model_response_formats(backend: str) -> list[str]:
 
 
 def _resolve_request_enable_thinking(request, default: bool | None) -> bool | None:
+    if request.reasoning_effort is not None:
+        return request.reasoning_effort != "none"
     if request.thinking == "enabled":
         return True
     if request.thinking == "disabled":
         return False
     return default
+
+
+def _request_explicitly_enables_thinking(request) -> bool:
+    """Whether the request, rather than a model default, enabled thinking."""
+    return _resolve_request_enable_thinking(request, None) is True
 
 
 def _resolve_request_remote_thinking(request, default: str | None) -> str | None:
