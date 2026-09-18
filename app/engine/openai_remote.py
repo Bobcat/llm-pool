@@ -25,6 +25,7 @@ from app.schemas import ResponseRequest
 from .common import BackendExecutionError
 from .common import LOGGER
 from .common import ResolvedDecoding
+from .common import _chat_completion_metadata
 from .common import _exception_message
 from .common import _resolve_request_remote_thinking
 
@@ -91,6 +92,11 @@ class OpenAIRemoteEngine:
         wall_s = max(0.0, time.perf_counter() - started)
 
         text = self._extract_text(response_payload)
+        message = response_payload["choices"][0]["message"]
+        reasoning_content = message.get("reasoning_content")
+        reasoning_text = (
+            reasoning_content if isinstance(reasoning_content, str) and reasoning_content else None
+        )
         prompt_tokens, output_tokens, cached_prompt_tokens = self._extract_usage(
             response_payload
         )
@@ -99,6 +105,8 @@ class OpenAIRemoteEngine:
             tokens_per_second = output_tokens / wall_s
         return EngineResult(
             text=text,
+            reasoning_text=reasoning_text,
+            metadata={"upstream_response": _chat_completion_metadata(response_payload)},
             metrics=ResponseMetrics(
                 engine_prompt_tokens=prompt_tokens,
                 engine_cached_prompt_tokens=cached_prompt_tokens,
@@ -208,6 +216,8 @@ class OpenAIRemoteEngine:
             payload["stop"] = decoding.stop
         if remote_thinking is not None:
             payload["thinking"] = {"type": remote_thinking}
+        if request.reasoning_effort is not None:
+            payload["reasoning_effort"] = request.reasoning_effort
         if (
             runtime.config.remote_prompt_cache_key_enabled
             and request.prompt_cache_key is not None
@@ -678,6 +688,8 @@ class OpenAIRemoteEngine:
         prompt_tokens = self._coerce_int(usage.get("prompt_tokens"))
         output_tokens = self._coerce_int(usage.get("completion_tokens"))
         cached_prompt_tokens = self._coerce_int(usage.get("cached_tokens"))
+        if cached_prompt_tokens is None:
+            cached_prompt_tokens = self._coerce_int(usage.get("prompt_cache_hit_tokens"))
         total_tokens = self._coerce_int(usage.get("total_tokens"))
         if output_tokens is None and prompt_tokens is not None and total_tokens is not None:
             output_tokens = max(0, total_tokens - prompt_tokens)

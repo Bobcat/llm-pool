@@ -59,6 +59,8 @@ class ModelSettings:
     remote_health_check: str = "config_only"
     remote_max_retries: int = 0
     remote_thinking: str | None = None
+    reasoning_efforts: tuple[str, ...] = ()
+    thinking_token_budget_max: int | None = None
     remote_prompt_cache_key_enabled: bool = False
     remote_file_mode: str | None = None
     remote_file_purpose: str | None = None
@@ -284,6 +286,12 @@ def load_settings(path: str | Path | None = None) -> AppSettings:
         remote_thinking = _coerce_optional_str(model_payload.get("remote_thinking"))
         if remote_thinking is not None:
             remote_thinking = remote_thinking.lower()
+        reasoning_efforts = _coerce_reasoning_efforts(
+            model_payload.get("reasoning_efforts")
+        )
+        thinking_token_budget_max = _coerce_optional_positive_int(
+            model_payload.get("thinking_token_budget_max")
+        )
         remote_file_mode = _coerce_optional_str(model_payload.get("remote_file_mode"))
         if remote_file_mode is not None:
             remote_file_mode = remote_file_mode.lower()
@@ -330,6 +338,8 @@ def load_settings(path: str | Path | None = None) -> AppSettings:
             remote_health_check=remote_health_check,
             remote_max_retries=int(model_payload.get("remote_max_retries", 0)),
             remote_thinking=remote_thinking,
+            reasoning_efforts=reasoning_efforts,
+            thinking_token_budget_max=thinking_token_budget_max,
             remote_prompt_cache_key_enabled=bool(
                 model_payload.get("remote_prompt_cache_key_enabled", False)
             ),
@@ -752,6 +762,21 @@ def _coerce_fairness_weights(value: object) -> dict[str, float]:
             f"engine.fairness.weights['{key}']",
         )
     return parsed
+
+
+def _coerce_reasoning_efforts(value: object) -> tuple[str, ...]:
+    if value is None:
+        return ()
+    if not isinstance(value, (list, tuple)):
+        raise ValueError("reasoning_efforts must be a list of strings")
+    parsed: list[str] = []
+    for raw_effort in value:
+        effort = str(raw_effort).strip().lower()
+        if effort == "":
+            raise ValueError("reasoning_efforts must not contain blank values")
+        if effort not in parsed:
+            parsed.append(effort)
+    return tuple(parsed)
 
 
 def _coerce_str_tuple(value: object, field_name: str) -> tuple[str, ...]:

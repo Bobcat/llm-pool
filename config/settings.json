@@ -204,6 +204,7 @@
         "model_path": null,
         "prompt_format": "gemma4_template",
         "enable_thinking": false,
+        "thinking_token_budget_max": 2048,
         "target_inflight": 16,
         "modalities": [
           "text",
@@ -232,6 +233,10 @@
         "vllm_serve_env": {
           "VLLM_USE_FLASHINFER_SAMPLER": "0"
         },
+        "vllm_serve_extra_args": [
+          "--reasoning-parser",
+          "gemma4"
+        ],
         "enabled": false
       },
       "gemma-4-26b-a4b-it-nvidia-nvfp4-trtllm-serve": {
@@ -578,6 +583,29 @@
           "image"
         ],
         "enabled": false
+      },
+      "deepseek-flash": {
+        "backend": "openai_remote",
+        "remote_api_kind": "chat_completions",
+        "remote_base_url": "https://api.deepseek.com",
+        "remote_api_key_env": "DEEPSEEK_API_KEY",
+        "remote_model": "deepseek-flash",
+        "remote_timeout_s": 120,
+        "remote_health_check": "config_only",
+        "remote_max_retries": 0,
+        "remote_thinking": "disabled",
+        "reasoning_efforts": [
+          "none",
+          "low",
+          "high",
+          "max"
+        ],
+        "target_inflight": 1,
+        "modalities": [
+          "text",
+          "image"
+        ],
+        "enabled": true
       }
     }
   }

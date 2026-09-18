@@ -357,6 +357,8 @@ class _ReplicaExecutor:
             result = EngineResult(
                 text=result.text,
                 metrics=ResponseMetrics(**metrics_payload),
+                reasoning_text=result.reasoning_text,
+                metadata=result.metadata,
             )
         except Exception as exc:
             if backend_finished_at is None:

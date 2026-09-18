@@ -53,12 +53,20 @@ def _stream_response(
     response_id: str,
     request: ResponseRequest,
     output_text: str,
+    reasoning_text: str | None,
     metrics: ResponseMetrics,
+    metadata: dict[str, object] | None = None,
 ) -> Iterator[str]:
     yield _sse_event(
         "response.created",
         {"id": response_id, "model": request.model, "object": "response"},
     )
+    if reasoning_text:
+        for chunk in _chunk_text(reasoning_text):
+            yield _sse_event(
+                "response.reasoning_text.delta",
+                {"id": response_id, "delta": chunk},
+            )
     for chunk in _chunk_text(output_text):
         yield _sse_event(
             "response.output_text.delta",
@@ -70,7 +78,7 @@ def _stream_response(
     )
     yield _sse_event(
         "response.completed",
-        {"id": response_id, "output_text": output_text},
+        {"id": response_id, "output_text": output_text, "metadata": metadata or {}},
     )
 
 
@@ -275,7 +283,7 @@ def create_app(settings_path: str | Path | None = None) -> FastAPI:
         _log_inference(response_id, request, metrics)
         if request.stream:
             return StreamingResponse(
-                _stream_response(response_id, request, result.text, metrics),
+                _stream_response(response_id, request, result.text, result.reasoning_text, metrics, result.metadata),
                 media_type="text/event-stream",
             )
 
@@ -284,7 +292,9 @@ def create_app(settings_path: str | Path | None = None) -> FastAPI:
             model=request.model,
             output=[OutputText(text=result.text)],
             output_text=result.text,
+            reasoning_text=result.reasoning_text,
             metrics=metrics,
+            metadata=result.metadata,
         )
 
     return app

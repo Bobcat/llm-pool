@@ -272,6 +272,7 @@ class LlamaCppEngineTests(unittest.TestCase):
 
             def __init__(self) -> None:
                 self._chat_handlers = {"chat_template.default": self.chat_handler_with_kwargs}
+                self.response_content = "<|channel>thought\nCheck the result.<channel|>OK"
 
             def create_chat_completion(self, **kwargs):
                 raise AssertionError("direct chat handler should be used")
@@ -279,7 +280,7 @@ class LlamaCppEngineTests(unittest.TestCase):
             def chat_handler_with_kwargs(self, **kwargs):
                 self.chat_kwargs = kwargs
                 return {
-                    "choices": [{"message": {"content": "OK"}}],
+                    "choices": [{"message": {"content": self.response_content}}],
                     "usage": {"prompt_tokens": 12, "completion_tokens": 1},
                 }
 
@@ -305,9 +306,17 @@ class LlamaCppEngineTests(unittest.TestCase):
         )
 
         self.assertEqual(result.text, "OK")
+        self.assertEqual(result.reasoning_text, "Check the result.")
         self.assertIs(runtime.llm.chat_kwargs["llama"], runtime.llm)
         self.assertTrue(runtime.llm.chat_kwargs["enable_thinking"])
         self.assertEqual(runtime.llm.chat_kwargs["messages"][1]["content"], "Reply with OK")
+
+        runtime.llm.response_content = "<|channel>thought\nStill thinking"
+        unfinished = engine.complete(
+            ResponseRequest(model="gemma4-gguf", input="Reply with OK", thinking="enabled")
+        )
+        self.assertEqual(unfinished.text, "")
+        self.assertEqual(unfinished.reasoning_text, "Still thinking")
 
     def test_complete_generic_multi_turn_uses_chat_completion_messages(self) -> None:
         class FakeLlama:

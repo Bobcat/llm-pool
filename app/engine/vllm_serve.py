@@ -25,6 +25,7 @@ from app.schemas import TextContent
 from .common import BackendExecutionError
 from .common import LOGGER
 from .common import ResolvedDecoding
+from .common import _chat_completion_metadata
 from .common import _exception_message
 
 
@@ -97,16 +98,24 @@ class VllmServeEngine:
         wall_s = max(0.0, time.perf_counter() - started)
 
         text = self._extract_text(response_payload)
+        choice = response_payload["choices"][0]
+        message = choice["message"]
+        reasoning = message.get("reasoning")
+        reasoning_text = reasoning if isinstance(reasoning, str) and reasoning else None
+        finish_reason = choice.get("finish_reason")
         prompt_tokens, output_tokens = self._extract_usage(response_payload)
         tokens_per_second = None
         if output_tokens is not None and wall_s > 0.0:
             tokens_per_second = output_tokens / wall_s
         return EngineResult(
             text=text,
+            reasoning_text=reasoning_text,
+            metadata={"upstream_response": _chat_completion_metadata(response_payload)},
             metrics=ResponseMetrics(
                 backend_inference_wall_ms=wall_s * 1000.0,
                 engine_prompt_tokens=prompt_tokens,
                 engine_output_tokens=output_tokens,
+                engine_finish_reason=(finish_reason if isinstance(finish_reason, str) else None),
                 engine_tokens_per_second=tokens_per_second,
             ),
         )
@@ -310,6 +319,12 @@ class VllmServeEngine:
         }
         if decoding.stop:
             payload["stop"] = decoding.stop
+        if runtime.config.prompt_format == "gemma4_template" and request.thinking != "default":
+            payload["chat_template_kwargs"] = {
+                "enable_thinking": request.thinking == "enabled"
+            }
+        if request.thinking_token_budget is not None:
+            payload["thinking_token_budget"] = request.thinking_token_budget
         if request.response_format is not None:
             payload["response_format"] = request.response_format.model_dump(
                 mode="python",
@@ -470,6 +485,12 @@ class VllmServeEngine:
         content = message.get("content")
         if isinstance(content, str):
             return content.strip()
+        if (
+            content is None
+            and isinstance(message.get("reasoning"), str)
+            and first_choice.get("finish_reason") == "length"
+        ):
+            return ""
         raise BackendExecutionError(
             code="vllm_serve_response_parse_failure",
             status_code=502,

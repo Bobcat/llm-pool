@@ -5,9 +5,32 @@ from dataclasses import field
 import logging
 from pathlib import Path
 import subprocess
+from typing import Any
 
 
 LOGGER = logging.getLogger("llm_pool.engine")
+
+
+def _chat_completion_metadata(payload: dict[str, Any]) -> dict[str, Any]:
+    """Keep upstream response fields without duplicating generated content."""
+    metadata = {key: value for key, value in payload.items() if key != "choices"}
+    choices = payload.get("choices")
+    if isinstance(choices, list):
+        metadata["choices"] = []
+        for choice in choices:
+            if not isinstance(choice, dict):
+                continue
+            choice_metadata = {
+                key: value for key, value in choice.items() if key not in {"message", "delta"}
+            }
+            message = choice.get("message")
+            if isinstance(message, dict):
+                choice_metadata["message"] = {
+                    key: value for key, value in message.items()
+                    if key not in {"content", "reasoning_content", "reasoning", "tool_calls", "function_call", "audio"}
+                }
+            metadata["choices"].append(choice_metadata)
+    return metadata
 
 _GGUF_CACHE_TYPE_ALLOWED_VALUES = (
     "f32",
@@ -47,6 +70,8 @@ _COMMON_MODEL_DEFINITION_FIELDS = (
     "replicas",
     "replica_max",
     "target_inflight",
+    "reasoning_efforts",
+    "thinking_token_budget_max",
 )
 
 _BACKEND_MODEL_DEFINITION_FIELDS = {
@@ -228,6 +253,7 @@ _THINKING_CONTROL_PROMPT_FORMATS = {
     "sglang_serve": frozenset({"gemma4_template"}),
     "trtllm_serve": frozenset({"gemma4_template"}),
     "vllm": frozenset({"gemma4_template", "qwen3_template"}),
+    "vllm_serve": frozenset({"gemma4_template"}),
 }
 _DEFAULT_THINKING_MODES = ("default",)
 _OVERRIDE_THINKING_MODES = ("default", "enabled", "disabled")
@@ -290,6 +316,8 @@ def _resolve_request_enable_thinking(request, default: bool | None) -> bool | No
 
 
 def _resolve_request_remote_thinking(request, default: str | None) -> str | None:
+    if request.reasoning_effort is not None:
+        return "disabled" if request.reasoning_effort == "none" else "enabled"
     if request.thinking == "enabled":
         return "enabled"
     if request.thinking == "disabled":

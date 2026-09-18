@@ -1032,13 +1032,15 @@ Cache keys should be opaque and unique per conversation or task. Do not put user
 
 The Kimi K2.6 model definition enables this option. Moonshot recommends `prompt_cache_key` for multi-turn agents and returns cache usage as `usage.cached_tokens`; see its [Chat Completions API reference](https://platform.kimi.ai/docs/api/chat). `llm-pool` exposes that value as `metrics.engine_cached_prompt_tokens`. The current Workbench chat client keeps one random key for the in-memory conversation, replaces it when the user clears the chat, and shows reported input and cached token counts.
 
+The `deepseek-flash` model uses DeepSeek's automatic prefix cache. It does not forward `prompt_cache_key`. Keep the beginning of repeated prompts unchanged to allow cache hits. DeepSeek reports hits as `usage.prompt_cache_hit_tokens`, which `llm-pool` also exposes as `metrics.engine_cached_prompt_tokens`.
+
 Current limits and possible optimizations:
 
 | Current limit | Effect | Possible optimization |
 | --- | --- | --- |
-| The upstream provider controls cache admission, retention, and eviction. | A stable key improves affinity but does not guarantee a hit. | Keep system prompts and earlier messages byte-stable. Monitor `engine_cached_prompt_tokens` instead of assuming a hit. |
+| The upstream provider controls cache admission, retention, and eviction. | A stable prefix allows cache hits but does not guarantee them. | Keep system prompts and earlier messages byte-stable. Monitor `engine_cached_prompt_tokens` instead of assuming a hit. |
 | The complete relevant history is still sent and still counts toward the context window. Cached input may be cheaper, but it is not free. | Long conversations continue to grow in request size and cost. | Add explicit history trimming or summarization after a configurable token threshold. This trades detail for lower input use. |
-| Cached-token extraction currently reads Moonshot's top-level `usage.cached_tokens` field. | Providers that report cache usage in another response shape return `engine_cached_prompt_tokens: null`. | Add a documented usage adapter when another provider and response shape are configured. |
+| Cached-token extraction reads Moonshot's `usage.cached_tokens` and DeepSeek's `usage.prompt_cache_hit_tokens`. | Providers that report cache usage in another response shape return `engine_cached_prompt_tokens: null`. | Add a documented usage adapter when another provider and response shape are configured. |
 | `files_extract` uploads and extracts every file item present in the submitted history on each request. | Repeated document questions add file-API work, and the extracted text remains model input. | Add a bounded extracted-content cache keyed by a file digest. It needs explicit size, lifetime, deletion, and user-isolation rules. Prompt caching or history compaction is still required to reduce model-input cost. |
 
 ### Remote file input

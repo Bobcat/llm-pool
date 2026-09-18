@@ -103,6 +103,92 @@ class VllmServeEngineTests(unittest.TestCase):
 
         self.assertEqual(payload["top_k"], 11)
 
+    def test_gemma4_thinking_token_budget_is_forwarded(self) -> None:
+        engine = vllm_serve_module.VllmServeEngine.__new__(
+            vllm_serve_module.VllmServeEngine
+        )
+        engine.decoding_defaults = DecodingDefaults()
+        payload = engine._chat_completions_payload(
+            runtime=mock.Mock(remote_model="gemma4"),
+            request=ResponseRequest(
+                model="gemma4",
+                input="Write a story",
+                thinking="enabled",
+                thinking_token_budget=256,
+            ),
+            decoding=engine._resolve_decoding(DecodingParams(max_tokens=512)),
+        )
+
+        self.assertEqual(payload["thinking_token_budget"], 256)
+
+    def test_gemma4_thinking_uses_template_kwargs_and_exposes_reasoning(self) -> None:
+        engine = vllm_serve_module.VllmServeEngine.__new__(
+            vllm_serve_module.VllmServeEngine
+        )
+        engine.decoding_defaults = DecodingDefaults()
+        runtime = mock.Mock(
+            remote_model="gemma4",
+            config=ModelSettings(
+                model_path=None,
+                backend="vllm_serve",
+                prompt_format="gemma4_template",
+            ),
+        )
+        engine._models = {"gemma4": runtime}
+        upstream = {
+            "choices": [{"message": {"content": "391", "reasoning": "Calculate first."}}],
+            "usage": {"prompt_tokens": 10, "completion_tokens": 7},
+        }
+        with mock.patch.object(engine, "_post_json", return_value=upstream) as post:
+            result = engine.complete(
+                ResponseRequest(model="gemma4", input="17 * 23?", thinking="enabled")
+            )
+
+        self.assertEqual(
+            post.call_args.args[1]["chat_template_kwargs"],
+            {"enable_thinking": True},
+        )
+        self.assertEqual(result.text, "391")
+        self.assertEqual(result.reasoning_text, "Calculate first.")
+
+        with mock.patch.object(engine, "_post_json", return_value=upstream) as post:
+            engine.complete(ResponseRequest(model="gemma4", input="17 * 23?", thinking="disabled"))
+        self.assertEqual(
+            post.call_args.args[1]["chat_template_kwargs"],
+            {"enable_thinking": False},
+        )
+
+    def test_gemma4_keeps_reasoning_when_token_limit_prevents_final_answer(self) -> None:
+        engine = vllm_serve_module.VllmServeEngine.__new__(
+            vllm_serve_module.VllmServeEngine
+        )
+        engine.decoding_defaults = DecodingDefaults()
+        engine._models = {
+            "gemma4": mock.Mock(
+                remote_model="gemma4",
+                config=ModelSettings(
+                    model_path=None,
+                    backend="vllm_serve",
+                    prompt_format="gemma4_template",
+                ),
+            )
+        }
+        upstream = {
+            "choices": [{
+                "finish_reason": "length",
+                "message": {"content": None, "reasoning": "Still thinking."},
+            }],
+            "usage": {"prompt_tokens": 10, "completion_tokens": 256},
+        }
+        with mock.patch.object(engine, "_post_json", return_value=upstream):
+            result = engine.complete(
+                ResponseRequest(model="gemma4", input="Write a story", thinking="enabled")
+            )
+
+        self.assertEqual(result.text, "")
+        self.assertEqual(result.reasoning_text, "Still thinking.")
+        self.assertEqual(result.metrics.engine_finish_reason, "length")
+
     def test_starts_vllm_serve_and_posts_multimodal_chat_completion(self) -> None:
         settings = AppSettings(
             engine=EngineSettings(

@@ -111,6 +111,7 @@ class ModelRouterEngine:
                     status_code=400,
                     message=f"model {request.model!r} does not support request-level thinking",
                 )
+            self._validate_reasoning_controls(request, model_settings)
             response_formats = _model_response_formats(state.resolved_backend)
             if (
                 request.response_format is not None
@@ -142,6 +143,8 @@ class ModelRouterEngine:
             return EngineResult(
                 text=result.text,
                 metrics=ResponseMetrics(**metrics_payload),
+                reasoning_text=result.reasoning_text,
+                metadata=result.metadata,
             )
         finally:
             with self._state_lock:
@@ -149,6 +152,65 @@ class ModelRouterEngine:
                 if state is not None and state.inflight_requests > 0:
                     state.inflight_requests -= 1
                     self._state_changed.notify_all()
+
+    def _validate_reasoning_controls(
+        self,
+        request: ResponseRequest,
+        model_settings: ModelSettings,
+    ) -> None:
+        effort = request.reasoning_effort
+        if effort is not None:
+            if effort not in model_settings.reasoning_efforts:
+                raise RequestAdmissionError(
+                    code="reasoning_effort_unsupported",
+                    status_code=400,
+                    message=f"model {request.model!r} does not support reasoning_effort={effort!r}",
+                )
+            if effort == "none" and request.thinking == "enabled":
+                raise RequestAdmissionError(
+                    code="reasoning_control_conflict",
+                    status_code=400,
+                    message="reasoning_effort='none' conflicts with thinking='enabled'",
+                )
+            if effort != "none" and request.thinking == "disabled":
+                raise RequestAdmissionError(
+                    code="reasoning_control_conflict",
+                    status_code=400,
+                    message="a non-'none' reasoning_effort conflicts with thinking='disabled'",
+                )
+
+        budget = request.thinking_token_budget
+        if budget is None:
+            return
+        maximum = model_settings.thinking_token_budget_max
+        if maximum is None:
+            raise RequestAdmissionError(
+                code="thinking_token_budget_unsupported",
+                status_code=400,
+                message=f"model {request.model!r} does not support thinking_token_budget",
+            )
+        if budget > maximum:
+            raise RequestAdmissionError(
+                code="thinking_token_budget_out_of_range",
+                status_code=400,
+                message=(
+                    f"thinking_token_budget must be at most {maximum} for model "
+                    f"{request.model!r}"
+                ),
+            )
+        if request.thinking != "enabled":
+            raise RequestAdmissionError(
+                code="thinking_token_budget_requires_thinking",
+                status_code=400,
+                message="thinking_token_budget requires thinking='enabled'",
+            )
+        max_tokens = request.decoding.max_tokens or self._settings.engine.decoding.max_tokens
+        if budget >= max_tokens:
+            raise RequestAdmissionError(
+                code="thinking_token_budget_exhausts_output",
+                status_code=400,
+                message="thinking_token_budget must be lower than decoding.max_tokens",
+            )
 
     def admin_models_payload(self) -> dict[str, object]:
         with self._state_lock:
@@ -495,6 +557,12 @@ class ModelRouterEngine:
                     state.resolved_backend,
                     model_settings.prompt_format,
                     model_settings.remote_thinking,
+                ),
+                "reasoning_efforts": list(model_settings.reasoning_efforts),
+                "thinking_token_budget": (
+                    {"minimum": 1, "maximum": model_settings.thinking_token_budget_max}
+                    if model_settings.thinking_token_budget_max is not None
+                    else None
                 ),
                 "response_formats": _model_response_formats(state.resolved_backend),
             },

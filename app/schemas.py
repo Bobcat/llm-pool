@@ -119,8 +119,22 @@ class ResponseRequest(BaseModel):
     prompt_cache_key: str | None = Field(default=None, min_length=1)
     stream: bool = False
     thinking: ThinkingMode = "default"
+    reasoning_effort: str | None = Field(default=None, min_length=1, max_length=32)
+    thinking_token_budget: int | None = Field(default=None, ge=1, le=4096)
     response_format: JsonSchemaResponseFormat | None = None
     decoding: DecodingParams = Field(default_factory=DecodingParams)
+
+    @field_validator("reasoning_effort", mode="before")
+    @classmethod
+    def _normalize_reasoning_effort(cls, value: object) -> object:
+        if value is None:
+            return None
+        if not isinstance(value, str):
+            raise ValueError("reasoning_effort must be a string")
+        normalized = value.strip().lower()
+        if normalized == "":
+            raise ValueError("reasoning_effort must not be blank")
+        return normalized
 
     @field_validator("fairness_key", mode="before")
     @classmethod
@@ -218,6 +232,7 @@ class ResponseMetrics(BaseModel):
     engine_prompt_tokens: int | None = None
     engine_cached_prompt_tokens: int | None = None
     engine_output_tokens: int | None = None
+    engine_finish_reason: str | None = None
     engine_tokens_per_second: float | None = None
 
 
@@ -227,7 +242,12 @@ class ResponseEnvelope(BaseModel):
     model: str
     output: list[OutputText]
     output_text: str
+    reasoning_text: str | None = None
     metrics: ResponseMetrics = Field(default_factory=ResponseMetrics)
+    metadata: dict[str, Any] = Field(
+        default_factory=dict,
+        description="Backend response metadata; upstream_response excludes generated message content.",
+    )
 
 
 class AdminLoadRequest(BaseModel):
@@ -273,6 +293,11 @@ class AdminLoadRequest(BaseModel):
     llama_server_spec_draft_p_min: float | None = Field(default=None, ge=0.0, le=1.0)
 
 
+class ThinkingTokenBudgetCapability(BaseModel):
+    minimum: int = Field(default=1, ge=1)
+    maximum: int = Field(ge=1, le=4096)
+
+
 class ModelCapabilities(BaseModel):
     modalities: list[Literal["text", "image", "audio"]] = Field(
         default_factory=lambda: ["text"]
@@ -280,6 +305,8 @@ class ModelCapabilities(BaseModel):
     file_inputs: bool = False
     multi_turn: bool = False
     thinking_modes: list[ThinkingMode] = Field(default_factory=lambda: ["default"])
+    reasoning_efforts: list[str] = Field(default_factory=list)
+    thinking_token_budget: ThinkingTokenBudgetCapability | None = None
     response_formats: list[ResponseFormatName] = Field(default_factory=lambda: ["text"])
 
 
@@ -366,3 +393,5 @@ class AdminGpuMemoryEnvelope(BaseModel):
 class EngineResult:
     text: str
     metrics: ResponseMetrics = field(default_factory=ResponseMetrics)
+    reasoning_text: str | None = None
+    metadata: dict[str, Any] = field(default_factory=dict)
