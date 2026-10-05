@@ -40,6 +40,7 @@ from .scheduler import EngineStreamEvent
 
 
 _DEFAULT_SYSTEM_PROMPT = "You are a helpful assistant. Return only the response."
+_MAX_UPSTREAM_ERROR_BYTES = 64 * 1024
 
 
 @dataclass
@@ -308,7 +309,8 @@ class VllmServeEngine:
         text = "".join(text_parts).strip()
         reasoning_text = "".join(reasoning_parts) or None
         if (
-            not text_parts
+            not cancellation.cancelled
+            and not text_parts
             and reasoning_text
             and not (
                 _request_explicitly_enables_thinking(request)
@@ -661,6 +663,7 @@ class VllmServeEngine:
         opened = False
         try:
             connection.connect()
+            connection.auto_open = 0
             upstream_socket = connection.sock
             cancel_connection = lambda: self._abort_stream_connection(
                 connection,
@@ -679,8 +682,11 @@ class VllmServeEngine:
             response = connection.getresponse()
             if response.status >= 400:
                 status = response.status
+                upstream_message = self._upstream_error_message(
+                    response.read(_MAX_UPSTREAM_ERROR_BYTES + 1)
+                )
                 response.close()
-                raise self._map_http_status(status)
+                raise self._map_http_status(status, upstream_message=upstream_message)
             opened = True
             return response, connection, cancel_connection
         except (TimeoutError, socket.timeout) as exc:
@@ -768,30 +774,54 @@ class VllmServeEngine:
         return self._map_http_status(int(exc.code))
 
     @staticmethod
-    def _map_http_status(status: int) -> BackendExecutionError:
+    def _map_http_status(
+        status: int,
+        *,
+        upstream_message: str | None = None,
+    ) -> BackendExecutionError:
         if status in {401, 403}:
             return BackendExecutionError(
                 code="vllm_serve_authentication_failure",
                 status_code=502,
-                message=f"vllm serve chat completion authentication failed with HTTP {status}",
+                message=upstream_message
+                or f"vllm serve chat completion authentication failed with HTTP {status}",
             )
         if 400 <= status < 500:
             return BackendExecutionError(
                 code="vllm_serve_invalid_request",
                 status_code=502,
-                message=f"vllm serve chat completion rejected the request with HTTP {status}",
+                message=upstream_message
+                or f"vllm serve chat completion rejected the request with HTTP {status}",
             )
         if status >= 500:
             return BackendExecutionError(
                 code="vllm_serve_error",
                 status_code=502,
-                message=f"vllm serve chat completion failed with HTTP {status}",
+                message=upstream_message
+                or f"vllm serve chat completion failed with HTTP {status}",
             )
         return BackendExecutionError(
             code="vllm_serve_http_error",
             status_code=502,
-            message=f"vllm serve chat completion failed with HTTP {status}",
+            message=upstream_message
+            or f"vllm serve chat completion failed with HTTP {status}",
         )
+
+    @staticmethod
+    def _upstream_error_message(raw_payload: bytes) -> str | None:
+        if len(raw_payload) > _MAX_UPSTREAM_ERROR_BYTES:
+            return None
+        try:
+            payload = json.loads(raw_payload.decode("utf-8"))
+        except (UnicodeDecodeError, json.JSONDecodeError):
+            return None
+        if not isinstance(payload, dict):
+            return None
+        error = payload.get("error")
+        if not isinstance(error, dict):
+            return None
+        message = error.get("message")
+        return message if isinstance(message, str) and message else None
 
     def _extract_text(
         self,

@@ -405,6 +405,96 @@ class VllmServeEngineTests(unittest.TestCase):
                     self.assertEqual(result.text, "")
                     self.assertEqual(result.reasoning_text, "Still thinking.")
 
+    def test_cancelling_after_reasoning_returns_partial_cancelled_result(self) -> None:
+        engine = self._engine()
+        upstream = FakeStreamingResponse(
+            [
+                {
+                    "choices": [{"delta": {"reasoning": "Still thinking."}}],
+                    "usage": {"prompt_tokens": 10, "completion_tokens": 3},
+                },
+                "[DONE]",
+            ]
+        )
+        cancellation = CancellationToken()
+
+        def emit(event) -> bool:
+            cancellation.cancel()
+            return True
+
+        with mock.patch.object(
+            engine,
+            "_open_stream",
+            side_effect=self._fake_open_stream(upstream),
+        ):
+            result = engine.stream(
+                ResponseRequest(
+                    model="gemma4",
+                    input="Hello",
+                    stream=True,
+                    thinking="enabled",
+                ),
+                emit,
+                cancellation,
+            )
+
+        self.assertEqual(result.text, "")
+        self.assertEqual(result.reasoning_text, "Still thinking.")
+        self.assertEqual(result.metrics.engine_prompt_tokens, 10)
+        self.assertEqual(result.metrics.engine_output_tokens, 3)
+        self.assertEqual(result.metrics.engine_finish_reason, "cancelled")
+
+    def test_abort_before_request_write_does_not_reconnect(self) -> None:
+        engine = self._engine()
+        runtime = engine._models["gemma4"]
+        runtime.base_url = "http://127.0.0.1:12345/v1"
+        runtime.timeout_s = 5.0
+        runtime.api_key = None
+        cancellation = CancellationToken()
+
+        class RaceConnection:
+            def __init__(self) -> None:
+                self.auto_open = 1
+                self.connect_count = 0
+                self.request_delivered = False
+                self.sock = None
+
+            def connect(self) -> None:
+                self.connect_count += 1
+                self.sock = mock.Mock(spec=socket.socket)
+
+            def close(self) -> None:
+                self.sock = None
+
+            def request(self, *args, **kwargs) -> None:
+                del args, kwargs
+                cancellation.cancel()
+                if self.sock is None:
+                    if self.auto_open:
+                        self.connect()
+                    else:
+                        raise OSError("socket is closed")
+                self.request_delivered = True
+
+            def getresponse(self):
+                raise AssertionError("cancelled request reached getresponse()")
+
+        connection = RaceConnection()
+        with mock.patch.object(
+            vllm_serve_module,
+            "HTTPConnection",
+            return_value=connection,
+        ):
+            result = engine.stream(
+                ResponseRequest(model="gemma4", input="Hello", stream=True),
+                lambda event: True,
+                cancellation,
+            )
+
+        self.assertEqual(connection.connect_count, 1)
+        self.assertFalse(connection.request_delivered)
+        self.assertEqual(result.metrics.engine_finish_reason, "cancelled")
+
     def test_stream_maps_upstream_error_event(self) -> None:
         engine = self._engine()
         upstream = FakeStreamingResponse(
@@ -649,9 +739,14 @@ class VllmServeEngineTests(unittest.TestCase):
             def do_POST(self) -> None:
                 content_length = int(self.headers.get("Content-Length", "0"))
                 self.rfile.read(content_length)
+                body = json.dumps(
+                    {"error": {"message": "context length exceeded"}}
+                ).encode("utf-8")
                 self.send_response(400)
-                self.send_header("Content-Length", "0")
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(body)))
                 self.end_headers()
+                self.wfile.write(body)
 
             def log_message(self, format, *args) -> None:
                 del format, args
@@ -676,6 +771,7 @@ class VllmServeEngineTests(unittest.TestCase):
 
             self.assertEqual(exc_info.exception.code, "vllm_serve_invalid_request")
             self.assertEqual(exc_info.exception.status_code, 502)
+            self.assertEqual(exc_info.exception.message, "context length exceeded")
         finally:
             server.shutdown()
             server.server_close()
