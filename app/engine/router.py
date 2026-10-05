@@ -39,6 +39,78 @@ from .common import UnknownModelError
 from .scheduler import ExecutorSnapshot
 from .scheduler import ReplicaRegistration
 from .scheduler import RuntimeScheduler
+from .scheduler import ScheduledStream
+
+
+class _RoutedStream:
+    def __init__(
+        self,
+        *,
+        scheduled: ScheduledStream,
+        started_at: float,
+        release_request,
+    ) -> None:
+        self._scheduled = scheduled
+        self._started_at = started_at
+        self._release_request = release_request
+        self._result: EngineResult | None = None
+        self._error: Exception | None = None
+        self._finalized = threading.Event()
+        scheduled.add_done_callback(self._finalize)
+
+    def _finalize(self, _future) -> None:
+        try:
+            result = self._scheduled.result()
+            total_ms = max(0.0, (time.perf_counter() - self._started_at) * 1000.0)
+            metrics_payload = (
+                result.metrics.model_dump()
+                if hasattr(result.metrics, "model_dump")
+                else result.metrics.dict()
+            )
+            metrics_payload["engine_total_wall_ms"] = total_ms
+            metrics_payload["pool_total_wall_ms"] = total_ms
+            backend_wall_ms = metrics_payload.get("backend_inference_wall_ms")
+            if backend_wall_ms is not None:
+                metrics_payload["engine_outside_backend_wall_ms"] = max(
+                    0.0,
+                    total_ms - float(backend_wall_ms),
+                )
+            self._result = EngineResult(
+                text=result.text,
+                metrics=ResponseMetrics(**metrics_payload),
+                reasoning_text=result.reasoning_text,
+                metadata=result.metadata,
+            )
+        except Exception as exc:
+            self._error = exc
+        finally:
+            self._release_request()
+            self._finalized.set()
+
+    def poll(self):
+        return self._scheduled.poll()
+
+    @property
+    def done(self) -> bool:
+        return self._scheduled.done and self._finalized.is_set()
+
+    def result(self) -> EngineResult:
+        self._finalized.wait()
+        if self._error is not None:
+            raise self._error
+        if self._result is None:
+            raise RuntimeError("stream completed without a result")
+        return self._result
+
+    def cancel(self) -> None:
+        self._scheduled.cancel()
+
+    def add_done_callback(self, callback) -> None:
+        def _invoke(_future) -> None:
+            self._finalized.wait()
+            callback()
+
+        self._scheduled.add_done_callback(_invoke)
 
 
 class ModelRouterEngine:
@@ -80,52 +152,8 @@ class ModelRouterEngine:
     def complete(self, request: ResponseRequest) -> EngineResult:
         started_at = time.perf_counter()
         with self._state_lock:
-            if request.model not in self._configured_models:
-                raise UnknownModelError(request.model)
-            model_settings = self._configured_models[request.model]
+            executor = self._admit_request_locked(request)
             state = self._model_states[request.model]
-            if state.lifecycle != "loaded":
-                raise ModelStateError(request.model, self._lifecycle_error_code(state.lifecycle))
-            if state.resolved_backend == "openai_remote" and not request.allow_remote:
-                raise RequestAdmissionError(
-                    code="remote_execution_disallowed",
-                    status_code=403,
-                    message="remote execution is not allowed for this request",
-                )
-            if request.has_file_content and not _model_supports_file_inputs(
-                state.resolved_backend,
-                model_settings.remote_file_mode,
-            ):
-                raise RequestAdmissionError(
-                    code="file_input_unsupported",
-                    status_code=400,
-                    message=f"model {request.model!r} does not support file inputs",
-                )
-            thinking_modes = _model_thinking_modes(
-                state.resolved_backend,
-                model_settings.prompt_format,
-                model_settings.remote_thinking,
-            )
-            if request.thinking != "default" and request.thinking not in thinking_modes:
-                raise RequestAdmissionError(
-                    code="thinking_unsupported",
-                    status_code=400,
-                    message=f"model {request.model!r} does not support request-level thinking",
-                )
-            self._validate_reasoning_controls(request, model_settings)
-            response_formats = _model_response_formats(state.resolved_backend)
-            if (
-                request.response_format is not None
-                and request.response_format.type not in response_formats
-            ):
-                raise RequestAdmissionError(
-                    code="response_format_unsupported",
-                    status_code=400,
-                    message=f"model {request.model!r} does not support response_format",
-                )
-            executor = self._scheduler.get(request.model)
-            if executor is None:
-                raise ModelStateError(request.model, "model_not_loaded")
             state.inflight_requests += 1
         try:
             result_future = executor.enqueue(request)
@@ -148,11 +176,84 @@ class ModelRouterEngine:
                 metadata=result.metadata,
             )
         finally:
-            with self._state_lock:
-                state = self._model_states.get(request.model)
-                if state is not None and state.inflight_requests > 0:
-                    state.inflight_requests -= 1
-                    self._state_changed.notify_all()
+            self._release_inflight_request(request.model)
+
+    def stream(self, request: ResponseRequest) -> _RoutedStream | None:
+        started_at = time.perf_counter()
+        with self._state_lock:
+            if request.model not in self._configured_models:
+                raise UnknownModelError(request.model)
+            state = self._model_states[request.model]
+            if state.resolved_backend != "vllm_serve":
+                return None
+            executor = self._admit_request_locked(request)
+            state.inflight_requests += 1
+        try:
+            scheduled = executor.enqueue_stream(request)
+        except Exception:
+            self._release_inflight_request(request.model)
+            raise
+        return _RoutedStream(
+            scheduled=scheduled,
+            started_at=started_at,
+            release_request=lambda: self._release_inflight_request(request.model),
+        )
+
+    def _admit_request_locked(self, request: ResponseRequest):
+        if request.model not in self._configured_models:
+            raise UnknownModelError(request.model)
+        model_settings = self._configured_models[request.model]
+        state = self._model_states[request.model]
+        if state.lifecycle != "loaded":
+            raise ModelStateError(request.model, self._lifecycle_error_code(state.lifecycle))
+        if state.resolved_backend == "openai_remote" and not request.allow_remote:
+            raise RequestAdmissionError(
+                code="remote_execution_disallowed",
+                status_code=403,
+                message="remote execution is not allowed for this request",
+            )
+        if request.has_file_content and not _model_supports_file_inputs(
+            state.resolved_backend,
+            model_settings.remote_file_mode,
+        ):
+            raise RequestAdmissionError(
+                code="file_input_unsupported",
+                status_code=400,
+                message=f"model {request.model!r} does not support file inputs",
+            )
+        thinking_modes = _model_thinking_modes(
+            state.resolved_backend,
+            model_settings.prompt_format,
+            model_settings.remote_thinking,
+        )
+        if request.thinking != "default" and request.thinking not in thinking_modes:
+            raise RequestAdmissionError(
+                code="thinking_unsupported",
+                status_code=400,
+                message=f"model {request.model!r} does not support request-level thinking",
+            )
+        self._validate_reasoning_controls(request, model_settings)
+        response_formats = _model_response_formats(state.resolved_backend)
+        if (
+            request.response_format is not None
+            and request.response_format.type not in response_formats
+        ):
+            raise RequestAdmissionError(
+                code="response_format_unsupported",
+                status_code=400,
+                message=f"model {request.model!r} does not support response_format",
+            )
+        executor = self._scheduler.get(request.model)
+        if executor is None:
+            raise ModelStateError(request.model, "model_not_loaded")
+        return executor
+
+    def _release_inflight_request(self, model_name: str) -> None:
+        with self._state_lock:
+            state = self._model_states.get(model_name)
+            if state is not None and state.inflight_requests > 0:
+                state.inflight_requests -= 1
+                self._state_changed.notify_all()
 
     def _validate_reasoning_controls(
         self,
@@ -646,6 +747,7 @@ class ModelRouterEngine:
                 ReplicaRegistration(
                     replica_id=replica_id,
                     complete_fn=self._runtime_complete_fn(backend_engine, replica_id),
+                    stream_fn=self._runtime_stream_fn(backend_engine, replica_id),
                     runtime_capability=self._runtime_capability_for_model(
                         model_name,
                         backend_engine,
@@ -662,6 +764,20 @@ class ModelRouterEngine:
             return backend_engine.complete(self._request_for_replica(request, replica_id))
 
         return _complete
+
+    def _runtime_stream_fn(self, backend_engine: object, replica_id: str):
+        stream = getattr(backend_engine, "stream", None)
+        if not callable(stream):
+            return None
+
+        def _stream(request: ResponseRequest, emit, cancellation) -> EngineResult:
+            return stream(
+                self._request_for_replica(request, replica_id),
+                emit,
+                cancellation,
+            )
+
+        return _stream
 
     def _runtime_capability_for_model(
         self,

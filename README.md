@@ -220,7 +220,7 @@ extensible object. Chat-completions backends place stable, non-content upstream
 fields in `metadata.upstream_response`; generated message text and token-level
 logs stay out because they can duplicate prompt or output content.
 
-`stream: true` currently uses the service-side SSE path. It emits:
+`stream: true` returns Server-Sent Events. It emits:
 
 - `response.created`
 - `response.reasoning_text.delta`
@@ -228,7 +228,27 @@ logs stay out because they can duplicate prompt or output content.
 - `response.metrics`
 - `response.completed`
 
-This is not yet guaranteed to be backend-native live token streaming for every runtime.
+`response.completed.finish_reason` matches `metrics.engine_finish_reason`. Concatenated
+`response.output_text.delta` values equal `response.completed.output_text`.
+
+`vllm_serve` provides live backend-native streaming. The pool forwards text and reasoning
+deltas as vLLM generates them. Closing the client response closes the upstream vLLM stream,
+releases the runtime slot, and charges fairness only for the time used before cancellation.
+A request cancelled while it is still queued is removed without a fairness charge. Other
+backends still use the service-side path, which divides the completed response into SSE deltas.
+Cancellation applies only to `stream: true` requests on `vllm_serve` models; for other
+requests, closing the connection does not stop the work.
+
+For a native `vllm_serve` stream, admission errors remain HTTP errors. After admission, the
+pool returns HTTP 200 and `response.created`. Later failures, including upstream rejections,
+timeouts, and a model that starts unloading while the request is queued, produce
+`response.failed` instead of `response.completed`. Clients must inspect the terminal SSE event,
+not only the HTTP status. Streaming upstream metadata uses vLLM's
+`metadata.upstream_response.object: "chat.completion.chunk"` value.
+
+A disconnected client cannot receive a final event. Clients can treat a stream without
+`response.completed` as cancelled. The pool records `cancelled` as the finish reason and keeps
+the latest usage reported by vLLM before the disconnect.
 
 ## Request Fields
 
@@ -823,6 +843,8 @@ Notes:
 - `model_path` is not required for `vllm_serve`.
 - `vllm_*` fields map to vLLM engine arguments; `vllm_serve_*` fields control the subprocess, HTTP route, environment, and CLI extras.
 - `vllm_serve` forwards `temperature`, `top_k`, `top_p`, `max_tokens`, and `stop` to the upstream Chat Completions endpoint.
+- With `stream: true`, `vllm_serve` forwards upstream Chat Completions SSE deltas immediately. Closing the pool response aborts the upstream request.
+- `vllm_serve_timeout_s` is an idle timeout between streaming chunks. For non-streaming requests it effectively bounds the complete upstream response because vLLM sends the response after generation finishes.
 - Prefer a very low `vllm_gpu_memory_utilization` and set `vllm_kv_cache_memory_bytes` explicitly, so `vllm serve` does not reserve most free VRAM just because it is available.
 - `vllm_speculative_method`, `vllm_speculative_model`, `vllm_speculative_moe_backend`, `vllm_speculative_attention_backend`, and `vllm_num_speculative_tokens` are serialized into `--speculative-config`.
 - For Gemma 4 MTP, `vllm_speculative_method: "mtp"` means `vllm_speculative_model` is the Gemma 4 assistant checkpoint passed through vLLM's `model` key; it is not generic `method: "draft_model"` speculation.

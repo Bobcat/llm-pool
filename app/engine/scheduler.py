@@ -1,17 +1,22 @@
 from __future__ import annotations
 
 from collections import deque
+from concurrent.futures import CancelledError
 from concurrent.futures import Future
 from dataclasses import dataclass
+from queue import Empty
+from queue import Queue
 import threading
 import time
 from typing import Callable
+from typing import Literal
 
 from app.config import FairnessSettings
 from app.schemas import EngineResult
 from app.schemas import ResponseMetrics
 from app.schemas import ResponseRequest
 
+from .common import LOGGER
 from .common import ModelStateError
 from .common import RequestAdmissionError
 
@@ -44,7 +49,57 @@ class ExecutorSnapshot:
 class ReplicaRegistration:
     replica_id: str
     complete_fn: Callable[[ResponseRequest], EngineResult]
+    stream_fn: Callable[
+        [ResponseRequest, Callable[["EngineStreamEvent"], bool], "CancellationToken"],
+        EngineResult,
+    ] | None = None
     runtime_capability: int = 1
+
+
+@dataclass(frozen=True)
+class EngineStreamEvent:
+    type: Literal["output_text.delta", "reasoning_text.delta"]
+    delta: str
+
+
+class CancellationToken:
+    def __init__(self) -> None:
+        self._cancelled = threading.Event()
+        self._lock = threading.Lock()
+        self._callback: Callable[[], None] | None = None
+
+    @property
+    def cancelled(self) -> bool:
+        return self._cancelled.is_set()
+
+    def cancel(self) -> None:
+        with self._lock:
+            if self._cancelled.is_set():
+                return
+            self._cancelled.set()
+            callback = self._callback
+            self._callback = None
+        if callback is not None:
+            try:
+                callback()
+            except Exception:
+                LOGGER.warning("Cancellation callback failed.", exc_info=True)
+
+    def set_callback(self, callback: Callable[[], None]) -> None:
+        with self._lock:
+            cancelled = self._cancelled.is_set()
+            if not cancelled:
+                self._callback = callback
+        if cancelled:
+            try:
+                callback()
+            except Exception:
+                LOGGER.warning("Cancellation callback failed.", exc_info=True)
+
+    def clear_callback(self, callback: Callable[[], None]) -> None:
+        with self._lock:
+            if self._callback is callback:
+                self._callback = None
 
 
 @dataclass
@@ -54,6 +109,49 @@ class SchedulerJob:
     enqueued_at: float
     job_id: int = 0
     fairness_key: str | None = None
+    cancellation: CancellationToken | None = None
+    stream_events: Queue[EngineStreamEvent] | None = None
+
+    def emit(self, event: EngineStreamEvent) -> bool:
+        if self.stream_events is None or self.cancellation is None:
+            return False
+        if self.cancellation.cancelled:
+            return False
+        self.stream_events.put_nowait(event)
+        return not self.cancellation.cancelled
+
+
+class ScheduledStream:
+    def __init__(
+        self,
+        *,
+        job: SchedulerJob,
+        cancel_fn: Callable[[SchedulerJob], None],
+    ) -> None:
+        if job.stream_events is None:
+            raise ValueError("stream job requires an event queue")
+        self._job = job
+        self._events = job.stream_events
+        self._cancel_fn = cancel_fn
+
+    def poll(self) -> EngineStreamEvent | None:
+        try:
+            return self._events.get_nowait()
+        except Empty:
+            return None
+
+    @property
+    def done(self) -> bool:
+        return self._job.result_future.done() and self._events.empty()
+
+    def result(self) -> EngineResult:
+        return self._job.result_future.result()
+
+    def cancel(self) -> None:
+        self._cancel_fn(self._job)
+
+    def add_done_callback(self, callback: Callable[[Future[EngineResult]], None]) -> None:
+        self._job.result_future.add_done_callback(callback)
 
 
 @dataclass
@@ -180,6 +278,18 @@ class _FairPendingQueue:
         state.active_started_at.pop(job.job_id, None)
         self._mark_idle_if_needed(state, now)
 
+    def remove(self, job: SchedulerJob, *, now: float) -> bool:
+        state = self._states.get(job.fairness_key)
+        if state is None:
+            return False
+        for index, pending_job in enumerate(state.pending_jobs):
+            if pending_job is job:
+                del state.pending_jobs[index]
+                self._pending_count -= 1
+                self._mark_idle_if_needed(state, now)
+                return True
+        return False
+
     def drain(self, *, now: float) -> list[SchedulerJob]:
         drained: list[SchedulerJob] = []
         for state in self._states.values():
@@ -279,13 +389,18 @@ class _ReplicaExecutor:
         public_model_name: str,
         replica_id: str,
         complete_fn: Callable[[ResponseRequest], EngineResult],
+        stream_fn: Callable[
+            [ResponseRequest, Callable[[EngineStreamEvent], bool], CancellationToken],
+            EngineResult,
+        ] | None,
         configured_target_inflight: int,
         runtime_capability: int,
-        notify_completed: Callable[[SchedulerJob, float, float], None],
+        notify_completed: Callable[[SchedulerJob, float | None, float], None],
     ) -> None:
         self.public_model_name = str(public_model_name)
         self.replica_id = str(replica_id)
         self._complete_fn = complete_fn
+        self._stream_fn = stream_fn
         self._configured_target_inflight = max(1, int(configured_target_inflight))
         self._runtime_capability = max(1, int(runtime_capability))
         self._effective_target_inflight = min(self._configured_target_inflight, self._runtime_capability)
@@ -339,10 +454,19 @@ class _ReplicaExecutor:
     def _run_job(self, *, job: SchedulerJob, dequeued_at: float) -> None:
         result: EngineResult | None = None
         error: Exception | None = None
+        abandoned = False
         backend_started_at = time.perf_counter()
         backend_finished_at: float | None = None
         try:
-            result = self._complete_fn(job.request)
+            if job.cancellation is not None and job.cancellation.cancelled:
+                abandoned = True
+                raise CancelledError()
+            if job.stream_events is not None:
+                if self._stream_fn is None or job.cancellation is None:
+                    raise RuntimeError("replica does not support streaming")
+                result = self._stream_fn(job.request, job.emit, job.cancellation)
+            else:
+                result = self._complete_fn(job.request)
             backend_finished_at = time.perf_counter()
             metrics_payload = (
                 result.metrics.model_dump()
@@ -372,7 +496,11 @@ class _ReplicaExecutor:
                 if self._runtime_inflight > 0:
                     self._runtime_inflight -= 1
                 self._cond.notify_all()
-            self._notify_completed(job, service_ms, backend_finished_at)
+            self._notify_completed(
+                job,
+                None if abandoned else service_ms,
+                backend_finished_at,
+            )
         if error is not None:
             self._set_future_exception(job.result_future, error)
         elif result is not None:
@@ -417,6 +545,7 @@ class LoadedModelExecutor:
                 public_model_name=self.model_name,
                 replica_id=registration.replica_id,
                 complete_fn=registration.complete_fn,
+                stream_fn=registration.stream_fn,
                 configured_target_inflight=self._configured_target_inflight,
                 runtime_capability=registration.runtime_capability,
                 notify_completed=self._notify_replica_completed,
@@ -444,6 +573,30 @@ class LoadedModelExecutor:
             )
             self._cond.notify_all()
         return result_future
+
+    def enqueue_stream(self, request: ResponseRequest) -> ScheduledStream:
+        result_future: Future[EngineResult] = Future()
+        with self._cond:
+            if not self._accepting_new_requests or self._stop_requested:
+                raise ModelStateError(self.model_name, "model_unloading")
+            job = self._pending_queue.enqueue(
+                request=request,
+                result_future=result_future,
+                now=time.perf_counter(),
+            )
+            job.cancellation = CancellationToken()
+            job.stream_events = Queue()
+            self._cond.notify_all()
+        return ScheduledStream(job=job, cancel_fn=self.cancel)
+
+    def cancel(self, job: SchedulerJob) -> None:
+        with self._cond:
+            removed = self._pending_queue.remove(job, now=time.perf_counter())
+            self._cond.notify_all()
+        if job.cancellation is not None:
+            job.cancellation.cancel()
+        if removed:
+            job.result_future.cancel()
 
     def snapshot(self) -> ExecutorSnapshot:
         replica_snapshots = [replica.snapshot() for replica in self._replicas]
@@ -476,6 +629,8 @@ class LoadedModelExecutor:
         for replica in self._replicas:
             replica.begin_shutdown()
         for job in cancelled_jobs:
+            if job.cancellation is not None:
+                job.cancellation.cancel()
             self._set_future_exception(job.result_future, ModelStateError(self.model_name, "model_unloading"))
 
     def join(self, timeout: float | None = None) -> None:
@@ -536,15 +691,18 @@ class LoadedModelExecutor:
     def _notify_replica_completed(
         self,
         job: SchedulerJob,
-        service_ms: float,
+        service_ms: float | None,
         completed_at: float,
     ) -> None:
         with self._cond:
-            self._pending_queue.complete(
-                job,
-                service_ms=service_ms,
-                now=completed_at,
-            )
+            if service_ms is None:
+                self._pending_queue.abandon(job, now=completed_at)
+            else:
+                self._pending_queue.complete(
+                    job,
+                    service_ms=service_ms,
+                    now=completed_at,
+                )
             self._cond.notify_all()
 
     @staticmethod
