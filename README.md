@@ -236,6 +236,8 @@ deltas as vLLM generates them. Closing the client response closes the upstream v
 releases the runtime slot, and charges fairness only for the time used before cancellation.
 A request cancelled while it is still queued is removed without a fairness charge. Other
 backends still use the service-side path, which divides the completed response into SSE deltas.
+Cancellation applies only to `stream: true` requests on `vllm_serve` models; for other
+requests, closing the connection does not stop the work.
 
 For a native `vllm_serve` stream, admission errors remain HTTP errors. After admission, the
 pool returns HTTP 200 and `response.created`. Later failures, including upstream rejections,
