@@ -228,7 +228,18 @@ logs stay out because they can duplicate prompt or output content.
 - `response.metrics`
 - `response.completed`
 
-This is not yet guaranteed to be backend-native live token streaming for every runtime.
+`response.completed.finish_reason` matches `metrics.engine_finish_reason`. A backend failure
+after the HTTP stream starts emits `response.failed` instead of `response.completed`.
+
+`vllm_serve` provides live backend-native streaming. The pool forwards text and reasoning
+deltas as vLLM generates them. Closing the client response closes the upstream vLLM stream,
+releases the runtime slot, and charges fairness only for the time used before cancellation.
+A request cancelled while it is still queued is removed without a fairness charge. Other
+backends still use the service-side path, which divides the completed response into SSE deltas.
+
+A disconnected client cannot receive a final event. Clients can treat a stream without
+`response.completed` as cancelled. The pool records `cancelled` as the finish reason and keeps
+the latest usage reported by vLLM before the disconnect.
 
 ## Request Fields
 
@@ -823,6 +834,7 @@ Notes:
 - `model_path` is not required for `vllm_serve`.
 - `vllm_*` fields map to vLLM engine arguments; `vllm_serve_*` fields control the subprocess, HTTP route, environment, and CLI extras.
 - `vllm_serve` forwards `temperature`, `top_k`, `top_p`, `max_tokens`, and `stop` to the upstream Chat Completions endpoint.
+- With `stream: true`, `vllm_serve` forwards upstream Chat Completions SSE deltas immediately. Closing the pool response aborts the upstream request.
 - Prefer a very low `vllm_gpu_memory_utilization` and set `vllm_kv_cache_memory_bytes` explicitly, so `vllm serve` does not reserve most free VRAM just because it is available.
 - `vllm_speculative_method`, `vllm_speculative_model`, `vllm_speculative_moe_backend`, `vllm_speculative_attention_backend`, and `vllm_num_speculative_tokens` are serialized into `--speculative-config`.
 - For Gemma 4 MTP, `vllm_speculative_method: "mtp"` means `vllm_speculative_model` is the Gemma 4 assistant checkpoint passed through vLLM's `model` key; it is not generic `method: "draft_model"` speculation.

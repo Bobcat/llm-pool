@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import socket
+import threading
 import unittest
 from unittest import mock
 
@@ -13,6 +15,7 @@ if HAS_PYDANTIC:
     from app.config import EngineSettings
     from app.config import ModelSettings
     import app.engine.vllm_serve as vllm_serve_module
+    from app.engine.scheduler import CancellationToken
     from app.schemas import AudioContent
     from app.schemas import AudioUrlSpec
     from app.schemas import DecodingParams
@@ -34,6 +37,38 @@ class FakeResponse:
 
     def read(self) -> bytes:
         return json.dumps(self._payload).encode("utf-8")
+
+
+class FakeStreamingResponse:
+    def __init__(self, events: list[dict[str, object] | str]) -> None:
+        self._events = events
+        self.closed = False
+
+    def __iter__(self):
+        for event in self._events:
+            data = event if isinstance(event, str) else json.dumps(event)
+            yield f"data: {data}\n".encode("utf-8")
+            yield b"\n"
+
+    def close(self) -> None:
+        self.closed = True
+
+
+class BlockingStreamingResponse:
+    def __init__(self, first_event: dict[str, object]) -> None:
+        self._first_event = first_event
+        self.first_sent = threading.Event()
+        self.closed = threading.Event()
+
+    def __iter__(self):
+        yield f"data: {json.dumps(self._first_event)}\n".encode("utf-8")
+        yield b"\n"
+        self.first_sent.set()
+        self.closed.wait(timeout=2.0)
+        raise OSError("response closed")
+
+    def close(self) -> None:
+        self.closed.set()
 
 
 class FakeProcess:
@@ -62,6 +97,173 @@ class FakeProcess:
 
 @unittest.skipUnless(HAS_PYDANTIC, "pydantic not installed")
 class VllmServeEngineTests(unittest.TestCase):
+    def test_stream_abort_shuts_down_socket_before_closing_response(self) -> None:
+        response = mock.Mock()
+        operations: list[str] = []
+        response.fp.raw._sock.shutdown.side_effect = lambda how: operations.append(
+            f"shutdown:{how}"
+        )
+        response.close.side_effect = lambda: operations.append("close")
+
+        vllm_serve_module.VllmServeEngine._abort_stream_response(response)
+
+        self.assertEqual(operations, [f"shutdown:{socket.SHUT_RDWR}", "close"])
+
+    def test_stream_forwards_incremental_multimodal_deltas_and_usage(self) -> None:
+        engine = vllm_serve_module.VllmServeEngine.__new__(
+            vllm_serve_module.VllmServeEngine
+        )
+        engine.decoding_defaults = DecodingDefaults()
+        runtime = mock.Mock(
+            remote_model="gemma4",
+            config=ModelSettings(
+                model_path=None,
+                backend="vllm_serve",
+                prompt_format="gemma4_template",
+                enable_thinking=False,
+            ),
+        )
+        engine._models = {"gemma4": runtime}
+        upstream = FakeStreamingResponse(
+            [
+                {
+                    "id": "chat-1",
+                    "model": "gemma4",
+                    "choices": [{"index": 0, "delta": {"role": "assistant"}}],
+                    "usage": {"prompt_tokens": 10, "completion_tokens": 0},
+                },
+                {
+                    "id": "chat-1",
+                    "choices": [{"index": 0, "delta": {"reasoning": "Check."}}],
+                    "usage": {"prompt_tokens": 10, "completion_tokens": 1},
+                },
+                {
+                    "id": "chat-1",
+                    "choices": [{"index": 0, "delta": {"content": "Hel"}}],
+                    "usage": {"prompt_tokens": 10, "completion_tokens": 2},
+                },
+                {
+                    "id": "chat-1",
+                    "choices": [
+                        {
+                            "index": 0,
+                            "delta": {"content": "lo"},
+                            "finish_reason": "stop",
+                        }
+                    ],
+                    "usage": {"prompt_tokens": 10, "completion_tokens": 3},
+                },
+                {
+                    "id": "chat-1",
+                    "choices": [],
+                    "usage": {"prompt_tokens": 10, "completion_tokens": 3},
+                },
+                "[DONE]",
+            ]
+        )
+        captured: dict[str, object] = {}
+
+        def open_stream(_runtime, payload):
+            captured["payload"] = payload
+            return upstream
+
+        events = []
+        request = ResponseRequest(
+            model="gemma4",
+            input=[
+                TextContent(text="Describe this."),
+                ImageContent(image_url=ImageUrlSpec(url="data:image/png;base64,abc")),
+            ],
+            thinking="disabled",
+            decoding=DecodingParams(
+                temperature=0.0,
+                top_k=1,
+                top_p=1.0,
+                max_tokens=4096,
+            ),
+        )
+        def emit(event) -> bool:
+            events.append(event)
+            return True
+
+        with mock.patch.object(engine, "_open_stream", side_effect=open_stream):
+            result = engine.stream(request, emit, CancellationToken())
+
+        payload = captured["payload"]
+        self.assertTrue(payload["stream"])
+        self.assertEqual(
+            payload["stream_options"],
+            {"include_usage": True, "continuous_usage_stats": True},
+        )
+        self.assertEqual(payload["temperature"], 0.0)
+        self.assertEqual(payload["top_k"], 1)
+        self.assertEqual(payload["top_p"], 1.0)
+        self.assertEqual(payload["max_tokens"], 4096)
+        self.assertEqual(payload["chat_template_kwargs"], {"enable_thinking": False})
+        self.assertEqual(payload["messages"][1]["content"][1]["type"], "image_url")
+        self.assertEqual(
+            [(event.type, event.delta) for event in events],
+            [
+                ("reasoning_text.delta", "Check."),
+                ("output_text.delta", "Hel"),
+                ("output_text.delta", "lo"),
+            ],
+        )
+        self.assertEqual(result.text, "Hello")
+        self.assertEqual(result.reasoning_text, "Check.")
+        self.assertEqual(result.metrics.engine_prompt_tokens, 10)
+        self.assertEqual(result.metrics.engine_output_tokens, 3)
+        self.assertEqual(result.metrics.engine_finish_reason, "stop")
+        self.assertEqual(
+            result.metadata["upstream_response"]["choices"][0]["finish_reason"],
+            "stop",
+        )
+        self.assertTrue(upstream.closed)
+
+    def test_cancelling_stream_closes_upstream_and_returns_partial_metrics(self) -> None:
+        engine = vllm_serve_module.VllmServeEngine.__new__(
+            vllm_serve_module.VllmServeEngine
+        )
+        engine.decoding_defaults = DecodingDefaults()
+        engine._models = {
+            "gemma4": mock.Mock(
+                remote_model="gemma4",
+                config=ModelSettings(model_path=None, backend="vllm_serve"),
+            )
+        }
+        upstream = BlockingStreamingResponse(
+            {
+                "id": "chat-1",
+                "choices": [{"index": 0, "delta": {"content": "partial"}}],
+                "usage": {"prompt_tokens": 8, "completion_tokens": 2},
+            }
+        )
+        cancellation = CancellationToken()
+        result_holder: dict[str, object] = {}
+
+        def run_stream() -> None:
+            with mock.patch.object(engine, "_open_stream", return_value=upstream):
+                result_holder["result"] = engine.stream(
+                    ResponseRequest(model="gemma4", input="Hello", stream=True),
+                    lambda event: True,
+                    cancellation,
+                )
+
+        worker = threading.Thread(target=run_stream)
+        worker.start()
+        self.assertTrue(upstream.first_sent.wait(timeout=1.0))
+
+        cancellation.cancel()
+        worker.join(timeout=1.0)
+
+        self.assertFalse(worker.is_alive())
+        self.assertTrue(upstream.closed.is_set())
+        result = result_holder["result"]
+        self.assertEqual(result.text, "partial")
+        self.assertEqual(result.metrics.engine_prompt_tokens, 8)
+        self.assertEqual(result.metrics.engine_output_tokens, 2)
+        self.assertEqual(result.metrics.engine_finish_reason, "cancelled")
+
     def test_rejects_max_num_seqs_in_extra_args(self) -> None:
         for extra_args in (
             ("--max-num-seqs", "8"),

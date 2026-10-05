@@ -6,6 +6,7 @@ import os
 import socket
 import subprocess
 import time
+from typing import Callable
 from urllib.error import HTTPError
 from urllib.error import URLError
 from urllib.request import Request
@@ -30,6 +31,8 @@ from .common import _chat_completion_metadata
 from .common import _exception_message
 from .common import _request_explicitly_enables_thinking
 from .common import _resolve_request_enable_thinking
+from .scheduler import CancellationToken
+from .scheduler import EngineStreamEvent
 
 
 _DEFAULT_SYSTEM_PROMPT = "You are a helpful assistant. Return only the response."
@@ -117,6 +120,172 @@ class VllmServeEngine:
             text=text,
             reasoning_text=reasoning_text,
             metadata={"upstream_response": _chat_completion_metadata(response_payload)},
+            metrics=ResponseMetrics(
+                backend_inference_wall_ms=wall_s * 1000.0,
+                engine_prompt_tokens=prompt_tokens,
+                engine_output_tokens=output_tokens,
+                engine_finish_reason=finish_reason,
+                engine_tokens_per_second=tokens_per_second,
+            ),
+        )
+
+    def stream(
+        self,
+        request: ResponseRequest,
+        emit: Callable[[EngineStreamEvent], bool],
+        cancellation: CancellationToken,
+    ) -> EngineResult:
+        runtime = self._models.get(request.model)
+        if runtime is None:
+            raise ValueError(f"unknown model: {request.model!r}")
+
+        decoding = self._resolve_decoding(request.decoding)
+        self._log_unsupported_decoding(request)
+        payload = self._chat_completions_payload(
+            runtime=runtime,
+            request=request,
+            decoding=decoding,
+        )
+        payload["stream"] = True
+        payload["stream_options"] = {
+            "include_usage": True,
+            "continuous_usage_stats": True,
+        }
+
+        started = time.perf_counter()
+        text_parts: list[str] = []
+        reasoning_parts: list[str] = []
+        metadata: dict[str, object] = {}
+        prompt_tokens: int | None = None
+        output_tokens: int | None = None
+        finish_reason: str | None = None
+        saw_done = False
+
+        try:
+            response = self._open_stream(runtime, payload)
+        except BackendExecutionError:
+            if not cancellation.cancelled:
+                raise
+            wall_s = max(0.0, time.perf_counter() - started)
+            return EngineResult(
+                text="",
+                metadata={"upstream_response": {}},
+                metrics=ResponseMetrics(
+                    backend_inference_wall_ms=wall_s * 1000.0,
+                    engine_finish_reason="cancelled",
+                ),
+            )
+        cancel_response = lambda: self._abort_stream_response(response)
+        cancellation.set_callback(cancel_response)
+        try:
+            for data in self._iter_sse_data(response):
+                if cancellation.cancelled:
+                    break
+                if data == "[DONE]":
+                    saw_done = True
+                    break
+                try:
+                    chunk = json.loads(data)
+                except json.JSONDecodeError as exc:
+                    raise BackendExecutionError(
+                        code="vllm_serve_response_parse_failure",
+                        status_code=502,
+                        message="vllm serve streaming chat completion returned invalid JSON",
+                    ) from exc
+                if not isinstance(chunk, dict):
+                    raise BackendExecutionError(
+                        code="vllm_serve_response_parse_failure",
+                        status_code=502,
+                        message="vllm serve streaming chat completion returned a non-object JSON response",
+                    )
+
+                self._merge_stream_metadata(metadata, chunk)
+                chunk_prompt_tokens, chunk_output_tokens = self._extract_usage(chunk)
+                if chunk_prompt_tokens is not None:
+                    prompt_tokens = chunk_prompt_tokens
+                if chunk_output_tokens is not None:
+                    output_tokens = chunk_output_tokens
+
+                choices = chunk.get("choices")
+                if not isinstance(choices, list) or not choices:
+                    continue
+                choice = choices[0]
+                if not isinstance(choice, dict):
+                    raise BackendExecutionError(
+                        code="vllm_serve_response_parse_failure",
+                        status_code=502,
+                        message="vllm serve streaming chat completion choice was not an object",
+                    )
+                candidate_finish_reason = choice.get("finish_reason")
+                if isinstance(candidate_finish_reason, str):
+                    finish_reason = candidate_finish_reason
+                delta = choice.get("delta")
+                if not isinstance(delta, dict):
+                    continue
+                reasoning = delta.get("reasoning")
+                if isinstance(reasoning, str) and reasoning:
+                    reasoning_parts.append(reasoning)
+                    if not emit(EngineStreamEvent("reasoning_text.delta", reasoning)):
+                        cancellation.cancel()
+                        break
+                content = delta.get("content")
+                if isinstance(content, str) and content:
+                    text_parts.append(content)
+                    if not emit(EngineStreamEvent("output_text.delta", content)):
+                        cancellation.cancel()
+                        break
+        except Exception as exc:
+            if not cancellation.cancelled:
+                if isinstance(exc, BackendExecutionError):
+                    raise
+                if isinstance(exc, (TimeoutError, socket.timeout)):
+                    raise BackendExecutionError(
+                        code="vllm_serve_timeout",
+                        status_code=504,
+                        message="vllm serve streaming chat completion timed out",
+                    ) from exc
+                raise BackendExecutionError(
+                    code="vllm_serve_connection_error",
+                    status_code=502,
+                    message="vllm serve streaming chat completion connection failed",
+                ) from exc
+        finally:
+            cancellation.clear_callback(cancel_response)
+            try:
+                response.close()
+            except Exception:
+                pass
+
+        if cancellation.cancelled:
+            finish_reason = "cancelled"
+        elif not saw_done or finish_reason is None:
+            raise BackendExecutionError(
+                code="vllm_serve_response_parse_failure",
+                status_code=502,
+                message="vllm serve streaming chat completion ended before its final event",
+            )
+
+        wall_s = max(0.0, time.perf_counter() - started)
+        tokens_per_second = None
+        if output_tokens is not None and wall_s > 0.0:
+            tokens_per_second = output_tokens / wall_s
+        text = "".join(text_parts).strip()
+        reasoning_text = "".join(reasoning_parts) or None
+        if (
+            not text_parts
+            and reasoning_text
+            and finish_reason == "length"
+            and not _request_explicitly_enables_thinking(request)
+        ):
+            raise BackendExecutionError(
+                code="vllm_serve_response_parse_failure",
+                status_code=502,
+                message="vllm serve chat completion message content was not text",
+            )
+        return EngineResult(
+            text=text,
+            reasoning_text=reasoning_text,
+            metadata={"upstream_response": metadata},
             metrics=ResponseMetrics(
                 backend_inference_wall_ms=wall_s * 1000.0,
                 engine_prompt_tokens=prompt_tokens,
@@ -437,9 +606,95 @@ class VllmServeEngine:
             )
         return parsed
 
-    def _headers(self, runtime: VllmServeModelRuntime) -> dict[str, str]:
+    def _open_stream(
+        self,
+        runtime: VllmServeModelRuntime,
+        payload: dict[str, object],
+    ):
+        data = json.dumps(payload, ensure_ascii=True).encode("utf-8")
+        request = Request(
+            f"{runtime.base_url}/chat/completions",
+            data=data,
+            headers=self._headers(runtime, accept="text/event-stream"),
+            method="POST",
+        )
+        try:
+            return urlopen(request, timeout=runtime.timeout_s)
+        except HTTPError as exc:
+            raise self._map_http_error(exc) from exc
+        except (TimeoutError, socket.timeout) as exc:
+            raise BackendExecutionError(
+                code="vllm_serve_timeout",
+                status_code=504,
+                message="vllm serve streaming chat completion timed out",
+            ) from exc
+        except URLError as exc:
+            if isinstance(exc.reason, (TimeoutError, socket.timeout)):
+                raise BackendExecutionError(
+                    code="vllm_serve_timeout",
+                    status_code=504,
+                    message="vllm serve streaming chat completion timed out",
+                ) from exc
+            raise BackendExecutionError(
+                code="vllm_serve_connection_error",
+                status_code=502,
+                message="vllm serve streaming chat completion connection failed",
+            ) from exc
+
+    @staticmethod
+    def _iter_sse_data(response):
+        data_lines: list[str] = []
+        for raw_line in response:
+            try:
+                line = raw_line.decode("utf-8").rstrip("\r\n")
+            except UnicodeDecodeError as exc:
+                raise BackendExecutionError(
+                    code="vllm_serve_response_parse_failure",
+                    status_code=502,
+                    message="vllm serve streaming chat completion returned invalid UTF-8",
+                ) from exc
+            if line == "":
+                if data_lines:
+                    yield "\n".join(data_lines)
+                    data_lines.clear()
+                continue
+            if line.startswith("data:"):
+                data_lines.append(line[5:].lstrip())
+        if data_lines:
+            yield "\n".join(data_lines)
+
+    @staticmethod
+    def _abort_stream_response(response) -> None:
+        # HTTPResponse.close() can wait behind a blocked reader; shutdown wakes it first.
+        fp = getattr(response, "fp", None)
+        raw = getattr(fp, "raw", None)
+        upstream_socket = getattr(raw, "_sock", None)
+        if upstream_socket is not None:
+            try:
+                upstream_socket.shutdown(socket.SHUT_RDWR)
+            except OSError:
+                pass
+        response.close()
+
+    @staticmethod
+    def _merge_stream_metadata(
+        metadata: dict[str, object],
+        chunk: dict[str, object],
+    ) -> None:
+        chunk_metadata = _chat_completion_metadata(chunk)
+        choices = chunk_metadata.pop("choices", None)
+        metadata.update(chunk_metadata)
+        if isinstance(choices, list) and choices:
+            metadata["choices"] = choices
+
+    def _headers(
+        self,
+        runtime: VllmServeModelRuntime,
+        *,
+        accept: str = "application/json",
+    ) -> dict[str, str]:
         headers = {
-            "Accept": "application/json",
+            "Accept": accept,
             "Content-Type": "application/json",
         }
         if runtime.api_key is not None:

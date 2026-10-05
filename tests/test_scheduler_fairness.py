@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from concurrent.futures import CancelledError
 from concurrent.futures import Future
 import threading
 import time
@@ -8,9 +9,11 @@ import unittest
 from app.config import FairnessSettings
 from app.engine.common import RequestAdmissionError
 from app.engine.scheduler import _FairPendingQueue
+from app.engine.scheduler import EngineStreamEvent
 from app.engine.scheduler import LoadedModelExecutor
 from app.engine.scheduler import ReplicaRegistration
 from app.schemas import EngineResult
+from app.schemas import ResponseMetrics
 from app.schemas import ResponseRequest
 
 
@@ -230,6 +233,79 @@ class FairPendingQueueTests(unittest.TestCase):
 
 
 class LoadedModelExecutorFairnessTests(unittest.TestCase):
+    def test_stream_cancellation_removes_queued_work_and_releases_running_slot(self) -> None:
+        first_entered = threading.Event()
+        next_entered = threading.Event()
+
+        def stream(request, emit, cancellation) -> EngineResult:
+            if request.input == "next":
+                next_entered.set()
+                emit(EngineStreamEvent("output_text.delta", "next"))
+                return EngineResult(
+                    text="next",
+                    metrics=ResponseMetrics(engine_finish_reason="stop"),
+                )
+            first_entered.set()
+            emit(EngineStreamEvent("output_text.delta", "partial"))
+            while not cancellation.cancelled:
+                time.sleep(0.001)
+            return EngineResult(
+                text="partial",
+                metrics=ResponseMetrics(engine_finish_reason="cancelled"),
+            )
+
+        executor = LoadedModelExecutor(
+            model_name="test-model",
+            replicas=[
+                ReplicaRegistration(
+                    replica_id="test-model#1",
+                    complete_fn=lambda request: EngineResult(text=str(request.input)),
+                    stream_fn=stream,
+                    runtime_capability=1,
+                )
+            ],
+            configured_target_inflight=1,
+            fairness_settings=FairnessSettings(),
+        )
+        executor.start()
+        try:
+            running = executor.enqueue_stream(
+                ResponseRequest(model="test-model", input="first", fairness_key="image")
+            )
+            self.assertTrue(first_entered.wait(timeout=1.0))
+            queued = executor.enqueue_stream(
+                ResponseRequest(model="test-model", input="queued", fairness_key="pdf")
+            )
+            self.assertEqual(executor.snapshot().queue_depth, 1)
+            queued_score = executor._pending_queue.score("pdf", now=time.perf_counter())
+
+            queued.cancel()
+
+            self.assertEqual(executor.snapshot().queue_depth, 0)
+            with self.assertRaises(CancelledError):
+                queued.result()
+            self.assertEqual(
+                executor._pending_queue.score("pdf", now=time.perf_counter()),
+                queued_score,
+            )
+
+            following = executor.enqueue_stream(
+                ResponseRequest(model="test-model", input="next", fairness_key="text")
+            )
+            running.cancel()
+
+            self.assertTrue(next_entered.wait(timeout=1.0))
+            self.assertEqual(running.result().metrics.engine_finish_reason, "cancelled")
+            self.assertEqual(following.result().text, "next")
+            self.assertEqual(executor.snapshot().runtime_inflight, 0)
+            self.assertGreater(
+                executor._pending_queue.score("image", now=time.perf_counter()),
+                0.0,
+            )
+        finally:
+            executor.begin_shutdown()
+            executor.join(timeout=1.0)
+
     def test_backend_failure_is_charged_and_releases_the_slot(self) -> None:
         def fail(request: ResponseRequest) -> EngineResult:
             del request

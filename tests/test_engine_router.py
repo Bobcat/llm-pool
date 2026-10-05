@@ -20,6 +20,7 @@ if HAS_PYDANTIC:
     import app.engine as engine_module
     import app.engine.router as router_module
     from app.engine.common import _model_definition_payload
+    from app.engine.scheduler import EngineStreamEvent
     from app.engine import ModelRouterEngine
     from app.engine import build_engine
     from app.schemas import AdminLoadRequest
@@ -27,6 +28,7 @@ if HAS_PYDANTIC:
     from app.schemas import FileContent
     from app.schemas import FileSpec
     from app.schemas import ResponseRequest
+    from app.schemas import ResponseMetrics
 
 
 @unittest.skipUnless(HAS_PYDANTIC, "pydantic not installed")
@@ -371,6 +373,72 @@ class ModelRouterEngineTests(unittest.TestCase):
         )
         self.assertEqual(entry["runtime_state"], "unloaded")
         self.assertTrue(runtime.closed)
+
+    def test_vllm_serve_stream_uses_scheduler_and_preserves_deltas(self) -> None:
+        settings = AppSettings(
+            service=ServiceSettings(),
+            engine=EngineSettings(
+                backend="ct2",
+                models={
+                    "vllm-model": ModelSettings(
+                        model_path=None,
+                        backend="vllm_serve",
+                        vllm_model="/models/gemma4",
+                        target_inflight=2,
+                    ),
+                },
+            ),
+        )
+        runtime = types.SimpleNamespace(close=lambda: None)
+
+        class FakeVllmServeEngine:
+            def __init__(self, scoped_settings):
+                self._models = {name: runtime for name in scoped_settings.engine.models}
+                self._load_errors = {}
+
+            def complete(self, request: ResponseRequest) -> EngineResult:
+                raise AssertionError(f"stream request used complete(): {request.model}")
+
+            def stream(self, request, emit, cancellation) -> EngineResult:
+                del cancellation
+                emit(EngineStreamEvent("output_text.delta", "Hel"))
+                emit(EngineStreamEvent("output_text.delta", "lo"))
+                return EngineResult(
+                    text="Hello",
+                    metrics=ResponseMetrics(
+                        engine_output_tokens=2,
+                        engine_finish_reason="stop",
+                    ),
+                )
+
+        with mock.patch.object(engine_module, "VllmServeEngine", FakeVllmServeEngine):
+            engine = ModelRouterEngine(settings)
+            stream = engine.stream(
+                ResponseRequest(model="vllm-model", input="hello", stream=True)
+            )
+            self.assertIsNotNone(stream)
+            events = []
+            deadline = time.monotonic() + 1.0
+            while not stream.done and time.monotonic() < deadline:
+                event = stream.poll()
+                if event is not None:
+                    events.append(event)
+                else:
+                    time.sleep(0.001)
+            while (event := stream.poll()) is not None:
+                events.append(event)
+            result = stream.result()
+            model = engine.admin_models_payload()["models"][0]
+            engine.close()
+
+        self.assertEqual([event.delta for event in events], ["Hel", "lo"])
+        self.assertEqual(result.text, "Hello")
+        self.assertEqual(result.metrics.engine_finish_reason, "stop")
+        self.assertIsNotNone(result.metrics.engine_queue_wait_ms)
+        self.assertIsNotNone(result.metrics.backend_inference_wall_ms)
+        self.assertIsNotNone(result.metrics.engine_total_wall_ms)
+        self.assertEqual(model["runtime_inflight"], 0)
+        self.assertEqual(model["inflight_requests"], 0)
 
     def test_rejects_unsupported_reasoning_controls(self) -> None:
         engine = ModelRouterEngine.__new__(ModelRouterEngine)

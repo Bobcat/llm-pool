@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import importlib
 import importlib.util
 import json
@@ -225,6 +226,92 @@ class ApiTests(unittest.TestCase):
         completed = events[-1].split("data: ", 1)[1]
         completed_payload = json.loads(completed)
         self.assertEqual(completed_payload["output_text"], "Hello world")
+
+    def test_native_streaming_serializes_live_deltas_and_finish_reason(self) -> None:
+        main = importlib.import_module("app.main")
+        from app.engine.scheduler import EngineStreamEvent
+        from app.schemas import EngineResult
+
+        class FakeStream:
+            def __init__(self) -> None:
+                self.events = [
+                    EngineStreamEvent("reasoning_text.delta", "Check."),
+                    EngineStreamEvent("output_text.delta", "Hello"),
+                ]
+                self.cancelled = False
+
+            def poll(self):
+                return self.events.pop(0) if self.events else None
+
+            @property
+            def done(self) -> bool:
+                return not self.events
+
+            def result(self):
+                return EngineResult(
+                    text="Hello",
+                    reasoning_text="Check.",
+                    metrics=main.ResponseMetrics(
+                        engine_output_tokens=1,
+                        engine_finish_reason="stop",
+                    ),
+                )
+
+            def cancel(self) -> None:
+                self.cancelled = True
+
+        stream = FakeStream()
+
+        async def collect() -> list[str]:
+            return [
+                event
+                async for event in main._native_stream_response(
+                    "resp_test",
+                    main.ResponseRequest(model="test-model", input="Hello", stream=True),
+                    stream,
+                )
+            ]
+
+        body = "".join(asyncio.run(collect()))
+
+        self.assertIn("event: response.reasoning_text.delta", body)
+        self.assertIn("event: response.output_text.delta", body)
+        self.assertIn('"engine_output_tokens": 1', body)
+        self.assertIn('"finish_reason": "stop"', body)
+        self.assertIn("event: response.completed", body)
+        self.assertFalse(stream.cancelled)
+
+    def test_closing_native_response_cancels_stream(self) -> None:
+        main = importlib.import_module("app.main")
+
+        class WaitingStream:
+            done = False
+
+            def __init__(self) -> None:
+                self.cancelled = False
+
+            def poll(self):
+                return None
+
+            def cancel(self) -> None:
+                self.cancelled = True
+
+        stream = WaitingStream()
+
+        async def open_and_close() -> str:
+            response = main._native_stream_response(
+                "resp_test",
+                main.ResponseRequest(model="test-model", input="Hello", stream=True),
+                stream,
+            )
+            created = await anext(response)
+            await response.aclose()
+            return created
+
+        created = asyncio.run(open_and_close())
+
+        self.assertIn("event: response.created", created)
+        self.assertTrue(stream.cancelled)
 
     def test_models_endpoint_returns_enabled_models(self) -> None:
         client = self._create_client()
