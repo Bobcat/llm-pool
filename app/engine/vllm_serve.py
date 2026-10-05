@@ -665,10 +665,7 @@ class VllmServeEngine:
             connection.connect()
             connection.auto_open = 0
             upstream_socket = connection.sock
-            cancel_connection = lambda: self._abort_stream_connection(
-                connection,
-                upstream_socket,
-            )
+            cancel_connection = lambda: self._abort_stream_socket(upstream_socket)
             cancellation.set_callback(cancel_connection)
             if cancellation.cancelled:
                 raise OSError("stream cancelled")
@@ -732,10 +729,7 @@ class VllmServeEngine:
             yield "\n".join(data_lines)
 
     @staticmethod
-    def _abort_stream_connection(
-        connection: HTTPConnection,
-        upstream_socket: socket.socket | None,
-    ) -> None:
+    def _abort_stream_socket(upstream_socket: socket.socket | None) -> None:
         if upstream_socket is None:
             LOGGER.warning("Cannot abort vllm serve stream: connection has no active socket.")
         else:
@@ -743,7 +737,6 @@ class VllmServeEngine:
                 upstream_socket.shutdown(socket.SHUT_RDWR)
             except OSError:
                 LOGGER.warning("Failed to shut down the vllm serve stream socket.", exc_info=True)
-        connection.close()
 
     @staticmethod
     def _merge_stream_metadata(

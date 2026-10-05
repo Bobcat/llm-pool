@@ -5,6 +5,7 @@ from http.server import BaseHTTPRequestHandler
 from http.server import ThreadingHTTPServer
 import json
 import socket
+import sys
 import threading
 import time
 import unittest
@@ -145,32 +146,21 @@ class VllmServeEngineTests(unittest.TestCase):
 
         return open_stream
 
-    def test_stream_abort_shuts_down_socket_before_closing_connection(self) -> None:
-        connection = mock.Mock()
+    def test_stream_abort_shuts_down_socket(self) -> None:
         upstream_socket = mock.Mock(spec=socket.socket)
         operations: list[str] = []
         upstream_socket.shutdown.side_effect = lambda how: operations.append(
             f"shutdown:{how}"
         )
-        connection.close.side_effect = lambda: operations.append("close")
 
-        vllm_serve_module.VllmServeEngine._abort_stream_connection(
-            connection,
-            upstream_socket,
-        )
+        vllm_serve_module.VllmServeEngine._abort_stream_socket(upstream_socket)
 
-        self.assertEqual(operations, [f"shutdown:{socket.SHUT_RDWR}", "close"])
+        self.assertEqual(operations, [f"shutdown:{socket.SHUT_RDWR}"])
 
     def test_stream_abort_logs_when_connection_has_no_socket(self) -> None:
-        connection = mock.Mock()
-
         with self.assertLogs("llm_pool.engine", level="WARNING") as logs:
-            vllm_serve_module.VllmServeEngine._abort_stream_connection(
-                connection,
-                None,
-            )
+            vllm_serve_module.VllmServeEngine._abort_stream_socket(None)
 
-        connection.close.assert_called_once_with()
         self.assertIn("connection has no active socket", "\n".join(logs.output))
 
     def test_stream_forwards_incremental_multimodal_deltas_and_usage(self) -> None:
@@ -444,56 +434,46 @@ class VllmServeEngineTests(unittest.TestCase):
         self.assertEqual(result.metrics.engine_output_tokens, 3)
         self.assertEqual(result.metrics.engine_finish_reason, "cancelled")
 
-    def test_abort_before_request_write_does_not_reconnect(self) -> None:
+    def test_abort_during_real_http_send_returns_cancelled_without_request(self) -> None:
+        request_received = threading.Event()
+
+        class RequestHandler(BaseHTTPRequestHandler):
+            def do_POST(self) -> None:
+                request_received.set()
+
+            def log_message(self, format, *args) -> None:
+                del format, args
+
+        server = ThreadingHTTPServer(("127.0.0.1", 0), RequestHandler)
+        server.daemon_threads = True
+        server_thread = threading.Thread(target=server.serve_forever)
+        server_thread.start()
         engine = self._engine()
         runtime = engine._models["gemma4"]
-        runtime.base_url = "http://127.0.0.1:12345/v1"
+        runtime.base_url = f"http://127.0.0.1:{server.server_port}/v1"
         runtime.timeout_s = 5.0
         runtime.api_key = None
         cancellation = CancellationToken()
 
-        class RaceConnection:
-            def __init__(self) -> None:
-                self.auto_open = 1
-                self.connect_count = 0
-                self.request_delivered = False
-                self.sock = None
-
-            def connect(self) -> None:
-                self.connect_count += 1
-                self.sock = mock.Mock(spec=socket.socket)
-
-            def close(self) -> None:
-                self.sock = None
-
-            def request(self, *args, **kwargs) -> None:
-                del args, kwargs
+        def cancel_at_send(event, *args) -> None:
+            del args
+            if event == "http.client.send" and not cancellation.cancelled:
                 cancellation.cancel()
-                if self.sock is None:
-                    if self.auto_open:
-                        self.connect()
-                    else:
-                        raise OSError("socket is closed")
-                self.request_delivered = True
 
-            def getresponse(self):
-                raise AssertionError("cancelled request reached getresponse()")
+        try:
+            with mock.patch.object(sys, "audit", side_effect=cancel_at_send):
+                result = engine.stream(
+                    ResponseRequest(model="gemma4", input="Hello", stream=True),
+                    lambda event: True,
+                    cancellation,
+                )
 
-        connection = RaceConnection()
-        with mock.patch.object(
-            vllm_serve_module,
-            "HTTPConnection",
-            return_value=connection,
-        ):
-            result = engine.stream(
-                ResponseRequest(model="gemma4", input="Hello", stream=True),
-                lambda event: True,
-                cancellation,
-            )
-
-        self.assertEqual(connection.connect_count, 1)
-        self.assertFalse(connection.request_delivered)
-        self.assertEqual(result.metrics.engine_finish_reason, "cancelled")
+            self.assertEqual(result.metrics.engine_finish_reason, "cancelled")
+            self.assertFalse(request_received.wait(timeout=0.1))
+        finally:
+            server.shutdown()
+            server.server_close()
+            server_thread.join(timeout=1.0)
 
     def test_stream_maps_upstream_error_event(self) -> None:
         engine = self._engine()
@@ -776,6 +756,28 @@ class VllmServeEngineTests(unittest.TestCase):
             server.shutdown()
             server.server_close()
             server_thread.join(timeout=1.0)
+
+    def test_upstream_error_message_fallbacks_and_size_limit(self) -> None:
+        maximum = vllm_serve_module._MAX_UPSTREAM_ERROR_BYTES
+        valid = b'{"error":{"message":"context length exceeded"}}'
+        exact_limit = valid + (b" " * (maximum - len(valid)))
+        cases = (
+            ("empty", b"", None),
+            ("invalid JSON", b"{", None),
+            ("invalid UTF-8", b"\xff", None),
+            ("non-object", b"[]", None),
+            ("string error", b'{"error":"bad"}', None),
+            ("empty message", b'{"error":{"message":""}}', None),
+            ("exact limit", exact_limit, "context length exceeded"),
+            ("over limit", exact_limit + b" ", None),
+        )
+
+        for label, body, expected in cases:
+            with self.subTest(label=label):
+                self.assertEqual(
+                    vllm_serve_module.VllmServeEngine._upstream_error_message(body),
+                    expected,
+                )
 
     def test_rejects_max_num_seqs_in_extra_args(self) -> None:
         for extra_args in (
