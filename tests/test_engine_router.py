@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import builtins
+from concurrent.futures import CancelledError
 import importlib.util
 import sys
 import threading
@@ -439,6 +440,77 @@ class ModelRouterEngineTests(unittest.TestCase):
         self.assertIsNotNone(result.metrics.engine_total_wall_ms)
         self.assertEqual(model["runtime_inflight"], 0)
         self.assertEqual(model["inflight_requests"], 0)
+
+    def test_queued_stream_cancellation_releases_router_inflight_count(self) -> None:
+        settings = AppSettings(
+            service=ServiceSettings(),
+            engine=EngineSettings(
+                models={
+                    "vllm-model": ModelSettings(
+                        model_path=None,
+                        backend="vllm_serve",
+                        vllm_model="/models/gemma4",
+                        target_inflight=1,
+                    ),
+                },
+            ),
+        )
+        running_started = threading.Event()
+        runtime = types.SimpleNamespace(close=lambda: None)
+
+        class FakeVllmServeEngine:
+            def __init__(self, scoped_settings):
+                self._models = {name: runtime for name in scoped_settings.engine.models}
+                self._load_errors = {}
+
+            def complete(self, request: ResponseRequest) -> EngineResult:
+                raise AssertionError(f"stream request used complete(): {request.model}")
+
+            def stream(self, request, emit, cancellation) -> EngineResult:
+                if request.input != "running":
+                    raise AssertionError("cancelled queued stream reached the backend")
+                running_started.set()
+                emit(EngineStreamEvent("output_text.delta", "partial"))
+                while not cancellation.cancelled:
+                    time.sleep(0.001)
+                return EngineResult(
+                    text="partial",
+                    metrics=ResponseMetrics(engine_finish_reason="cancelled"),
+                )
+
+        with mock.patch.object(engine_module, "VllmServeEngine", FakeVllmServeEngine):
+            engine = ModelRouterEngine(settings)
+        try:
+            running = engine.stream(
+                ResponseRequest(model="vllm-model", input="running", stream=True)
+            )
+            self.assertTrue(running_started.wait(timeout=1.0))
+            queued = engine.stream(
+                ResponseRequest(model="vllm-model", input="queued", stream=True)
+            )
+            model = engine.admin_models_payload()["models"][0]
+            self.assertEqual(model["inflight_requests"], 2)
+            self.assertEqual(model["queue_depth"], 1)
+
+            queued.cancel()
+
+            with self.assertRaises(CancelledError):
+                queued.result()
+            model = engine.admin_models_payload()["models"][0]
+            self.assertEqual(model["inflight_requests"], 1)
+            self.assertEqual(model["queue_depth"], 0)
+
+            running.cancel()
+            self.assertEqual(
+                running.result().metrics.engine_finish_reason,
+                "cancelled",
+            )
+            self.assertEqual(
+                engine.admin_models_payload()["models"][0]["inflight_requests"],
+                0,
+            )
+        finally:
+            engine.close()
 
     def test_rejects_unsupported_reasoning_controls(self) -> None:
         engine = ModelRouterEngine.__new__(ModelRouterEngine)

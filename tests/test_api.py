@@ -15,6 +15,7 @@ HAS_FASTAPI = importlib.util.find_spec("fastapi") is not None
 
 if HAS_FASTAPI:
     from fastapi.testclient import TestClient
+    from starlette.requests import ClientDisconnect
 
 
 @unittest.skipUnless(HAS_FASTAPI, "fastapi not installed")
@@ -311,6 +312,160 @@ class ApiTests(unittest.TestCase):
         created = asyncio.run(open_and_close())
 
         self.assertIn("event: response.created", created)
+        self.assertTrue(stream.cancelled)
+
+    def test_native_stream_serializes_post_admission_failures(self) -> None:
+        main = importlib.import_module("app.main")
+
+        class FailedStream:
+            done = True
+
+            def __init__(self, error) -> None:
+                self.error = error
+                self.cancelled = False
+
+            def poll(self):
+                return None
+
+            def result(self):
+                raise self.error
+
+            def cancel(self) -> None:
+                self.cancelled = True
+
+        cases = (
+            (
+                main.BackendExecutionError(
+                    code="vllm_serve_invalid_request",
+                    status_code=502,
+                    message="context length exceeded",
+                ),
+                "vllm_serve_invalid_request",
+                "context length exceeded",
+            ),
+            (
+                main.ModelStateError("test-model", "model_unloading"),
+                "model_unloading",
+                "model 'test-model' is unavailable: model_unloading",
+            ),
+        )
+        for error, code, message in cases:
+            with self.subTest(code=code):
+                stream = FailedStream(error)
+
+                async def collect() -> str:
+                    return "".join(
+                        [
+                            event
+                            async for event in main._native_stream_response(
+                                "resp_test",
+                                main.ResponseRequest(
+                                    model="test-model",
+                                    input="Hello",
+                                    stream=True,
+                                ),
+                                stream,
+                            )
+                        ]
+                    )
+
+                body = asyncio.run(collect())
+
+                self.assertIn("event: response.created", body)
+                self.assertIn("event: response.failed", body)
+                self.assertIn(f'"code": "{code}"', body)
+                self.assertIn(f'"message": "{message}"', body)
+                self.assertNotIn("event: response.completed", body)
+                self.assertTrue(stream.cancelled)
+
+    def test_asgi_send_failure_cancels_stream_before_generator_starts(self) -> None:
+        main = importlib.import_module("app.main")
+
+        class WaitingStream:
+            def __init__(self) -> None:
+                self.cancelled = False
+
+            def cancel(self) -> None:
+                self.cancelled = True
+
+        stream = WaitingStream()
+        generator_started = False
+
+        async def never_started():
+            nonlocal generator_started
+            generator_started = True
+            yield "unreachable"
+
+        async def run_response() -> None:
+            response = main._CancellableStreamingResponse(
+                never_started(),
+                media_type="text/event-stream",
+                cancel=stream.cancel,
+            )
+
+            async def receive():
+                return {"type": "http.disconnect"}
+
+            async def send(message) -> None:
+                del message
+                raise OSError("client disconnected")
+
+            with self.assertRaises(ClientDisconnect):
+                await response(
+                    {"type": "http", "asgi": {"spec_version": "2.4"}},
+                    receive,
+                    send,
+                )
+
+        asyncio.run(run_response())
+
+        self.assertFalse(generator_started)
+        self.assertTrue(stream.cancelled)
+
+    def test_native_stream_polls_for_client_disconnect(self) -> None:
+        main = importlib.import_module("app.main")
+
+        class WaitingStream:
+            done = False
+
+            def __init__(self) -> None:
+                self.cancelled = False
+
+            def poll(self):
+                return None
+
+            def cancel(self) -> None:
+                self.cancelled = True
+
+        class DisconnectedRequest:
+            scope = {"asgi": {"spec_version": "2.4"}}
+
+            async def is_disconnected(self) -> bool:
+                return True
+
+        stream = WaitingStream()
+
+        async def collect() -> str:
+            return "".join(
+                [
+                    event
+                    async for event in main._native_stream_response(
+                        "resp_test",
+                        main.ResponseRequest(
+                            model="test-model",
+                            input="Hello",
+                            stream=True,
+                        ),
+                        stream,
+                        DisconnectedRequest(),
+                    )
+                ]
+            )
+
+        body = asyncio.run(collect())
+
+        self.assertIn("event: response.created", body)
+        self.assertNotIn("event: response.completed", body)
         self.assertTrue(stream.cancelled)
 
     def test_models_endpoint_returns_enabled_models(self) -> None:

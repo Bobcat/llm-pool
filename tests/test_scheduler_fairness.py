@@ -9,6 +9,7 @@ import unittest
 from app.config import FairnessSettings
 from app.engine.common import RequestAdmissionError
 from app.engine.scheduler import _FairPendingQueue
+from app.engine.scheduler import CancellationToken
 from app.engine.scheduler import EngineStreamEvent
 from app.engine.scheduler import LoadedModelExecutor
 from app.engine.scheduler import ReplicaRegistration
@@ -233,6 +234,60 @@ class FairPendingQueueTests(unittest.TestCase):
 
 
 class LoadedModelExecutorFairnessTests(unittest.TestCase):
+    def test_cancellation_callback_failure_is_logged(self) -> None:
+        cancellation = CancellationToken()
+
+        def fail() -> None:
+            raise RuntimeError("abort failed")
+
+        cancellation.set_callback(fail)
+
+        with self.assertLogs("llm_pool.engine", level="WARNING") as logs:
+            cancellation.cancel()
+
+        self.assertIn("Cancellation callback failed", "\n".join(logs.output))
+
+    def test_unread_stream_does_not_hold_the_runtime_slot(self) -> None:
+        backend_finished = threading.Event()
+
+        def stream(request, emit, cancellation) -> EngineResult:
+            del request, cancellation
+            for index in range(1024):
+                self.assertTrue(
+                    emit(EngineStreamEvent("output_text.delta", str(index)))
+                )
+            backend_finished.set()
+            return EngineResult(
+                text="done",
+                metrics=ResponseMetrics(engine_finish_reason="stop"),
+            )
+
+        executor = LoadedModelExecutor(
+            model_name="test-model",
+            replicas=[
+                ReplicaRegistration(
+                    replica_id="test-model#1",
+                    complete_fn=lambda request: EngineResult(text=str(request.input)),
+                    stream_fn=stream,
+                    runtime_capability=1,
+                )
+            ],
+            configured_target_inflight=1,
+            fairness_settings=FairnessSettings(),
+        )
+        executor.start()
+        try:
+            unread = executor.enqueue_stream(
+                ResponseRequest(model="test-model", input="first")
+            )
+
+            self.assertTrue(backend_finished.wait(timeout=1.0))
+            self.assertEqual(unread.result().text, "done")
+            self.assertEqual(executor.snapshot().runtime_inflight, 0)
+        finally:
+            executor.begin_shutdown()
+            executor.join(timeout=1.0)
+
     def test_stream_cancellation_removes_queued_work_and_releases_running_slot(self) -> None:
         first_entered = threading.Event()
         next_entered = threading.Event()

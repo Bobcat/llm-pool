@@ -1,6 +1,9 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from http.client import HTTPConnection
+from http.client import HTTPException
+from http.client import HTTPResponse
 import json
 import os
 import socket
@@ -9,6 +12,7 @@ import time
 from typing import Callable
 from urllib.error import HTTPError
 from urllib.error import URLError
+from urllib.parse import urlsplit
 from urllib.request import Request
 from urllib.request import urlopen
 
@@ -160,9 +164,15 @@ class VllmServeEngine:
         output_tokens: int | None = None
         finish_reason: str | None = None
         saw_done = False
+        text_started = False
+        pending_text_whitespace = ""
 
         try:
-            response = self._open_stream(runtime, payload)
+            response, connection, cancel_response = self._open_stream(
+                runtime,
+                payload,
+                cancellation,
+            )
         except BackendExecutionError:
             if not cancellation.cancelled:
                 raise
@@ -175,8 +185,6 @@ class VllmServeEngine:
                     engine_finish_reason="cancelled",
                 ),
             )
-        cancel_response = lambda: self._abort_stream_response(response)
-        cancellation.set_callback(cancel_response)
         try:
             for data in self._iter_sse_data(response):
                 if cancellation.cancelled:
@@ -197,6 +205,19 @@ class VllmServeEngine:
                         code="vllm_serve_response_parse_failure",
                         status_code=502,
                         message="vllm serve streaming chat completion returned a non-object JSON response",
+                    )
+                upstream_error = chunk.get("error")
+                if isinstance(upstream_error, dict):
+                    upstream_message = upstream_error.get("message")
+                    message = (
+                        upstream_message
+                        if isinstance(upstream_message, str) and upstream_message
+                        else "vllm serve streaming chat completion failed"
+                    )
+                    raise BackendExecutionError(
+                        code="vllm_serve_error",
+                        status_code=502,
+                        message=message,
                     )
 
                 self._merge_stream_metadata(metadata, chunk)
@@ -231,7 +252,21 @@ class VllmServeEngine:
                 content = delta.get("content")
                 if isinstance(content, str) and content:
                     text_parts.append(content)
-                    if not emit(EngineStreamEvent("output_text.delta", content)):
+                    output_delta = content
+                    if not text_started:
+                        output_delta = output_delta.lstrip()
+                        if output_delta:
+                            text_started = True
+                    if not text_started:
+                        continue
+                    stripped_delta = output_delta.rstrip()
+                    trailing_whitespace = output_delta[len(stripped_delta) :]
+                    if not stripped_delta:
+                        pending_text_whitespace += output_delta
+                        continue
+                    output_delta = pending_text_whitespace + stripped_delta
+                    pending_text_whitespace = trailing_whitespace
+                    if not emit(EngineStreamEvent("output_text.delta", output_delta)):
                         cancellation.cancel()
                         break
         except Exception as exc:
@@ -254,7 +289,8 @@ class VllmServeEngine:
             try:
                 response.close()
             except Exception:
-                pass
+                LOGGER.warning("Failed to close the vllm serve streaming response.", exc_info=True)
+            connection.close()
 
         if cancellation.cancelled:
             finish_reason = "cancelled"
@@ -274,8 +310,10 @@ class VllmServeEngine:
         if (
             not text_parts
             and reasoning_text
-            and finish_reason == "length"
-            and not _request_explicitly_enables_thinking(request)
+            and not (
+                _request_explicitly_enables_thinking(request)
+                and finish_reason == "length"
+            )
         ):
             raise BackendExecutionError(
                 code="vllm_serve_response_parse_failure",
@@ -610,36 +648,60 @@ class VllmServeEngine:
         self,
         runtime: VllmServeModelRuntime,
         payload: dict[str, object],
-    ):
+        cancellation: CancellationToken,
+    ) -> tuple[HTTPResponse, HTTPConnection, Callable[[], None]]:
         data = json.dumps(payload, ensure_ascii=True).encode("utf-8")
-        request = Request(
-            f"{runtime.base_url}/chat/completions",
-            data=data,
-            headers=self._headers(runtime, accept="text/event-stream"),
-            method="POST",
+        parsed_url = urlsplit(runtime.base_url)
+        connection = HTTPConnection(
+            parsed_url.hostname,
+            parsed_url.port,
+            timeout=runtime.timeout_s,
         )
+        cancel_connection: Callable[[], None] | None = None
+        opened = False
         try:
-            return urlopen(request, timeout=runtime.timeout_s)
-        except HTTPError as exc:
-            raise self._map_http_error(exc) from exc
+            connection.connect()
+            upstream_socket = connection.sock
+            cancel_connection = lambda: self._abort_stream_connection(
+                connection,
+                upstream_socket,
+            )
+            cancellation.set_callback(cancel_connection)
+            if cancellation.cancelled:
+                raise OSError("stream cancelled")
+            path = f"{parsed_url.path.rstrip('/')}/chat/completions"
+            connection.request(
+                "POST",
+                path,
+                body=data,
+                headers=self._headers(runtime, accept="text/event-stream"),
+            )
+            response = connection.getresponse()
+            if response.status >= 400:
+                status = response.status
+                response.close()
+                raise self._map_http_status(status)
+            opened = True
+            return response, connection, cancel_connection
         except (TimeoutError, socket.timeout) as exc:
             raise BackendExecutionError(
                 code="vllm_serve_timeout",
                 status_code=504,
                 message="vllm serve streaming chat completion timed out",
             ) from exc
-        except URLError as exc:
-            if isinstance(exc.reason, (TimeoutError, socket.timeout)):
-                raise BackendExecutionError(
-                    code="vllm_serve_timeout",
-                    status_code=504,
-                    message="vllm serve streaming chat completion timed out",
-                ) from exc
+        except BackendExecutionError:
+            raise
+        except (HTTPException, OSError) as exc:
             raise BackendExecutionError(
                 code="vllm_serve_connection_error",
                 status_code=502,
                 message="vllm serve streaming chat completion connection failed",
             ) from exc
+        finally:
+            if not opened:
+                if cancel_connection is not None:
+                    cancellation.clear_callback(cancel_connection)
+                connection.close()
 
     @staticmethod
     def _iter_sse_data(response):
@@ -664,17 +726,18 @@ class VllmServeEngine:
             yield "\n".join(data_lines)
 
     @staticmethod
-    def _abort_stream_response(response) -> None:
-        # HTTPResponse.close() can wait behind a blocked reader; shutdown wakes it first.
-        fp = getattr(response, "fp", None)
-        raw = getattr(fp, "raw", None)
-        upstream_socket = getattr(raw, "_sock", None)
-        if upstream_socket is not None:
+    def _abort_stream_connection(
+        connection: HTTPConnection,
+        upstream_socket: socket.socket | None,
+    ) -> None:
+        if upstream_socket is None:
+            LOGGER.warning("Cannot abort vllm serve stream: connection has no active socket.")
+        else:
             try:
                 upstream_socket.shutdown(socket.SHUT_RDWR)
             except OSError:
-                pass
-        response.close()
+                LOGGER.warning("Failed to shut down the vllm serve stream socket.", exc_info=True)
+        connection.close()
 
     @staticmethod
     def _merge_stream_metadata(
@@ -702,7 +765,10 @@ class VllmServeEngine:
         return headers
 
     def _map_http_error(self, exc: HTTPError) -> BackendExecutionError:
-        status = int(exc.code)
+        return self._map_http_status(int(exc.code))
+
+    @staticmethod
+    def _map_http_status(status: int) -> BackendExecutionError:
         if status in {401, 403}:
             return BackendExecutionError(
                 code="vllm_serve_authentication_failure",

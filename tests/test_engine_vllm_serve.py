@@ -1,9 +1,12 @@
 from __future__ import annotations
 
 import importlib.util
+from http.server import BaseHTTPRequestHandler
+from http.server import ThreadingHTTPServer
 import json
 import socket
 import threading
+import time
 import unittest
 from unittest import mock
 
@@ -71,6 +74,24 @@ class BlockingStreamingResponse:
         self.closed.set()
 
 
+class RawStreamingResponse:
+    def __init__(self, lines: list[bytes]) -> None:
+        self._lines = lines
+
+    def __iter__(self):
+        yield from self._lines
+
+    def close(self) -> None:
+        pass
+
+
+class TimeoutStreamingResponse(FakeStreamingResponse):
+    def __iter__(self):
+        yield b'data: {"choices": [{"delta": {"content": "partial"}}]}\n'
+        yield b"\n"
+        raise socket.timeout("idle timeout")
+
+
 class FakeProcess:
     def __init__(self) -> None:
         self.return_code: int | None = None
@@ -97,17 +118,60 @@ class FakeProcess:
 
 @unittest.skipUnless(HAS_PYDANTIC, "pydantic not installed")
 class VllmServeEngineTests(unittest.TestCase):
-    def test_stream_abort_shuts_down_socket_before_closing_response(self) -> None:
-        response = mock.Mock()
+    @staticmethod
+    def _engine():
+        engine = vllm_serve_module.VllmServeEngine.__new__(
+            vllm_serve_module.VllmServeEngine
+        )
+        engine.decoding_defaults = DecodingDefaults()
+        engine._models = {
+            "gemma4": mock.Mock(
+                remote_model="gemma4",
+                config=ModelSettings(model_path=None, backend="vllm_serve"),
+            )
+        }
+        return engine
+
+    @staticmethod
+    def _fake_open_stream(upstream, captured: dict[str, object] | None = None):
+        connection = mock.Mock()
+
+        def open_stream(_runtime, payload, cancellation):
+            if captured is not None:
+                captured["payload"] = payload
+            cancel = upstream.close
+            cancellation.set_callback(cancel)
+            return upstream, connection, cancel
+
+        return open_stream
+
+    def test_stream_abort_shuts_down_socket_before_closing_connection(self) -> None:
+        connection = mock.Mock()
+        upstream_socket = mock.Mock(spec=socket.socket)
         operations: list[str] = []
-        response.fp.raw._sock.shutdown.side_effect = lambda how: operations.append(
+        upstream_socket.shutdown.side_effect = lambda how: operations.append(
             f"shutdown:{how}"
         )
-        response.close.side_effect = lambda: operations.append("close")
+        connection.close.side_effect = lambda: operations.append("close")
 
-        vllm_serve_module.VllmServeEngine._abort_stream_response(response)
+        vllm_serve_module.VllmServeEngine._abort_stream_connection(
+            connection,
+            upstream_socket,
+        )
 
         self.assertEqual(operations, [f"shutdown:{socket.SHUT_RDWR}", "close"])
+
+    def test_stream_abort_logs_when_connection_has_no_socket(self) -> None:
+        connection = mock.Mock()
+
+        with self.assertLogs("llm_pool.engine", level="WARNING") as logs:
+            vllm_serve_module.VllmServeEngine._abort_stream_connection(
+                connection,
+                None,
+            )
+
+        connection.close.assert_called_once_with()
+        self.assertIn("connection has no active socket", "\n".join(logs.output))
 
     def test_stream_forwards_incremental_multimodal_deltas_and_usage(self) -> None:
         engine = vllm_serve_module.VllmServeEngine.__new__(
@@ -163,10 +227,6 @@ class VllmServeEngineTests(unittest.TestCase):
         )
         captured: dict[str, object] = {}
 
-        def open_stream(_runtime, payload):
-            captured["payload"] = payload
-            return upstream
-
         events = []
         request = ResponseRequest(
             model="gemma4",
@@ -186,7 +246,11 @@ class VllmServeEngineTests(unittest.TestCase):
             events.append(event)
             return True
 
-        with mock.patch.object(engine, "_open_stream", side_effect=open_stream):
+        with mock.patch.object(
+            engine,
+            "_open_stream",
+            side_effect=self._fake_open_stream(upstream, captured),
+        ):
             result = engine.stream(request, emit, CancellationToken())
 
         payload = captured["payload"]
@@ -221,16 +285,7 @@ class VllmServeEngineTests(unittest.TestCase):
         self.assertTrue(upstream.closed)
 
     def test_cancelling_stream_closes_upstream_and_returns_partial_metrics(self) -> None:
-        engine = vllm_serve_module.VllmServeEngine.__new__(
-            vllm_serve_module.VllmServeEngine
-        )
-        engine.decoding_defaults = DecodingDefaults()
-        engine._models = {
-            "gemma4": mock.Mock(
-                remote_model="gemma4",
-                config=ModelSettings(model_path=None, backend="vllm_serve"),
-            )
-        }
+        engine = self._engine()
         upstream = BlockingStreamingResponse(
             {
                 "id": "chat-1",
@@ -242,7 +297,11 @@ class VllmServeEngineTests(unittest.TestCase):
         result_holder: dict[str, object] = {}
 
         def run_stream() -> None:
-            with mock.patch.object(engine, "_open_stream", return_value=upstream):
+            with mock.patch.object(
+                engine,
+                "_open_stream",
+                side_effect=self._fake_open_stream(upstream),
+            ):
                 result_holder["result"] = engine.stream(
                     ResponseRequest(model="gemma4", input="Hello", stream=True),
                     lambda event: True,
@@ -263,6 +322,364 @@ class VllmServeEngineTests(unittest.TestCase):
         self.assertEqual(result.metrics.engine_prompt_tokens, 8)
         self.assertEqual(result.metrics.engine_output_tokens, 2)
         self.assertEqual(result.metrics.engine_finish_reason, "cancelled")
+
+    def test_stream_deltas_concatenate_to_trimmed_output_text(self) -> None:
+        engine = self._engine()
+        upstream = FakeStreamingResponse(
+            [
+                {"choices": [{"delta": {"content": "\n\n"}}]},
+                {"choices": [{"delta": {"content": "Hello "}}]},
+                {"choices": [{"delta": {"content": "\n"}}]},
+                {"choices": [{"delta": {"content": "world"}}]},
+                {
+                    "choices": [
+                        {
+                            "delta": {"content": " \n"},
+                            "finish_reason": "stop",
+                        }
+                    ]
+                },
+                "[DONE]",
+            ]
+        )
+        deltas: list[str] = []
+
+        with mock.patch.object(
+            engine,
+            "_open_stream",
+            side_effect=self._fake_open_stream(upstream),
+        ):
+            result = engine.stream(
+                ResponseRequest(model="gemma4", input="Hello", stream=True),
+                lambda event: deltas.append(event.delta) or True,
+                CancellationToken(),
+            )
+
+        self.assertEqual("".join(deltas), result.text)
+        self.assertEqual(result.text, "Hello \nworld")
+
+    def test_stream_reasoning_only_matches_non_streaming_acceptance_rule(self) -> None:
+        cases = (
+            ("enabled", "length", False),
+            ("enabled", "stop", True),
+            ("default", "length", True),
+            ("default", "stop", True),
+        )
+        for thinking, finish_reason, should_raise in cases:
+            with self.subTest(thinking=thinking, finish_reason=finish_reason):
+                engine = self._engine()
+                upstream = FakeStreamingResponse(
+                    [
+                        {
+                            "choices": [
+                                {
+                                    "delta": {"reasoning": "Still thinking."},
+                                    "finish_reason": finish_reason,
+                                }
+                            ]
+                        },
+                        "[DONE]",
+                    ]
+                )
+                request = ResponseRequest(
+                    model="gemma4",
+                    input="Hello",
+                    stream=True,
+                    thinking=thinking,
+                )
+                patch = mock.patch.object(
+                    engine,
+                    "_open_stream",
+                    side_effect=self._fake_open_stream(upstream),
+                )
+                if should_raise:
+                    with patch, self.assertRaises(vllm_serve_module.BackendExecutionError):
+                        engine.stream(request, lambda event: True, CancellationToken())
+                else:
+                    with patch:
+                        result = engine.stream(
+                            request,
+                            lambda event: True,
+                            CancellationToken(),
+                        )
+                    self.assertEqual(result.text, "")
+                    self.assertEqual(result.reasoning_text, "Still thinking.")
+
+    def test_stream_maps_upstream_error_event(self) -> None:
+        engine = self._engine()
+        upstream = FakeStreamingResponse(
+            [{"error": {"message": "context length exceeded"}}, "[DONE]"]
+        )
+
+        with (
+            mock.patch.object(
+                engine,
+                "_open_stream",
+                side_effect=self._fake_open_stream(upstream),
+            ),
+            self.assertRaises(vllm_serve_module.BackendExecutionError) as exc_info,
+        ):
+            engine.stream(
+                ResponseRequest(model="gemma4", input="Hello", stream=True),
+                lambda event: True,
+                CancellationToken(),
+            )
+
+        self.assertEqual(exc_info.exception.code, "vllm_serve_error")
+        self.assertEqual(exc_info.exception.status_code, 502)
+        self.assertEqual(exc_info.exception.message, "context length exceeded")
+
+    def test_stream_rejects_malformed_sse_payloads(self) -> None:
+        cases = (
+            ("invalid JSON", ["{"]),
+            ("non-object JSON", ["[]"]),
+            ("non-object choice", [{"choices": ["bad"]}]),
+            (
+                "missing finish reason",
+                [{"choices": [{"delta": {"content": "complete"}}]}, "[DONE]"],
+            ),
+            (
+                "missing final event",
+                [{"choices": [{"delta": {"content": "partial"}, "finish_reason": "stop"}]}],
+            ),
+        )
+        for label, events in cases:
+            with self.subTest(label=label):
+                engine = self._engine()
+                upstream = FakeStreamingResponse(events)
+                with (
+                    mock.patch.object(
+                        engine,
+                        "_open_stream",
+                        side_effect=self._fake_open_stream(upstream),
+                    ),
+                    self.assertRaises(vllm_serve_module.BackendExecutionError) as exc_info,
+                ):
+                    engine.stream(
+                        ResponseRequest(model="gemma4", input="Hello", stream=True),
+                        lambda event: True,
+                        CancellationToken(),
+                    )
+                self.assertEqual(
+                    exc_info.exception.code,
+                    "vllm_serve_response_parse_failure",
+                )
+
+    def test_stream_rejects_invalid_utf8(self) -> None:
+        engine = self._engine()
+        upstream = RawStreamingResponse([b"data: \xff\n", b"\n"])
+
+        with (
+            mock.patch.object(
+                engine,
+                "_open_stream",
+                side_effect=self._fake_open_stream(upstream),
+            ),
+            self.assertRaises(vllm_serve_module.BackendExecutionError) as exc_info,
+        ):
+            engine.stream(
+                ResponseRequest(model="gemma4", input="Hello", stream=True),
+                lambda event: True,
+                CancellationToken(),
+            )
+
+        self.assertEqual(
+            exc_info.exception.code,
+            "vllm_serve_response_parse_failure",
+        )
+
+    def test_stream_maps_midstream_idle_timeout(self) -> None:
+        engine = self._engine()
+        upstream = TimeoutStreamingResponse([])
+
+        with (
+            mock.patch.object(
+                engine,
+                "_open_stream",
+                side_effect=self._fake_open_stream(upstream),
+            ),
+            self.assertRaises(vllm_serve_module.BackendExecutionError) as exc_info,
+        ):
+            engine.stream(
+                ResponseRequest(model="gemma4", input="Hello", stream=True),
+                lambda event: True,
+                CancellationToken(),
+            )
+
+        self.assertEqual(exc_info.exception.code, "vllm_serve_timeout")
+
+    def test_cancellation_interrupts_wait_for_response_headers(self) -> None:
+        request_started = threading.Event()
+        release_handler = threading.Event()
+
+        class DelayedHeadersHandler(BaseHTTPRequestHandler):
+            protocol_version = "HTTP/1.1"
+
+            def do_POST(self) -> None:
+                content_length = int(self.headers.get("Content-Length", "0"))
+                self.rfile.read(content_length)
+                request_started.set()
+                release_handler.wait(timeout=2.0)
+                try:
+                    self.send_response(200)
+                    self.send_header("Content-Type", "text/event-stream")
+                    self.send_header("Content-Length", "0")
+                    self.end_headers()
+                except OSError:
+                    pass
+
+            def log_message(self, format, *args) -> None:
+                del format, args
+
+        server = ThreadingHTTPServer(("127.0.0.1", 0), DelayedHeadersHandler)
+        server.daemon_threads = True
+        server_thread = threading.Thread(target=server.serve_forever)
+        server_thread.start()
+        try:
+            engine = self._engine()
+            runtime = engine._models["gemma4"]
+            runtime.base_url = f"http://127.0.0.1:{server.server_port}/v1"
+            runtime.timeout_s = 5.0
+            runtime.api_key = None
+            cancellation = CancellationToken()
+            result_holder: dict[str, object] = {}
+
+            def run_stream() -> None:
+                result_holder["result"] = engine.stream(
+                    ResponseRequest(model="gemma4", input="Hello", stream=True),
+                    lambda event: True,
+                    cancellation,
+                )
+
+            worker = threading.Thread(target=run_stream)
+            worker.start()
+            self.assertTrue(request_started.wait(timeout=1.0))
+
+            started = time.perf_counter()
+            cancellation.cancel()
+            worker.join(timeout=1.0)
+
+            self.assertFalse(worker.is_alive())
+            self.assertLess(time.perf_counter() - started, 1.0)
+            self.assertEqual(
+                result_holder["result"].metrics.engine_finish_reason,
+                "cancelled",
+            )
+        finally:
+            release_handler.set()
+            server.shutdown()
+            server.server_close()
+            server_thread.join(timeout=1.0)
+
+    def test_cancellation_interrupts_real_blocked_stream_reader(self) -> None:
+        first_chunk_sent = threading.Event()
+        release_handler = threading.Event()
+
+        class StalledStreamHandler(BaseHTTPRequestHandler):
+            protocol_version = "HTTP/1.1"
+
+            def do_POST(self) -> None:
+                content_length = int(self.headers.get("Content-Length", "0"))
+                self.rfile.read(content_length)
+                self.send_response(200)
+                self.send_header("Content-Type", "text/event-stream")
+                self.send_header("Transfer-Encoding", "chunked")
+                self.end_headers()
+                chunk = (
+                    b'data: {"choices": [{"delta": {"content": "partial"}}]}\n\n'
+                )
+                self.wfile.write(f"{len(chunk):x}\r\n".encode("ascii"))
+                self.wfile.write(chunk + b"\r\n")
+                self.wfile.flush()
+                first_chunk_sent.set()
+                release_handler.wait(timeout=2.0)
+
+            def log_message(self, format, *args) -> None:
+                del format, args
+
+        server = ThreadingHTTPServer(("127.0.0.1", 0), StalledStreamHandler)
+        server.daemon_threads = True
+        server_thread = threading.Thread(target=server.serve_forever)
+        server_thread.start()
+        try:
+            engine = self._engine()
+            runtime = engine._models["gemma4"]
+            runtime.base_url = f"http://127.0.0.1:{server.server_port}/v1"
+            runtime.timeout_s = 5.0
+            runtime.api_key = None
+            cancellation = CancellationToken()
+            delta_received = threading.Event()
+            result_holder: dict[str, object] = {}
+
+            def emit(event) -> bool:
+                delta_received.set()
+                return True
+
+            def run_stream() -> None:
+                result_holder["result"] = engine.stream(
+                    ResponseRequest(model="gemma4", input="Hello", stream=True),
+                    emit,
+                    cancellation,
+                )
+
+            worker = threading.Thread(target=run_stream)
+            worker.start()
+            self.assertTrue(first_chunk_sent.wait(timeout=1.0))
+            self.assertTrue(delta_received.wait(timeout=1.0))
+
+            started = time.perf_counter()
+            cancellation.cancel()
+            worker.join(timeout=1.0)
+
+            self.assertFalse(worker.is_alive())
+            self.assertLess(time.perf_counter() - started, 1.0)
+            self.assertEqual(result_holder["result"].text, "partial")
+            self.assertEqual(
+                result_holder["result"].metrics.engine_finish_reason,
+                "cancelled",
+            )
+        finally:
+            release_handler.set()
+            server.shutdown()
+            server.server_close()
+            server_thread.join(timeout=1.0)
+
+    def test_stream_maps_upstream_http_error(self) -> None:
+        class RejectedStreamHandler(BaseHTTPRequestHandler):
+            def do_POST(self) -> None:
+                content_length = int(self.headers.get("Content-Length", "0"))
+                self.rfile.read(content_length)
+                self.send_response(400)
+                self.send_header("Content-Length", "0")
+                self.end_headers()
+
+            def log_message(self, format, *args) -> None:
+                del format, args
+
+        server = ThreadingHTTPServer(("127.0.0.1", 0), RejectedStreamHandler)
+        server.daemon_threads = True
+        server_thread = threading.Thread(target=server.serve_forever)
+        server_thread.start()
+        try:
+            engine = self._engine()
+            runtime = engine._models["gemma4"]
+            runtime.base_url = f"http://127.0.0.1:{server.server_port}/v1"
+            runtime.timeout_s = 5.0
+            runtime.api_key = None
+
+            with self.assertRaises(vllm_serve_module.BackendExecutionError) as exc_info:
+                engine.stream(
+                    ResponseRequest(model="gemma4", input="Hello", stream=True),
+                    lambda event: True,
+                    CancellationToken(),
+                )
+
+            self.assertEqual(exc_info.exception.code, "vllm_serve_invalid_request")
+            self.assertEqual(exc_info.exception.status_code, 502)
+        finally:
+            server.shutdown()
+            server.server_close()
+            server_thread.join(timeout=1.0)
 
     def test_rejects_max_num_seqs_in_extra_args(self) -> None:
         for extra_args in (

@@ -5,7 +5,6 @@ from concurrent.futures import CancelledError
 from concurrent.futures import Future
 from dataclasses import dataclass
 from queue import Empty
-from queue import Full
 from queue import Queue
 import threading
 import time
@@ -17,6 +16,7 @@ from app.schemas import EngineResult
 from app.schemas import ResponseMetrics
 from app.schemas import ResponseRequest
 
+from .common import LOGGER
 from .common import ModelStateError
 from .common import RequestAdmissionError
 
@@ -83,7 +83,7 @@ class CancellationToken:
             try:
                 callback()
             except Exception:
-                pass
+                LOGGER.warning("Cancellation callback failed.", exc_info=True)
 
     def set_callback(self, callback: Callable[[], None]) -> None:
         with self._lock:
@@ -94,7 +94,7 @@ class CancellationToken:
             try:
                 callback()
             except Exception:
-                pass
+                LOGGER.warning("Cancellation callback failed.", exc_info=True)
 
     def clear_callback(self, callback: Callable[[], None]) -> None:
         with self._lock:
@@ -115,13 +115,10 @@ class SchedulerJob:
     def emit(self, event: EngineStreamEvent) -> bool:
         if self.stream_events is None or self.cancellation is None:
             return False
-        while not self.cancellation.cancelled:
-            try:
-                self.stream_events.put(event, timeout=0.1)
-                return True
-            except Full:
-                continue
-        return False
+        if self.cancellation.cancelled:
+            return False
+        self.stream_events.put_nowait(event)
+        return not self.cancellation.cancelled
 
 
 class ScheduledStream:
@@ -588,7 +585,7 @@ class LoadedModelExecutor:
                 now=time.perf_counter(),
             )
             job.cancellation = CancellationToken()
-            job.stream_events = Queue(maxsize=256)
+            job.stream_events = Queue()
             self._cond.notify_all()
         return ScheduledStream(job=job, cancel_fn=self.cancel)
 

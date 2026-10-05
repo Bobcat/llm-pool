@@ -10,8 +10,8 @@ from pathlib import Path
 
 from fastapi import FastAPI
 from fastapi import HTTPException
+from fastapi import Request
 from fastapi.responses import StreamingResponse
-from starlette.background import BackgroundTask
 
 from app.config import load_settings
 from app.engine import build_engine
@@ -94,14 +94,25 @@ async def _native_stream_response(
     response_id: str,
     request: ResponseRequest,
     stream,
+    raw_request: Request | None = None,
 ):
     completed = False
+    poll_disconnect = False
+    if raw_request is not None:
+        spec_version = raw_request.scope.get("asgi", {}).get("spec_version", "2.0")
+        poll_disconnect = tuple(map(int, spec_version.split("."))) >= (2, 4)
     try:
         yield _sse_event(
             "response.created",
             {"id": response_id, "model": request.model, "object": "response"},
         )
         while True:
+            if (
+                poll_disconnect
+                and raw_request is not None
+                and await raw_request.is_disconnected()
+            ):
+                return
             event = stream.poll()
             if event is not None:
                 if event.type == "reasoning_text.delta":
@@ -146,19 +157,34 @@ async def _native_stream_response(
             },
         )
     except Exception as exc:
+        message = getattr(exc, "message", None)
+        if isinstance(exc, ModelStateError):
+            message = f"model {exc.model_name!r} is unavailable: {exc.code}"
         yield _sse_event(
             "response.failed",
             {
                 "id": response_id,
                 "error": {
                     "code": getattr(exc, "code", "stream_failed"),
-                    "message": getattr(exc, "message", str(exc) or "stream failed"),
+                    "message": message or str(exc) or "stream failed",
                 },
             },
         )
     finally:
         if not completed:
             stream.cancel()
+
+
+class _CancellableStreamingResponse(StreamingResponse):
+    def __init__(self, *args, cancel, **kwargs) -> None:
+        super().__init__(*args, **kwargs)
+        self._cancel = cancel
+
+    async def __call__(self, scope, receive, send) -> None:
+        try:
+            await super().__call__(scope, receive, send)
+        finally:
+            self._cancel()
 
 
 def _log_inference(response_id: str, request: ResponseRequest, metrics: ResponseMetrics) -> None:
@@ -318,7 +344,7 @@ def create_app(settings_path: str | Path | None = None) -> FastAPI:
             ) from exc
 
     @app.post("/v1/responses")
-    def create_response(request: ResponseRequest):
+    def create_response(request: ResponseRequest, raw_request: Request):
         started_at = time.perf_counter()
         response_id = f"resp_{uuid.uuid4().hex}"
         stream = None
@@ -366,10 +392,10 @@ def create_app(settings_path: str | Path | None = None) -> FastAPI:
                 _log_inference(response_id, request, result.metrics)
 
             stream.add_done_callback(log_stream_result)
-            return StreamingResponse(
-                _native_stream_response(response_id, request, stream),
+            return _CancellableStreamingResponse(
+                _native_stream_response(response_id, request, stream, raw_request),
                 media_type="text/event-stream",
-                background=BackgroundTask(stream.cancel),
+                cancel=stream.cancel,
             )
         total_ms = max(0.0, (time.perf_counter() - started_at) * 1000.0)
         metrics_payload = (
