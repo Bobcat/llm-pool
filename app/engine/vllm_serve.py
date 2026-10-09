@@ -546,6 +546,8 @@ class VllmServeEngine:
             payload["thinking_token_budget"] = request.thinking_token_budget
         if request.reasoning_effort is not None:
             payload["reasoning_effort"] = request.reasoning_effort
+        if request.mm_processor_kwargs:
+            payload["mm_processor_kwargs"] = dict(request.mm_processor_kwargs)
         if request.response_format is not None:
             payload["response_format"] = request.response_format.model_dump(
                 mode="python",

@@ -845,6 +845,37 @@ class VllmServeEngineTests(unittest.TestCase):
 
         self.assertEqual(payload["thinking_token_budget"], 256)
 
+    def test_mm_processor_kwargs_are_forwarded_only_when_requested(self) -> None:
+        engine = vllm_serve_module.VllmServeEngine.__new__(
+            vllm_serve_module.VllmServeEngine
+        )
+        engine.decoding_defaults = DecodingDefaults()
+        runtime = mock.Mock(
+            remote_model="gemma4",
+            config=ModelSettings(
+                model_path=None,
+                backend="vllm_serve",
+                prompt_format="gemma4_template",
+                vllm_mm_processor_kwargs=(("max_soft_tokens", 1120),),
+            ),
+        )
+
+        requested = engine._chat_completions_payload(
+            runtime=runtime,
+            request=ResponseRequest(
+                model="gemma4", input="Read this", mm_processor_kwargs={"max_soft_tokens": 560}
+            ),
+            decoding=engine._resolve_decoding(DecodingParams()),
+        )
+        default = engine._chat_completions_payload(
+            runtime=runtime,
+            request=ResponseRequest(model="gemma4", input="Read this"),
+            decoding=engine._resolve_decoding(DecodingParams()),
+        )
+
+        self.assertEqual(requested["mm_processor_kwargs"], {"max_soft_tokens": 560})
+        self.assertNotIn("mm_processor_kwargs", default)
+
     def test_gemma4_default_thinking_uses_model_configuration(self) -> None:
         engine = vllm_serve_module.VllmServeEngine.__new__(
             vllm_serve_module.VllmServeEngine

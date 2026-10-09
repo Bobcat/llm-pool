@@ -268,6 +268,7 @@ the latest usage reported by vLLM before the disconnect.
 | `reasoning_effort` | `string \| null` | no | `null` | Provider-defined thinking level. Accepted values are advertised in `capabilities.reasoning_efforts`; a non-`none` effort enables thinking. |
 | `thinking_token_budget` | `int \| null` | no | `null` | Upper bound for thinking tokens. Supported only when `capabilities.thinking_token_budget` is present; it must be less than `decoding.max_tokens`. |
 | `response_format` | `object \| null` | no | `null` | Strict JSON Schema output. Supported only by non-streaming `vllm_serve` requests. |
+| `mm_processor_kwargs` | `object \| null` | no | `null` | Per-request multimodal processor values, `{key: positive int}`, forwarded to vLLM. Supported only by `vllm_serve` models; each key must be configured in the model's `vllm_mm_processor_kwargs`, and each value may lower, not raise, the configured one. |
 | `decoding` | `object` | no | `{}` | Omitted subfields fall back to `engine.decoding` defaults. |
 
 `fairness_key` is used only for queueing inside `llm-pool`. The selected model

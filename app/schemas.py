@@ -124,7 +124,32 @@ class ResponseRequest(BaseModel):
     reasoning_effort: str | None = Field(default=None, min_length=1, max_length=32)
     thinking_token_budget: int | None = Field(default=None, ge=1, le=MAX_OUTPUT_TOKENS)
     response_format: JsonSchemaResponseFormat | None = None
+    mm_processor_kwargs: dict[str, int] | None = Field(
+        default=None,
+        description=(
+            "Per-request multimodal processor values for a vllm_serve model, for example "
+            "Gemma 4's {'max_soft_tokens': 560}. Each key must be one the model configures in "
+            "vllm_mm_processor_kwargs, and each value at most the configured one."
+        ),
+    )
     decoding: DecodingParams = Field(default_factory=DecodingParams)
+
+    @field_validator("mm_processor_kwargs", mode="before")
+    @classmethod
+    def _normalize_mm_processor_kwargs(cls, value: object) -> object:
+        if value is None:
+            return None
+        if not isinstance(value, dict):
+            raise ValueError("mm_processor_kwargs must be an object of {key: int}")
+        normalized: dict[str, int] = {}
+        for key, raw in value.items():
+            name = str(key).strip()
+            if name == "":
+                raise ValueError("mm_processor_kwargs keys must not be blank")
+            if isinstance(raw, bool) or not isinstance(raw, int) or raw < 1:
+                raise ValueError(f"mm_processor_kwargs['{name}'] must be a positive integer")
+            normalized[name] = raw
+        return normalized
 
     @field_validator("reasoning_effort", mode="before")
     @classmethod

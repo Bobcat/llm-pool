@@ -236,6 +236,35 @@ class ModelRouterEngineTests(unittest.TestCase):
 
         self.assertEqual(exc_info.exception.code, "response_format_unsupported")
 
+    def test_rejects_mm_processor_kwargs_before_an_unsupported_backend(self) -> None:
+        settings = AppSettings(
+            service=ServiceSettings(),
+            engine=EngineSettings(
+                backend="ct2",
+                models={"local-model": ModelSettings(model_path="/models/ct2")},
+            ),
+        )
+
+        class FakeCt2Engine:
+            def __init__(self, scoped_settings):
+                self._models = {name: object() for name in scoped_settings.engine.models}
+
+            def complete(self, request: ResponseRequest) -> EngineResult:
+                raise AssertionError("unsupported request must not reach the backend")
+
+        with mock.patch.object(engine_module, "Ct2Engine", FakeCt2Engine):
+            engine = ModelRouterEngine(settings)
+            with self.assertRaises(engine_module.RequestAdmissionError) as exc_info:
+                engine.complete(
+                    ResponseRequest(
+                        model="local-model",
+                        input="hello",
+                        mm_processor_kwargs={"max_soft_tokens": 560},
+                    )
+                )
+
+        self.assertEqual(exc_info.exception.code, "mm_processor_kwargs_unsupported")
+
     def test_dispatches_openai_remote_backend_with_remote_admission(self) -> None:
         settings = AppSettings(
             service=ServiceSettings(),
@@ -549,6 +578,42 @@ class ModelRouterEngineTests(unittest.TestCase):
             ),
             model_settings,
         )
+
+    def test_mm_processor_kwargs_may_lower_a_configured_value_on_vllm_serve(self) -> None:
+        model_settings = ModelSettings(
+            model_path=None,
+            backend="vllm_serve",
+            vllm_mm_processor_kwargs=(("max_soft_tokens", 1120),),
+        )
+
+        def request(values):
+            return ResponseRequest(model="gemma4", input="hello", mm_processor_kwargs=values)
+
+        ModelRouterEngine._validate_mm_processor_kwargs(
+            request({"max_soft_tokens": 560}), "vllm_serve", model_settings
+        )
+        ModelRouterEngine._validate_mm_processor_kwargs(
+            request({"max_soft_tokens": 1120}), "vllm_serve", model_settings
+        )
+        for values, backend, code in (
+            ({"max_soft_tokens": 1121}, "vllm_serve", "mm_processor_kwargs_out_of_range"),
+            ({"max_pixels": 1000}, "vllm_serve", "mm_processor_kwargs_unsupported"),
+            ({"max_soft_tokens": 560}, "vllm", "mm_processor_kwargs_unsupported"),
+        ):
+            with self.assertRaises(engine_module.RequestAdmissionError) as exc_info:
+                ModelRouterEngine._validate_mm_processor_kwargs(
+                    request(values), backend, model_settings
+                )
+            self.assertEqual(exc_info.exception.code, code)
+            self.assertEqual(exc_info.exception.status_code, 400)
+
+        with self.assertRaises(engine_module.RequestAdmissionError) as exc_info:
+            ModelRouterEngine._validate_mm_processor_kwargs(
+                request({"max_soft_tokens": 560}),
+                "vllm_serve",
+                ModelSettings(model_path=None, backend="vllm_serve"),
+            )
+        self.assertEqual(exc_info.exception.code, "mm_processor_kwargs_unsupported")
 
     def test_dispatches_trtllm_serve_backend_as_local_runtime(self) -> None:
         settings = AppSettings(

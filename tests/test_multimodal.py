@@ -85,6 +85,17 @@ class ResponseRequestSchemaTests(unittest.TestCase):
         self.assertIsNone(anonymous.fairness_key)
         self.assertEqual(keyed.fairness_key, "translation-service:image")
 
+    def test_mm_processor_kwargs_are_normalized_and_validated(self) -> None:
+        request = ResponseRequest(
+            model="m", input="Hello world", mm_processor_kwargs={" max_soft_tokens ": 560}
+        )
+        self.assertEqual(request.mm_processor_kwargs, {"max_soft_tokens": 560})
+
+        for invalid in ({" ": 560}, {"max_soft_tokens": 0}, {"max_soft_tokens": True},
+                        {"max_soft_tokens": "560"}, ["max_soft_tokens"]):
+            with self.assertRaises(Exception):  # pydantic ValidationError
+                ResponseRequest(model="m", input="Hello world", mm_processor_kwargs=invalid)
+
     def test_fairness_key_rejects_blank_or_overlong_values(self) -> None:
         with self.assertRaises(Exception):  # pydantic ValidationError
             ResponseRequest(model="m", input="Hello world", fairness_key=" \t ")
