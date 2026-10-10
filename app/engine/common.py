@@ -6,6 +6,10 @@ import logging
 from pathlib import Path
 import subprocess
 from typing import Any
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from app.config import ModelSettings
 
 
 LOGGER = logging.getLogger("llm_pool.engine")
@@ -906,6 +910,11 @@ class ModelRuntimeState:
     observed_vram_mib: int | None = None
     observed_vram_replicas: int | None = None
     load_override: dict[str, object | None] = field(default_factory=dict)
+    # The typed settings the loaded backend was built with: the configured entry with its
+    # load override applied. Request admission reads its limits here. A flag repeated in
+    # vllm_serve_extra_args is not reflected. Set by a completed load; kept while an unload
+    # drains, and cleared once the model is unloaded or the router closes.
+    effective_settings: ModelSettings | None = None
 
 
 class SettingsReloadConflictError(RuntimeError):

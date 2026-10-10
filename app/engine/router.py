@@ -233,6 +233,11 @@ class ModelRouterEngine:
                 message=f"model {request.model!r} does not support request-level thinking",
             )
         self._validate_reasoning_controls(request, model_settings)
+        # Against the settings the running server was launched with, which a load override
+        # such as vllm_max_pixels may have changed; a loaded model always records them.
+        self._validate_mm_processor_kwargs(
+            request, state.resolved_backend, state.effective_settings
+        )
         response_formats = _model_response_formats(state.resolved_backend)
         if (
             request.response_format is not None
@@ -254,6 +259,35 @@ class ModelRouterEngine:
             if state is not None and state.inflight_requests > 0:
                 state.inflight_requests -= 1
                 self._state_changed.notify_all()
+
+    @staticmethod
+    def _validate_mm_processor_kwargs(
+        request: ResponseRequest,
+        backend: str,
+        model_settings: ModelSettings,
+    ) -> None:
+        requested = request.mm_processor_kwargs
+        if not requested:
+            return
+        # The server sized its multimodal budget for the configured values at launch: a request
+        # may lower a value, not raise it, and only vllm_serve forwards it.
+        configured = dict(model_settings.vllm_mm_processor_kwargs)
+        for key, value in requested.items():
+            if backend != "vllm_serve" or key not in configured:
+                raise RequestAdmissionError(
+                    code="mm_processor_kwargs_unsupported",
+                    status_code=400,
+                    message=f"model {request.model!r} does not support mm_processor_kwargs[{key!r}]",
+                )
+            if value > configured[key]:
+                raise RequestAdmissionError(
+                    code="mm_processor_kwargs_out_of_range",
+                    status_code=400,
+                    message=(
+                        f"mm_processor_kwargs[{key!r}] must be at most {configured[key]} for "
+                        f"model {request.model!r}"
+                    ),
+                )
 
     def _validate_reasoning_controls(
         self,
@@ -439,6 +473,7 @@ class ModelRouterEngine:
             state.lifecycle = "loaded"
             state.last_error = None
             state.load_override = dict(load_override)
+            state.effective_settings = scoped_model_settings
             if observed_vram_mib is not None:
                 state.observed_vram_mib = observed_vram_mib
                 state.observed_vram_replicas = replica_count
@@ -596,6 +631,7 @@ class ModelRouterEngine:
             state.lifecycle = "unloaded"
             state.last_error = None
             state.load_override = {}
+            state.effective_settings = None
             self._state_changed.notify_all()
             return self._admin_model_entry_locked(model_name, model_settings)
 
@@ -1473,6 +1509,7 @@ class ModelRouterEngine:
                 if state.lifecycle in {"loaded", "loading", "unloading"}:
                     state.lifecycle = "unloaded"
                     state.inflight_requests = 0
+                    state.effective_settings = None
             self._state_changed.notify_all()
         for runtime in runtimes:
             self._cleanup_runtime(runtime)
