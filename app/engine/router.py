@@ -1509,6 +1509,7 @@ class ModelRouterEngine:
                 if state.lifecycle in {"loaded", "loading", "unloading"}:
                     state.lifecycle = "unloaded"
                     state.inflight_requests = 0
+                    state.effective_settings = None
             self._state_changed.notify_all()
         for runtime in runtimes:
             self._cleanup_runtime(runtime)

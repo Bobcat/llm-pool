@@ -910,8 +910,10 @@ class ModelRuntimeState:
     observed_vram_mib: int | None = None
     observed_vram_replicas: int | None = None
     load_override: dict[str, object | None] = field(default_factory=dict)
-    # The settings the loaded backend was built with: the configured entry with its load
-    # override applied. Request admission reads its limits here. None unless loaded.
+    # The typed settings the loaded backend was built with: the configured entry with its
+    # load override applied. Request admission reads its limits here. A flag repeated in
+    # vllm_serve_extra_args is not reflected. Set by a completed load; kept while an unload
+    # drains, and cleared once the model is unloaded or the router closes.
     effective_settings: ModelSettings | None = None
 
 

@@ -664,9 +664,15 @@ class ModelRouterEngineTests(unittest.TestCase):
             engine.load_model("vision-model", AdminLoadRequest(vllm_max_pixels=2_000_000))
             engine.complete(request(1_800_000))
             engine.unload_model("vision-model")
+            unloaded = engine._model_states["vision-model"].effective_settings
             engine.load_model("vision-model")
             with self.assertRaises(engine_module.RequestAdmissionError) as catalog:
                 engine.complete(request(1_800_000))
+            engine.close()
+            closed = engine._model_states["vision-model"].effective_settings
+
+        self.assertIsNone(unloaded)
+        self.assertIsNone(closed)
 
         self.assertEqual(
             launched,
