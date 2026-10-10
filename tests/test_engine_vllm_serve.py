@@ -876,6 +876,71 @@ class VllmServeEngineTests(unittest.TestCase):
         self.assertEqual(requested["mm_processor_kwargs"], {"max_soft_tokens": 560})
         self.assertNotIn("mm_processor_kwargs", default)
 
+    def test_mm_processor_kwargs_reach_vllm_over_http_streamed_or_not(self) -> None:
+        bodies: list[dict[str, object]] = []
+        message = {"id": "chat-1", "model": "gemma4", "usage": {"prompt_tokens": 3, "completion_tokens": 1}}
+
+        class ChatCompletionsHandler(BaseHTTPRequestHandler):
+            def do_POST(self) -> None:
+                body = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
+                bodies.append(body)
+                self.send_response(200)
+                if body.get("stream"):
+                    self.send_header("Content-Type", "text/event-stream")
+                    self.end_headers()
+                    chunk = {
+                        **message,
+                        "choices": [{"index": 0, "delta": {"content": "ok"}, "finish_reason": "stop"}],
+                    }
+                    self.wfile.write(f"data: {json.dumps(chunk)}\n\ndata: [DONE]\n\n".encode())
+                else:
+                    reply = {
+                        **message,
+                        "choices": [{
+                            "index": 0,
+                            "message": {"role": "assistant", "content": "ok"},
+                            "finish_reason": "stop",
+                        }],
+                    }
+                    data = json.dumps(reply).encode()
+                    self.send_header("Content-Type", "application/json")
+                    self.send_header("Content-Length", str(len(data)))
+                    self.end_headers()
+                    self.wfile.write(data)
+
+            def log_message(self, format, *args) -> None:
+                del format, args
+
+        server = ThreadingHTTPServer(("127.0.0.1", 0), ChatCompletionsHandler)
+        server.daemon_threads = True
+        server_thread = threading.Thread(target=server.serve_forever)
+        server_thread.start()
+        engine = self._engine()
+        runtime = engine._models["gemma4"]
+        runtime.base_url = f"http://127.0.0.1:{server.server_port}/v1"
+        runtime.timeout_s = 5.0
+        runtime.api_key = None
+        kwargs = {"max_soft_tokens": 560}
+        try:
+            completed = engine.complete(
+                ResponseRequest(model="gemma4", input="Read this", mm_processor_kwargs=kwargs)
+            )
+            streamed = engine.stream(
+                ResponseRequest(
+                    model="gemma4", input="Read this", stream=True, mm_processor_kwargs=kwargs
+                ),
+                lambda event: True,
+                CancellationToken(),
+            )
+        finally:
+            server.shutdown()
+            server.server_close()
+            server_thread.join(timeout=1.0)
+
+        self.assertEqual((completed.text, streamed.text), ("ok", "ok"))
+        self.assertEqual([body.get("stream", False) for body in bodies], [False, True])
+        self.assertEqual([body["mm_processor_kwargs"] for body in bodies], [kwargs, kwargs])
+
     def test_gemma4_default_thinking_uses_model_configuration(self) -> None:
         engine = vllm_serve_module.VllmServeEngine.__new__(
             vllm_serve_module.VllmServeEngine

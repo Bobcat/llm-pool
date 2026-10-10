@@ -233,7 +233,11 @@ class ModelRouterEngine:
                 message=f"model {request.model!r} does not support request-level thinking",
             )
         self._validate_reasoning_controls(request, model_settings)
-        self._validate_mm_processor_kwargs(request, state.resolved_backend, model_settings)
+        # Against the settings the running server was launched with, which a load override
+        # such as vllm_max_pixels may have changed; a loaded model always records them.
+        self._validate_mm_processor_kwargs(
+            request, state.resolved_backend, state.effective_settings
+        )
         response_formats = _model_response_formats(state.resolved_backend)
         if (
             request.response_format is not None
@@ -469,6 +473,7 @@ class ModelRouterEngine:
             state.lifecycle = "loaded"
             state.last_error = None
             state.load_override = dict(load_override)
+            state.effective_settings = scoped_model_settings
             if observed_vram_mib is not None:
                 state.observed_vram_mib = observed_vram_mib
                 state.observed_vram_replicas = replica_count
@@ -626,6 +631,7 @@ class ModelRouterEngine:
             state.lifecycle = "unloaded"
             state.last_error = None
             state.load_override = {}
+            state.effective_settings = None
             self._state_changed.notify_all()
             return self._admin_model_entry_locked(model_name, model_settings)
 

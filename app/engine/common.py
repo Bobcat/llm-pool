@@ -6,6 +6,10 @@ import logging
 from pathlib import Path
 import subprocess
 from typing import Any
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from app.config import ModelSettings
 
 
 LOGGER = logging.getLogger("llm_pool.engine")
@@ -906,6 +910,9 @@ class ModelRuntimeState:
     observed_vram_mib: int | None = None
     observed_vram_replicas: int | None = None
     load_override: dict[str, object | None] = field(default_factory=dict)
+    # The settings the loaded backend was built with: the configured entry with its load
+    # override applied. Request admission reads its limits here. None unless loaded.
+    effective_settings: ModelSettings | None = None
 
 
 class SettingsReloadConflictError(RuntimeError):
